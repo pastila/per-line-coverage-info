@@ -1,4 +1,4 @@
-package org.jetbrains.plugins.template.startup
+package com.github.yakov255.perlinecoverageinfo.startup
 
 import com.intellij.openapi.diagnostic.thisLogger
 import com.intellij.openapi.project.Project
