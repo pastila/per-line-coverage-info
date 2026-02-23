@@ -5,11 +5,20 @@
     <vendor>yakov255</vendor>
 
     <depends>com.intellij.modules.platform</depends>
-
-    <resource-bundle>messages.MyBundle</resource-bundle>
+    <depends>Coverage</depends>
+    <depends>com.jetbrains.php</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <toolWindow factoryClass="com.github.yakov255.perlinecoverageinfo.toolWindow.MyToolWindowFactory" id="MyToolWindow"/>
-        <postStartupActivity implementation="com.github.yakov255.perlinecoverageinfo.startup.MyProjectActivity" />
+        <coverageRunner implementation="com.github.yakov255.perlinecoverageinfo.PerLineCoverageRunner"/>
+        <coverageEngine implementation="com.github.yakov255.perlinecoverageinfo.PerLineCoverageEngine"/>
+        <applicationConfigurable
+            parentId="tools"
+            instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"
+            id="coverage.api.settings"
+            displayName="Coverage API"/>
     </extensions>
+
+    <additionalTextAttributesScheme file="colorScheme/MyColorScheme.xml" />
+
+
 </idea-plugin>

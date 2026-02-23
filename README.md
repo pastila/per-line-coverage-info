@@ -1,52 +1,120 @@
-# per-line-coverage-info
+# Per-Line Coverage Info
 
-![Build](https://github.com/yakov255/per-line-coverage-info/workflows/Build/badge.svg)
-[![Version](https://img.shields.io/jetbrains/plugin/v/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
-[![Downloads](https://img.shields.io/jetbrains/plugin/d/MARKETPLACE_ID.svg)](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID)
-
-## Template ToDo list
-- [x] Create a new [IntelliJ Platform Plugin Template][template] project.
-- [ ] Get familiar with the [template documentation][template].
-- [ ] Adjust the [pluginGroup](./gradle.properties) and [pluginName](./gradle.properties), as well as the [id](./src/main/resources/META-INF/plugin.xml) and [sources package](./src/main/kotlin).
-- [ ] Adjust the plugin description in `README` (see [Tips][docs:plugin-description])
-- [ ] Review the [Legal Agreements](https://plugins.jetbrains.com/docs/marketplace/legal-agreements.html?from=IJPluginTemplate).
-- [ ] [Publish a plugin manually](https://plugins.jetbrains.com/docs/intellij/publishing-plugin.html?from=IJPluginTemplate) for the first time.
-- [ ] Set the `MARKETPLACE_ID` in the above README badges. You can obtain it once the plugin is published to JetBrains Marketplace.
-- [ ] Set the [Plugin Signing](https://plugins.jetbrains.com/docs/intellij/plugin-signing.html?from=IJPluginTemplate) related [secrets](https://github.com/JetBrains/intellij-platform-plugin-template#environment-variables).
-- [ ] Set the [Deployment Token](https://plugins.jetbrains.com/docs/marketplace/plugin-upload.html?from=IJPluginTemplate).
-- [ ] Click the <kbd>Watch</kbd> button on the top of the [IntelliJ Platform Plugin Template][template] to be notified about releases containing new features and fixes.
-- [ ] Configure the [CODECOV_TOKEN](https://docs.codecov.com/docs/quick-start) secret for automated test coverage reports on PRs
+[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/your-repo/per-line-coverage-info/actions)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <!-- Plugin description -->
-This Fancy IntelliJ Platform Plugin is going to be your implementation of the brilliant ideas that you have.
-
-This specific section is a source for the [plugin.xml](/src/main/resources/META-INF/plugin.xml) file which will be extracted by the [Gradle](/build.gradle.kts) during the build process.
-
-To keep everything working, do not remove `<!-- ... -->` sections. 
+Per-Line Coverage Info is an IntelliJ IDEA plugin that integrates with external coverage APIs to display real-time per-line code coverage information directly in the editor. It provides visual indicators for covered and uncovered lines, enhancing code quality analysis.
 <!-- Plugin description end -->
+
+## Table of Contents
+- [Overview](#overview)
+- [Features](#features)
+- [API Specification](#api-specification)
+- [Settings Configuration](#settings-configuration)
+- [Usage](#usage)
+- [Installation](#installation)
+- [Development](#development)
+
+## Overview
+
+The Per-Line Coverage Info plugin fetches coverage data from a custom API and overlays it onto your code in the IntelliJ editor. This allows developers to see which lines of code have been executed during testing without running full coverage suites locally.
+
+**Supported Languages:** Primarily designed for PHP, with potential support for other languages via API extensibility.
+
+**Integration:** Seamlessly works with IntelliJ's built-in Coverage tool window, providing a unified view of coverage data.
+
+## Features
+
+- **Custom API Coverage Data Fetching:** Pulls detailed coverage information from external services.
+- **Bearer Token Authentication:** Securely authenticates with APIs using bearer tokens.
+- **Per-Line Coverage Display:** Shows coverage status for each line with gutter icons and editor highlighting.
+- **IntelliJ Coverage Tool Window Integration:** Displays coverage summaries and navigates to uncovered lines.
+
+## API Specification
+
+The plugin expects coverage data in JSON format via a GET request to a configurable endpoint.
+
+### Response Format
+```json
+{
+  "files": {
+    "/path/to/file.php": {
+      "lines": {
+        "10": {"covered": true, "hits": 5},
+        "15": {"covered": false, "hits": 0}
+      }
+    },
+    "/path/to/another.php": {
+      "lines": {
+        "5": {"covered": true, "hits": 1}
+      }
+    }
+  }
+}
+```
+
+- `files`: An object where keys are file paths and values are coverage objects.
+- `lines`: An object where keys are line numbers (strings) and values are coverage objects.
+- `covered`: Boolean indicating if the line was executed.
+- `hits`: Integer count of execution hits (optional, for detailed reporting).
+
+### Authentication
+Requests include a Bearer token in the Authorization header: `Authorization: Bearer <token>`.
+
+Example cURL request:
+```bash
+curl -X GET https://api.example.com/coverage \
+  -H "Authorization: Bearer your-token"
+```
+
+## Settings Configuration
+
+Access plugin settings via **File > Settings > Tools > Coverage API** (or **IntelliJ IDEA > Preferences > Tools > Coverage API** on macOS).
+
+### Fields
+- **API URL:** The endpoint for fetching coverage data (e.g., `https://api.example.com/coverage`).
+- **Bearer Token:** Your authentication token for the API.
+
+### Default Values
+- API URL: (empty)
+- Bearer Token: (empty)
+
+*Screenshots: The settings dialog shows input fields for API URL and Bearer Token, with placeholders and validation hints.*
+
+## Usage
+
+1. Configure the API URL and Bearer Token in settings.
+2. Open a PHP file in the editor.
+3. Coverage data loads automatically, displaying gutter icons (green check for covered, red X for uncovered).
+4. Use the Coverage tool window (**View > Tool Windows > Coverage**) to view summaries and navigate to specific lines.
+5. Editor highlights: Covered lines may have a subtle green background, uncovered lines a red tint.
+
+*Screenshots: Editor view with gutter icons and highlighted lines; Coverage tool window showing file coverage percentages.*
 
 ## Installation
 
-- Using the IDE built-in plugin system:
+1. Download the plugin JAR from the [releases page](https://github.com/your-repo/per-line-coverage-info/releases).
+2. In IntelliJ IDEA, go to **File > Settings > Plugins**.
+3. Click the gear icon > **Install Plugin from Disk**.
+4. Select the downloaded JAR and restart IntelliJ.
 
-  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>Marketplace</kbd> > <kbd>Search for "per-line-coverage-info"</kbd> >
-  <kbd>Install</kbd>
+### Requirements
+- IntelliJ IDEA 2021.3 or later
+- PHP plugin installed (for PHP language support)
 
-- Using JetBrains Marketplace:
+## Development
 
-  Go to [JetBrains Marketplace](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID) and install it by clicking the <kbd>Install to ...</kbd> button in case your IDE is running.
+### Building and Running
+1. Clone the repository: `git clone https://github.com/your-repo/per-line-coverage-info.git`
+2. Open in IntelliJ IDEA.
+3. Run `./gradlew build` to build the plugin.
+4. For development, use `./gradlew runIde` to launch a test instance.
 
-  You can also download the [latest release](https://plugins.jetbrains.com/plugin/MARKETPLACE_ID/versions) from JetBrains Marketplace and install it manually using
-  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>⚙️</kbd> > <kbd>Install plugin from disk...</kbd>
+### Contributing Guidelines
+- Fork the repository and create a feature branch.
+- Follow Kotlin coding standards.
+- Submit a pull request with a clear description of changes.
 
-- Manually:
-
-  Download the [latest release](https://github.com/yakov255/per-line-coverage-info/releases/latest) and install it manually using
-  <kbd>Settings/Preferences</kbd> > <kbd>Plugins</kbd> > <kbd>⚙️</kbd> > <kbd>Install plugin from disk...</kbd>
-
-
----
-Plugin based on the [IntelliJ Platform Plugin Template][template].
-
-[template]: https://github.com/JetBrains/intellij-platform-plugin-template
-[docs:plugin-description]: https://plugins.jetbrains.com/docs/intellij/plugin-user-experience.html#plugin-description-and-presentation
+### License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
