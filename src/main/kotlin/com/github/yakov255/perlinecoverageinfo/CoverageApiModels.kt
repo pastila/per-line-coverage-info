@@ -4,16 +4,13 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class ApiCoverageResponse(
-    val files: Map<String, ApiFileCoverage>
-)
-
-@Serializable
-data class ApiLineCoverage(
-    val covered: Boolean,
-    val hits: Int
+    val files: List<ApiFileCoverage>
 )
 
 @Serializable
 data class ApiFileCoverage(
-    val lines: Map<Int, ApiLineCoverage>
+    val filePath: String,
+    val lines: Map<String, Int>,  // line number to testSet index or -1
+    val testSets: List<List<Int>>,  // each list is indices into tests
+    val tests: List<String>
 )
