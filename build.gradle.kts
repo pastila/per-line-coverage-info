@@ -36,11 +36,13 @@ dependencies {
     testImplementation(libs.opentest4j)
 
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
-    implementation("org.jetbrains.intellij.deps:intellij-coverage-agent:1.0.771")
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {
-        intellijIdea(providers.gradleProperty("platformVersion"))
+        create(
+            providers.gradleProperty("platformType"),
+            providers.gradleProperty("platformVersion"),
+        )
 
         // Plugin Dependencies. Uses `platformBundledPlugins` property from the gradle.properties file for bundled IntelliJ Platform plugins.
         bundledPlugins(providers.gradleProperty("platformBundledPlugins").map { it.split(',') })

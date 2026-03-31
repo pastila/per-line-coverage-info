@@ -5,20 +5,26 @@
     <vendor>yakov255</vendor>
 
     <depends>com.intellij.modules.platform</depends>
-    <depends>Coverage</depends>
     <depends>com.jetbrains.php</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <coverageRunner implementation="com.github.yakov255.perlinecoverageinfo.PerLineCoverageRunner"/>
-        <coverageEngine implementation="com.github.yakov255.perlinecoverageinfo.PerLineCoverageEngine"/>
         <applicationConfigurable
             parentId="tools"
             instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"
             id="coverage.api.settings"
             displayName="Coverage API"/>
+        <editorFactoryListener
+            implementation="com.github.yakov255.perlinecoverageinfo.CoverageEditorListener"/>
     </extensions>
 
-    <additionalTextAttributesScheme file="colorScheme/MyColorScheme.xml" />
-
-
+    <actions>
+        <action id="LoadCoverageFromAPI" class="com.github.yakov255.perlinecoverageinfo.LoadCoverageAction"
+                text="Load Coverage from API" description="Load coverage data from external API">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        <action id="ClearCoverageData" class="com.github.yakov255.perlinecoverageinfo.ClearCoverageAction"
+                text="Clear Coverage Data" description="Remove coverage annotations from all editors">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>
