@@ -4,11 +4,10 @@ import com.intellij.diff.comparison.ComparisonManager
 import com.intellij.diff.comparison.ComparisonPolicy
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.DumbProgressIndicator
-import java.io.File
 
 /**
  * Maps line numbers from a coverage commit to current editor content.
- * Uses IntelliJ's ComparisonManager to diff old file content (from git) against
+ * Uses IntelliJ's ComparisonManager to diff old file content against
  * current editor content, then builds a mapping of old→new line numbers
  * for lines whose content is unchanged.
  */
@@ -17,26 +16,14 @@ object CoverageLineMapper {
     private val log = Logger.getInstance(CoverageLineMapper::class.java)
 
     /**
-     * Compute a mapping from old (coverage commit) 1-based line numbers
-     * to current 1-based line numbers for lines that haven't changed.
+     * Computes a line mapping from old content to current content using ComparisonManager.
      *
      * @return a map of oldLineNumber→newLineNumber for unchanged lines,
-     *         or null if the old content could not be retrieved.
+     *         or null if content is identical (no mapping needed, use raw coverage).
      */
-    fun computeMapping(gitRoot: File, commitHash: String, relativePath: String, currentContent: String): Map<Int, Int>? {
-        val oldContent = getOldContent(gitRoot, commitHash, relativePath) ?: return null
-
-        // Fast path: content identical — identity mapping
-        if (oldContent == currentContent) return null // null signals "no mapping needed, use raw"
-
+    fun computeMappingFromContent(oldContent: String, currentContent: String): Map<Int, Int>? {
+        if (oldContent == currentContent) return null
         return buildLineMapping(oldContent, currentContent)
-    }
-
-    /**
-     * Retrieves file content at a specific commit via `git show`.
-     */
-    private fun getOldContent(gitRoot: File, commitHash: String, relativePath: String): String? {
-        return CoverageApiClient.runGitCommand(gitRoot, "show", "$commitHash:$relativePath")
     }
 
     /**
@@ -106,56 +93,5 @@ object CoverageLineMapper {
         return result
     }
 
-    /**
-     * Incrementally updates a line mapping after a document change.
-     * This avoids re-diffing the entire file on each keystroke.
-     *
-     * @param currentMapping the existing oldLine→newLine mapping
-     * @param changeStartLine 0-based line where the change starts in the current document
-     * @param linesRemoved number of lines removed
-     * @param linesAdded number of lines added
-     * @param changedLineContents list of (0-based new line index, new content) for lines at the change site
-     * @param oldContentLines the original (coverage commit) file content split into lines
-     * @return updated mapping
-     */
-    fun updateMappingAfterChange(
-        currentMapping: Map<Int, Int>,
-        changeStartLine: Int, // 0-based in new document
-        linesRemoved: Int,
-        linesAdded: Int,
-        changedLineContents: List<String>,
-        oldContentLines: List<String>
-    ): Map<Int, Int> {
-        val delta = linesAdded - linesRemoved
-        val result = mutableMapOf<Int, Int>()
-        val changeStartLine1 = changeStartLine + 1 // 1-based
 
-        for ((oldLine, newLine) in currentMapping) {
-            when {
-                // Lines before the change: unchanged
-                newLine < changeStartLine1 -> result[oldLine] = newLine
-
-                // Lines in the change zone: need to verify content still matches
-                newLine < changeStartLine1 + linesRemoved -> {
-                    // This line was in the removed/replaced zone
-                    // Check if a corresponding new line has same content
-                    val offsetInChange = newLine - changeStartLine1
-                    if (offsetInChange < linesAdded && offsetInChange < changedLineContents.size) {
-                        val newContent = changedLineContents[offsetInChange].trim()
-                        val oldContent = oldContentLines.getOrNull(oldLine - 1)?.trim()
-                        if (newContent == oldContent) {
-                            result[oldLine] = newLine // content still matches
-                        }
-                        // else: line content changed, drop from mapping
-                    }
-                    // else: line was deleted, drop from mapping
-                }
-
-                // Lines after the change zone: shift by delta
-                else -> result[oldLine] = newLine + delta
-            }
-        }
-
-        return result
-    }
 }

@@ -8,26 +8,20 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 
 /**
- * Project-level service that caches line mappings (old commit → current document)
- * and provides mapped coverage data for the highlighter.
+ * Project-level service that caches old file content (from the coverage commit)
+ * and computes line mappings on demand using ComparisonManager.
  *
- * The mapping is computed lazily per file when first requested, then updated
- * incrementally via [updateMapping] when the document changes.
+ * The old content is fetched once via `git show` and cached.
+ * The mapping (old→new line numbers) is recomputed from the cached old content
+ * and the current editor document text whenever highlights are applied.
  */
 @Service(Service.Level.PROJECT)
 class LineMappingService(private val project: Project) {
 
     private val log = Logger.getInstance(LineMappingService::class.java)
 
-    /**
-     * Per-file line mapping: relativePath → (oldLine → newLine).
-     * A null value means "not yet computed".
-     * An empty entry is never stored — if mapping is identity, the key is absent.
-     */
-    private val mappings = mutableMapOf<String, Map<Int, Int>>()
-
-    /** Per-file old content lines cache (for incremental updates). */
-    private val oldContentCache = mutableMapOf<String, List<String>>()
+    /** Per-file cached old content from the coverage commit. */
+    private val oldContentCache = mutableMapOf<String, String>()
 
     /**
      * Returns mapped coverage for a file, translating old line numbers to current ones.
@@ -42,44 +36,20 @@ class LineMappingService(private val project: Project) {
 
         val rawCoverage = findRawCoverage(absolutePath, relativePath, dataService) ?: return null
 
-        // Get or compute the line mapping
-        val mapping = getOrComputeMapping(relativePath, currentContent)
-            ?: return rawCoverage // null mapping = identity (file unchanged)
+        val oldContent = getOrFetchOldContent(relativePath) ?: return rawCoverage
+
+        // Diff old content vs current editor content using ComparisonManager
+        val mapping = CoverageLineMapper.computeMappingFromContent(oldContent, currentContent)
+            ?: return rawCoverage // null = identical content, use raw
 
         return CoverageLineMapper.mapCoverage(rawCoverage, mapping)
     }
 
     /**
-     * Sets a pre-computed mapping for a file (used after incremental updates).
-     */
-    fun setMapping(relativePath: String, mapping: Map<Int, Int>) {
-        mappings[relativePath] = mapping
-    }
-
-    /**
-     * Gets the current mapping for a file, or null if identity/not computed.
-     */
-    fun getMapping(relativePath: String): Map<Int, Int>? = mappings[relativePath]
-
-    /**
-     * Gets the cached old content lines for a file.
-     */
-    fun getOldContentLines(relativePath: String): List<String>? = oldContentCache[relativePath]
-
-    /**
-     * Clears all cached mappings (called when coverage data is reloaded).
+     * Clears all cached data (called when coverage data is reloaded).
      */
     fun clear() {
-        mappings.clear()
         oldContentCache.clear()
-    }
-
-    /**
-     * Invalidates the mapping for a specific file, forcing recomputation on next access.
-     */
-    fun invalidate(relativePath: String) {
-        mappings.remove(relativePath)
-        oldContentCache.remove(relativePath)
     }
 
     fun toRelativePath(absolutePath: String): String? {
@@ -89,27 +59,33 @@ class LineMappingService(private val project: Project) {
         return VfsUtil.getRelativePath(fileVf, baseVf)
     }
 
-    private fun getOrComputeMapping(relativePath: String, currentContent: String): Map<Int, Int>? {
-        // Return cached mapping if available
-        if (mappings.containsKey(relativePath)) {
-            return mappings[relativePath]
-        }
+    /**
+     * Resolves the git-relative path for a file.
+     * Coverage data uses paths relative to the project root, but git needs paths relative to the git root.
+     */
+    private fun toGitRelativePath(relativePath: String): String? {
+        val dataService = CoverageDataService.getInstance(project)
+        val gitRoot = dataService.gitRoot ?: return null
+        val basePath = project.basePath ?: return null
+        val projectDir = java.io.File(basePath)
+        val absoluteFile = java.io.File(projectDir, relativePath)
+        return absoluteFile.relativeTo(gitRoot).path
+    }
+
+    private fun getOrFetchOldContent(relativePath: String): String? {
+        oldContentCache[relativePath]?.let { return it }
 
         val dataService = CoverageDataService.getInstance(project)
         val commitHash = dataService.coverageCommitHash ?: return null
         val gitRoot = dataService.gitRoot ?: return null
 
-        val mapping = CoverageLineMapper.computeMapping(gitRoot, commitHash, relativePath, currentContent)
-        if (mapping != null) {
-            mappings[relativePath] = mapping
-            // Cache old content for incremental updates
-            val oldContent = CoverageApiClient.runGitCommand(gitRoot, "show", "$commitHash:$relativePath")
-            if (oldContent != null) {
-                oldContentCache[relativePath] = oldContent.lines()
-            }
-            log.warn("Coverage: computed line mapping for $relativePath: ${mapping.size} unchanged lines")
+        val gitPath = toGitRelativePath(relativePath) ?: return null
+        val oldContent = CoverageApiClient.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
+        if (oldContent != null) {
+            oldContentCache[relativePath] = oldContent
+            log.warn("Coverage: cached old content for $relativePath (git path: $gitPath, ${oldContent.lines().size} lines)")
         }
-        return mapping
+        return oldContent
     }
 
     private fun findRawCoverage(

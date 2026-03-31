@@ -130,8 +130,14 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
             log.warn("Coverage: project basePath is null")
             return null
         }
-        val gitRoot = File(basePath)
-        log.warn("Coverage: gitRoot=$gitRoot, baseUrl=$baseUrl")
+        val projectDir = File(basePath)
+        val gitRootPath = runGitCommand(projectDir, "rev-parse", "--show-toplevel")
+        if (gitRootPath == null) {
+            log.warn("Coverage: could not detect git root from $basePath")
+            return null
+        }
+        val gitRoot = File(gitRootPath)
+        log.warn("Coverage: gitRoot=$gitRoot, projectDir=$projectDir, baseUrl=$baseUrl")
 
         val commitHash = findCoverageCommit(gitRoot)
         if (commitHash == null) {
@@ -144,14 +150,16 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
         val phpFiles = FilenameIndex.getAllFilesByExt(project, "php", GlobalSearchScope.projectScope(project))
         log.warn("Coverage: found ${phpFiles.size} PHP files in project")
         val rootVf = LocalFileSystem.getInstance().findFileByIoFile(gitRoot)
-        if (rootVf == null) {
-            log.warn("Coverage: could not find VirtualFile for gitRoot=$gitRoot")
+        val projectVf = LocalFileSystem.getInstance().findFileByIoFile(projectDir)
+        if (rootVf == null || projectVf == null) {
+            log.warn("Coverage: could not find VirtualFile for gitRoot=$gitRoot or projectDir=$projectDir")
             return null
         }
         val result = mutableMapOf<String, Map<Int, List<String>>>()
 
         for (virtualFile in phpFiles) {
-            val relativePath = VfsUtil.getRelativePath(virtualFile, rootVf) ?: continue
+            // Use path relative to project root for the API (matches how coverage data is stored)
+            val relativePath = VfsUtil.getRelativePath(virtualFile, projectVf) ?: continue
             val response = getFileCoverage(commitHash, relativePath)
             if (response == null) {
                 log.warn("Coverage: no coverage for file=$relativePath")
