@@ -2,6 +2,7 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.editor.colors.CodeInsightColors
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.TextAttributes
@@ -10,12 +11,9 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
-import java.awt.Color
 
 object CoverageHighlighter {
 
-    private val COVERED_BG = Color(230, 255, 230)
-    private val UNCOVERED_BG = Color(255, 230, 230)
     private const val COVERAGE_LAYER = HighlighterLayer.LAST + 1
     val COVERAGE_HIGHLIGHTER_KEY = Key.create<Boolean>("PER_LINE_COVERAGE_HIGHLIGHTER")
 
@@ -36,7 +34,10 @@ object CoverageHighlighter {
         val document = editor.document
         val virtualFile = FileDocumentManager.getInstance().getFile(document) ?: return
 
-        val coverageLines = findCoverageForFile(virtualFile.path, project) ?: return
+        val lineMappingService = LineMappingService.getInstance(project)
+        val coverageLines = lineMappingService.getMappedCoverage(virtualFile.path, document.text)
+            ?: findCoverageForFile(virtualFile.path, project)
+            ?: return
 
         clearCoverageHighlighters(editor)
 
@@ -46,15 +47,15 @@ object CoverageHighlighter {
             val lineNumber = line + 1 // coverage data is 1-based
             val tests = coverageLines[lineNumber] ?: continue
 
-            val attrs = TextAttributes()
-            attrs.backgroundColor = if (tests.isNotEmpty()) COVERED_BG else UNCOVERED_BG
+            val covered = tests.isNotEmpty()
+            val attrKey = if (covered) CodeInsightColors.LINE_FULL_COVERAGE else CodeInsightColors.LINE_NONE_COVERAGE
             val startOffset = document.getLineStartOffset(line)
             val endOffset = document.getLineEndOffset(line)
             val highlighter = markupModel.addRangeHighlighter(
                 startOffset, endOffset, COVERAGE_LAYER,
-                attrs, HighlighterTargetArea.LINES_IN_RANGE
+                null, HighlighterTargetArea.LINES_IN_RANGE
             )
-            highlighter.gutterIconRenderer = CoverageGutterRenderer(lineNumber, tests)
+            highlighter.lineMarkerRenderer = CoverageGutterRenderer(lineNumber, tests, attrKey)
             highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
         }
     }

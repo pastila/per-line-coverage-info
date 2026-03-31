@@ -14,6 +14,14 @@ class CoverageDataService {
     /** file-path → (line-number → list-of-test-names) */
     private val data = mutableMapOf<String, Map<Int, List<String>>>()
 
+    /** The commit hash that coverage data was loaded from. */
+    var coverageCommitHash: String? = null
+        private set
+
+    /** The git root directory for the project. */
+    var gitRoot: java.io.File? = null
+        private set
+
     fun setCoverage(filePath: String, lines: Map<Int, List<String>>) {
         data[filePath] = lines
     }
@@ -22,9 +30,18 @@ class CoverageDataService {
 
     fun allFiles(): Set<String> = data.keys
 
-    fun clear() = data.clear()
+    fun clear() {
+        data.clear()
+        coverageCommitHash = null
+        gitRoot = null
+    }
 
     fun hasData(): Boolean = data.isNotEmpty()
+
+    fun setCoverageContext(commitHash: String, gitRoot: java.io.File) {
+        this.coverageCommitHash = commitHash
+        this.gitRoot = gitRoot
+    }
 
     companion object {
         fun getInstance(project: Project): CoverageDataService = project.service()

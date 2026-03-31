@@ -57,28 +57,8 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
     fun getFileCoverage(commitHash: String, filePath: String): IdeFileCoverageResponse? =
         makeRequest<IdeFileCoverageResponse>("/api/ide/commits/$commitHash/coverage/$filePath")
 
-    private fun runGitCommand(gitRoot: File, vararg args: String): String? {
-        val cmd = "git ${args.joinToString(" ")}"
-        return try {
-            val process = ProcessBuilder("git", *args)
-                .directory(gitRoot)
-                .redirectErrorStream(false)
-                .start()
-            val output = process.inputStream.bufferedReader().readText().trim()
-            val stderr = process.errorStream.bufferedReader().readText().trim()
-            val exitCode = process.waitFor()
-            if (exitCode == 0 && output.isNotEmpty()) {
-                log.warn("Git command '$cmd' succeeded: ${output.take(200)}")
-                output
-            } else {
-                log.warn("Git command '$cmd' failed (exit=$exitCode): $stderr")
-                null
-            }
-        } catch (e: Exception) {
-            log.warn("Git command '$cmd' threw exception: ${e.message}")
-            null
-        }
-    }
+    private fun runGitCommand(gitRoot: File, vararg args: String): String? =
+        Companion.runGitCommand(gitRoot, *args)
 
     private fun getDefaultBranch(gitRoot: File): String {
         // Try to detect the default branch from the remote
@@ -144,7 +124,7 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
         return match
     }
 
-    fun fetchCoverage(): Map<String, Map<Int, List<String>>>? {
+    fun fetchCoverage(): CoverageResult? {
         val basePath = project.basePath
         if (basePath == null) {
             log.warn("Coverage: project basePath is null")
@@ -181,6 +161,38 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
         }
 
         log.warn("Coverage: fetched coverage for ${result.size} / ${phpFiles.size} files")
-        return result
+        return CoverageResult(commitHash, gitRoot, result)
+    }
+
+    companion object {
+        fun runGitCommand(gitRoot: File, vararg args: String): String? {
+            val log = Logger.getInstance(CoverageApiClient::class.java)
+            val cmd = "git ${args.joinToString(" ")}"
+            return try {
+                val process = ProcessBuilder("git", *args)
+                    .directory(gitRoot)
+                    .redirectErrorStream(false)
+                    .start()
+                val output = process.inputStream.bufferedReader().readText().trim()
+                val stderr = process.errorStream.bufferedReader().readText().trim()
+                val exitCode = process.waitFor()
+                if (exitCode == 0 && output.isNotEmpty()) {
+                    log.warn("Git command '$cmd' succeeded: ${output.take(200)}")
+                    output
+                } else {
+                    log.warn("Git command '$cmd' failed (exit=$exitCode): $stderr")
+                    null
+                }
+            } catch (e: Exception) {
+                log.warn("Git command '$cmd' threw exception: ${e.message}")
+                null
+            }
+        }
     }
 }
+
+data class CoverageResult(
+    val commitHash: String,
+    val gitRoot: File,
+    val coverageData: Map<String, Map<Int, List<String>>>
+)

@@ -1,21 +1,25 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.actionSystem.AnAction
-import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.editor.markup.GutterIconRenderer
-import com.intellij.openapi.ui.popup.JBPopupFactory
-import com.intellij.ui.components.JBList
-import javax.swing.Icon
-import javax.swing.UIManager
+import com.intellij.openapi.editor.Editor
+import com.intellij.openapi.editor.colors.TextAttributesKey
+import com.intellij.openapi.editor.ex.EditorGutterComponentEx
+import com.intellij.openapi.editor.markup.ActiveGutterRenderer
+import com.intellij.openapi.editor.markup.FillingLineMarkerRenderer
+import com.intellij.openapi.editor.markup.LineMarkerRendererEx
+import com.intellij.openapi.fileEditor.FileDocumentManager
+import java.awt.event.MouseEvent
 
 class CoverageGutterRenderer(
     private val lineNumber: Int,
-    private val tests: List<String>
-) : GutterIconRenderer() {
+    private val tests: List<String>,
+    private val attrKey: TextAttributesKey
+) : FillingLineMarkerRenderer, ActiveGutterRenderer {
 
-    override fun getIcon(): Icon {
-        return if (tests.isNotEmpty()) CoverageIcons.COVERED else CoverageIcons.UNCOVERED
-    }
+    override fun getTextAttributesKey(): TextAttributesKey = attrKey
+
+    override fun getMaxWidth(): Int = 8
+
+    override fun getPosition(): LineMarkerRendererEx.Position = LineMarkerRendererEx.Position.LEFT
 
     override fun getTooltipText(): String {
         return if (tests.isNotEmpty()) {
@@ -25,30 +29,22 @@ class CoverageGutterRenderer(
         }
     }
 
-    override fun getClickAction(): AnAction? {
-        if (tests.isEmpty()) return null
-        return object : AnAction("Show Tests Covering Line $lineNumber") {
-            override fun actionPerformed(e: AnActionEvent) {
-                val component = e.inputEvent?.component ?: return
-                val list = JBList(tests)
-                JBPopupFactory.getInstance()
-                    .createListPopupBuilder(list)
-                    .setTitle("Tests covering line $lineNumber (${tests.size})")
-                    .createPopup()
-                    .showUnderneathOf(component)
-            }
+    override fun canDoAction(editor: Editor, e: MouseEvent): Boolean {
+        if (tests.isEmpty()) return false
+        val component = e.component
+        if (component is EditorGutterComponentEx) {
+            return e.x > component.lineMarkerAreaOffset && e.x < component.iconAreaOffset
         }
+        return false
     }
 
-    override fun isNavigateAction(): Boolean = tests.isNotEmpty()
-
-    override fun getAlignment(): Alignment = Alignment.LEFT
-
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (other !is CoverageGutterRenderer) return false
-        return lineNumber == other.lineNumber && tests == other.tests
+    override fun doAction(editor: Editor, e: MouseEvent) {
+        e.consume()
+        val project = editor.project ?: return
+        val virtualFile = FileDocumentManager.getInstance().getFile(editor.document)
+        val filePath = virtualFile?.path ?: ""
+        CoverageTestsPanel.showTestsInPanel(project, lineNumber, filePath, tests)
     }
 
-    override fun hashCode(): Int = 31 * lineNumber + tests.hashCode()
+    override fun getAccessibleName(): String = getTooltipText()
 }

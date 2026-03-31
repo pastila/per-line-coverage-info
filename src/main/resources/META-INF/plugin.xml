@@ -8,6 +8,8 @@
     <depends>com.jetbrains.php</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.LineMappingService"/>
         <applicationConfigurable
             parentId="tools"
             instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"
@@ -15,12 +17,18 @@
             displayName="Coverage API"/>
         <editorFactoryListener
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageEditorListener"/>
+        <toolWindow id="Coverage Tests"
+                    anchor="bottom"
+                    factoryClass="com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory"
+                    secondary="false"
+                    icon="AllIcons.Toolwindows.ToolWindowCoverage"/>
     </extensions>
 
     <actions>
         <action id="LoadCoverageFromAPI" class="com.github.yakov255.perlinecoverageinfo.LoadCoverageAction"
                 text="Load Coverage from API" description="Load coverage data from external API">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <add-to-group group-id="EditorGutterPopupMenu" anchor="last"/>
         </action>
         <action id="ClearCoverageData" class="com.github.yakov255.perlinecoverageinfo.ClearCoverageAction"
                 text="Clear Coverage Data" description="Remove coverage annotations from all editors">

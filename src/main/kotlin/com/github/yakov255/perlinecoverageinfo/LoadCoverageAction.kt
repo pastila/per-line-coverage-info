@@ -19,9 +19,9 @@ class LoadCoverageAction : AnAction() {
         }
 
         val apiClient = CoverageApiClient(apiUrl, bearerToken, project)
-        val coverageMap = apiClient.fetchCoverage()
+        val result = apiClient.fetchCoverage()
 
-        if (coverageMap == null || coverageMap.isEmpty()) {
+        if (result == null || result.coverageData.isEmpty()) {
             Messages.showErrorDialog(project, "Failed to fetch coverage data from API. Check your settings and API availability.", "API Error")
             return
         }
@@ -29,17 +29,16 @@ class LoadCoverageAction : AnAction() {
         val dataService = CoverageDataService.getInstance(project)
         dataService.clear()
 
-        for ((filePath, lines) in coverageMap) {
+        val lineMappingService = LineMappingService.getInstance(project)
+        lineMappingService.clear()
+
+        dataService.setCoverageContext(result.commitHash, result.gitRoot)
+
+        for ((filePath, lines) in result.coverageData) {
             dataService.setCoverage(filePath, lines)
         }
 
         // Apply annotations to all currently open editors
         CoverageHighlighter.applyToOpenEditors(project)
-
-        Messages.showInfoMessage(
-            project,
-            "Coverage loaded: ${coverageMap.size} files.",
-            "Coverage Loaded"
-        )
     }
 }
