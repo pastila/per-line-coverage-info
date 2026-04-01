@@ -11,7 +11,7 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> {
 
     data class State(
-        var apiUrl: String = "https://api.coverage.example.com/data",
+        var apiUrl: String = "https://coverage.yakov255.ru/",
         var bearerToken: String = ""
     )
 

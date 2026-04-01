@@ -6,6 +6,8 @@
 
     <depends>com.intellij.modules.platform</depends>
     <depends>com.jetbrains.php</depends>
+    <depends>gherkin</depends>
+    <depends optional="true" config-file="behat-integration.xml">com.jetbrains.php.behat</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <projectService
