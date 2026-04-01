@@ -13,9 +13,7 @@ import com.intellij.psi.PsiManager
 import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.GlobalSearchScope
 import com.intellij.ui.ColoredTreeCellRenderer
-import com.intellij.ui.DocumentAdapter
 import com.intellij.ui.PopupHandler
-import com.intellij.ui.SearchTextField
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
@@ -25,16 +23,13 @@ import icons.BehatIcons
 import org.jetbrains.plugins.cucumber.psi.GherkinFile
 import org.jetbrains.plugins.cucumber.psi.GherkinStepsHolder
 import java.awt.BorderLayout
-import java.awt.Toolkit
-import java.awt.datatransfer.StringSelection
+import java.awt.Cursor
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.JPanel
 import javax.swing.JTree
-import javax.swing.event.DocumentEvent
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
-import javax.swing.tree.TreePath
 
 private sealed class TestNodeData(val displayName: String) {
     class BehatGroup(val featurePath: String) : TestNodeData(featurePath)
@@ -46,7 +41,6 @@ private sealed class TestNodeData(val displayName: String) {
 class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
     private val titleLabel = JBLabel("No line selected")
-    private val searchField = SearchTextField(false)
     private val rootNode = DefaultMutableTreeNode("Tests")
     private val treeModel = DefaultTreeModel(rootNode)
     private val tree = Tree(treeModel)
@@ -56,10 +50,10 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
     init {
         titleLabel.border = JBUI.Borders.empty(4, 6)
-
-        searchField.addDocumentListener(object : DocumentAdapter() {
-            override fun textChanged(e: DocumentEvent) {
-                filterTests(searchField.text.trim())
+        titleLabel.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+        titleLabel.addMouseListener(object : MouseAdapter() {
+            override fun mouseClicked(e: MouseEvent) {
+                navigateToSourceLine()
             }
         })
 
@@ -117,20 +111,18 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
                     if (canRunTest(testName)) {
                         add(object : AnAction("Run Test") {
                             override fun actionPerformed(e: AnActionEvent) {
-                                runTest(testName)
+                                runTest(testName, debug = false)
+                            }
+                        })
+                        add(object : AnAction("Debug Test") {
+                            override fun actionPerformed(e: AnActionEvent) {
+                                runTest(testName, debug = true)
                             }
                         })
                     }
                     add(object : AnAction("Go to Test") {
                         override fun actionPerformed(e: AnActionEvent) {
                             navigateToTest(testName)
-                        }
-                    })
-                    addSeparator()
-                    add(object : AnAction("Copy Test Name") {
-                        override fun actionPerformed(e: AnActionEvent) {
-                            val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-                            clipboard.setContents(StringSelection(testName), null)
                         }
                     })
                 }
@@ -140,12 +132,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             }
         })
 
-        val topPanel = JPanel(BorderLayout()).apply {
-            add(titleLabel, BorderLayout.NORTH)
-            add(searchField, BorderLayout.SOUTH)
-        }
-
-        add(topPanel, BorderLayout.NORTH)
+        add(titleLabel, BorderLayout.NORTH)
         add(JBScrollPane(tree), BorderLayout.CENTER)
     }
 
@@ -156,22 +143,12 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         val fileName = filePath.substringAfterLast("/")
         if (tests.isEmpty()) {
-            titleLabel.text = "$fileName:$lineNumber — not covered"
+            titleLabel.text = "<html><a style='text-decoration:underline'>$fileName:$lineNumber</a> — not covered</html>"
         } else {
-            titleLabel.text = "$fileName:$lineNumber — ${tests.size} test(s)"
+            titleLabel.text = "<html><a style='text-decoration:underline'>$fileName:$lineNumber</a> — ${tests.size} test(s)</html>"
         }
 
-        searchField.text = ""
         buildTree(tests)
-    }
-
-    private fun filterTests(query: String) {
-        if (query.isEmpty()) {
-            buildTree(allTests)
-        } else {
-            val lower = query.lowercase()
-            buildTree(allTests.filter { it.lowercase().contains(lower) })
-        }
     }
 
     private fun buildTree(tests: List<String>) {
@@ -235,6 +212,15 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         }
     }
 
+    private fun navigateToSourceLine() {
+        if (currentFilePath.isEmpty()) return
+        val projectDir = project.guessProjectDir() ?: return
+        val vf = VfsUtil.findRelativeFile(currentFilePath, projectDir) ?: return
+        val line = if (currentLineNumber > 0) currentLineNumber - 1 else 0
+        FileEditorManager.getInstance(project)
+            .openTextEditor(OpenFileDescriptor(project, vf, line, 0), true)
+    }
+
     private fun navigateToTest(testName: String) {
         if (isBehatTest(testName)) {
             navigateToBehatTest(testName)
@@ -279,16 +265,16 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             .openTextEditor(OpenFileDescriptor(project, vf, line, 0), true)
     }
 
-    private fun runTest(testName: String) {
+    private fun runTest(testName: String, debug: Boolean = false) {
         if (isBehatTest(testName)) {
-            runBehatTest(testName)
+            runBehatTest(testName, debug)
         } else {
             // For PHPUnit, fall back to navigation for now
             navigateToTest(testName)
         }
     }
 
-    private fun runBehatTest(testName: String) {
+    private fun runBehatTest(testName: String, debug: Boolean = false) {
         if (!BehatTestRunner.isAvailable()) {
             navigateToBehatTest(testName)
             return
@@ -309,12 +295,12 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
                 findScenarioAtLine(psiFile, lineNumber)
             }
             if (scenarioName != null) {
-                BehatTestRunner.runScenario(project, absolutePath, scenarioName)
+                BehatTestRunner.runScenario(project, absolutePath, scenarioName, debug)
             } else {
-                BehatTestRunner.runFeatureFile(project, absolutePath)
+                BehatTestRunner.runFeatureFile(project, absolutePath, debug)
             }
         } else {
-            BehatTestRunner.runFeatureFile(project, absolutePath)
+            BehatTestRunner.runFeatureFile(project, absolutePath, debug)
         }
     }
 
@@ -329,7 +315,6 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     /** Finds the scenario name at a given 1-based line number in a Gherkin file. */
     private fun findScenarioAtLine(gherkinFile: GherkinFile, lineNumber: Int): String? {
         val document = gherkinFile.viewProvider.document ?: return null
-        val targetOffset = document.getLineStartOffset(lineNumber - 1)
         val features = gherkinFile.features
         for (feature in features) {
             for (scenario in feature.scenarios) {

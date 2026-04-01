@@ -2,7 +2,6 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
@@ -17,8 +16,6 @@ import com.intellij.openapi.vfs.VfsUtil
  */
 @Service(Service.Level.PROJECT)
 class LineMappingService(private val project: Project) {
-
-    private val log = Logger.getInstance(LineMappingService::class.java)
 
     /** Per-file cached old content from the coverage commit. */
     private val oldContentCache = mutableMapOf<String, String>()
@@ -83,7 +80,6 @@ class LineMappingService(private val project: Project) {
         val oldContent = CoverageApiClient.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
         if (oldContent != null) {
             oldContentCache[relativePath] = oldContent
-            log.warn("Coverage: cached old content for $relativePath (git path: $gitPath, ${oldContent.lines().size} lines)")
         }
         return oldContent
     }

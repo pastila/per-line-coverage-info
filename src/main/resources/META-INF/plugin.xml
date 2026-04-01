@@ -28,13 +28,17 @@
 
     <actions>
         <action id="LoadCoverageFromAPI" class="com.github.yakov255.perlinecoverageinfo.LoadCoverageAction"
-                text="Load Coverage from API" description="Load coverage data from external API">
+                text="Show Coverage on Master" description="Load coverage data from coverage viewer API">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
-            <add-to-group group-id="EditorGutterPopupMenu" anchor="last"/>
+            <add-to-group group-id="EditorGutterPopupMenu" anchor="after" relative-to-action="EditorGutterVcsPopupMenu"/>
         </action>
         <action id="ClearCoverageData" class="com.github.yakov255.perlinecoverageinfo.ClearCoverageAction"
                 text="Clear Coverage Data" description="Remove coverage annotations from all editors">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+        <action id="HideCoverageFromGutter" class="com.github.yakov255.perlinecoverageinfo.HideCoverageGutterAction"
+                text="Hide Coverage" description="Hide coverage annotations from all editors">
+            <add-to-group group-id="EditorGutterPopupMenu" anchor="after" relative-to-action="LoadCoverageFromAPI"/>
         </action>
     </actions>
 </idea-plugin>

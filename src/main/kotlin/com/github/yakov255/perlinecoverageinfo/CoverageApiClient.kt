@@ -1,6 +1,5 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
@@ -16,7 +15,6 @@ import java.time.Duration
 
 class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "", private val project: Project) {
 
-    private val log = Logger.getInstance(CoverageApiClient::class.java)
     private val baseUrl = apiEndpoint.trimEnd('/')
 
     private val httpClient: HttpClient = HttpClient.newBuilder()
@@ -26,7 +24,6 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
     private inline fun <reified T> makeRequest(endpoint: String): T? {
         val url = "$baseUrl$endpoint"
         return try {
-            log.warn("Coverage API request: GET $url")
             val requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .GET()
@@ -39,14 +36,11 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
             val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
 
             if (response.statusCode() == 200) {
-                log.warn("Coverage API response 200 for $url")
                 Json.decodeFromString<T>(response.body())
             } else {
-                log.warn("Coverage API response ${response.statusCode()} for $url: ${response.body().take(500)}")
                 null
             }
         } catch (e: Exception) {
-            log.warn("Coverage API request failed for $url: ${e.message}", e)
             null
         }
     }
@@ -89,70 +83,71 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
      */
     private fun findCoverageCommit(gitRoot: File): String? {
         val defaultBranch = getDefaultBranch(gitRoot)
-        log.warn("Coverage: detected default branch='$defaultBranch'")
 
         val mergeBase = getMergeBase(gitRoot, defaultBranch)
         if (mergeBase == null) {
-            log.warn("Coverage: merge-base not found for HEAD and '$defaultBranch'")
             return null
         }
-        log.warn("Coverage: merge-base=$mergeBase")
 
         val apiResponse = getBranchCommits(defaultBranch)
         if (apiResponse == null) {
-            log.warn("Coverage: failed to fetch branch commits from API for branch='$defaultBranch'")
             return null
         }
-        log.warn("Coverage: API returned ${apiResponse.commits.size} commits for branch='$defaultBranch'")
         val apiCommits = apiResponse.commits.toSet()
 
         // Check if merge-base itself has coverage
         if (mergeBase in apiCommits) {
-            log.warn("Coverage: merge-base $mergeBase found in API commits")
             return mergeBase
         }
 
         // Walk backward from merge-base to find nearest commit with coverage
         val ancestors = getLocalAncestorCommits(gitRoot, mergeBase)
-        log.warn("Coverage: checking ${ancestors.size} ancestor commits for coverage match")
         val match = ancestors.firstOrNull { it in apiCommits }
         if (match != null) {
-            log.warn("Coverage: found matching commit=$match")
         } else {
-            log.warn("Coverage: no matching commit found among ancestors")
         }
         return match
     }
 
-    fun fetchCoverage(): CoverageResult? {
+    private fun resolveCommitAndGitRoot(): Pair<String, File>? {
         val basePath = project.basePath
         if (basePath == null) {
-            log.warn("Coverage: project basePath is null")
             return null
         }
         val projectDir = File(basePath)
         val gitRootPath = runGitCommand(projectDir, "rev-parse", "--show-toplevel")
         if (gitRootPath == null) {
-            log.warn("Coverage: could not detect git root from $basePath")
             return null
         }
         val gitRoot = File(gitRootPath)
-        log.warn("Coverage: gitRoot=$gitRoot, projectDir=$projectDir, baseUrl=$baseUrl")
 
         val commitHash = findCoverageCommit(gitRoot)
         if (commitHash == null) {
-            log.warn("Coverage: could not find a commit with coverage data")
             return null
         }
-        log.warn("Coverage: using commit=$commitHash")
+        return Pair(commitHash, gitRoot)
+    }
+
+    fun fetchCoverageForFile(relativePath: String): CoverageResult? {
+        val (commitHash, gitRoot) = resolveCommitAndGitRoot() ?: return null
+
+        val response = getFileCoverage(commitHash, relativePath)
+        if (response == null) {
+            return null
+        }
+        val result = mapOf(relativePath to response.resolveLines())
+        return CoverageResult(commitHash, gitRoot, result)
+    }
+
+    fun fetchCoverage(): CoverageResult? {
+        val (commitHash, gitRoot) = resolveCommitAndGitRoot() ?: return null
+        val basePath = project.basePath ?: return null
+        val projectDir = File(basePath)
 
         // Get all PHP files and fetch coverage for each
         val phpFiles = FilenameIndex.getAllFilesByExt(project, "php", GlobalSearchScope.projectScope(project))
-        log.warn("Coverage: found ${phpFiles.size} PHP files in project")
-        val rootVf = LocalFileSystem.getInstance().findFileByIoFile(gitRoot)
         val projectVf = LocalFileSystem.getInstance().findFileByIoFile(projectDir)
-        if (rootVf == null || projectVf == null) {
-            log.warn("Coverage: could not find VirtualFile for gitRoot=$gitRoot or projectDir=$projectDir")
+        if (projectVf == null) {
             return null
         }
         val result = mutableMapOf<String, Map<Int, List<String>>>()
@@ -162,20 +157,16 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
             val relativePath = VfsUtil.getRelativePath(virtualFile, projectVf) ?: continue
             val response = getFileCoverage(commitHash, relativePath)
             if (response == null) {
-                log.warn("Coverage: no coverage for file=$relativePath")
                 continue
             }
             result[relativePath] = response.resolveLines()
         }
 
-        log.warn("Coverage: fetched coverage for ${result.size} / ${phpFiles.size} files")
         return CoverageResult(commitHash, gitRoot, result)
     }
 
     companion object {
         fun runGitCommand(gitRoot: File, vararg args: String): String? {
-            val log = Logger.getInstance(CoverageApiClient::class.java)
-            val cmd = "git ${args.joinToString(" ")}"
             return try {
                 val process = ProcessBuilder("git", *args)
                     .directory(gitRoot)
@@ -185,14 +176,11 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
                 val stderr = process.errorStream.bufferedReader().readText().trim()
                 val exitCode = process.waitFor()
                 if (exitCode == 0 && output.isNotEmpty()) {
-                    log.warn("Git command '$cmd' succeeded: ${output.take(200)}")
                     output
                 } else {
-                    log.warn("Git command '$cmd' failed (exit=$exitCode): $stderr")
                     null
                 }
             } catch (e: Exception) {
-                log.warn("Git command '$cmd' threw exception: ${e.message}")
                 null
             }
         }
