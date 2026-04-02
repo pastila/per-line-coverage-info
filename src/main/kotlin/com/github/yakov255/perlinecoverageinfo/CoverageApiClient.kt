@@ -27,7 +27,7 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
             .GET()
             .header("Accept", "application/json")
         if (bearerToken.isNotEmpty()) {
-            requestBuilder.header("Authorization", "Bearer <redacted>")
+            requestBuilder.header("Authorization", "Bearer $bearerToken")
         }
         val response = try {
             httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
@@ -74,7 +74,7 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
         makeRequest("/api/ide/commits/$commitHash/coverage/$filePath")
 
     private fun runGitCommand(gitRoot: File, vararg args: String): String? =
-        runGitCommand(gitRoot, *args)
+        Companion.runGitCommand(gitRoot, *args)
 
     private fun getDefaultBranch(gitRoot: File): String {
         val configured = CoverageApiSettings.getInstance().mergeBaseBranch.trim()
