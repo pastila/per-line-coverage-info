@@ -2,10 +2,6 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VfsUtil
-import com.intellij.psi.search.FilenameIndex
-import com.intellij.psi.search.GlobalSearchScope
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.net.URI
@@ -40,7 +36,8 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
             throw CoverageApiException(
                 "Network error contacting coverage API",
                 e,
-                mapOf("url" to url, "error" to e.message)
+                mapOf("url" to url, "error" to e.message),
+                kind = CoverageErrorKind.NETWORK,
             )
         }
         log.info("Coverage API response: HTTP ${response.statusCode()} for $url")
@@ -53,7 +50,8 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
                     "url" to url,
                     "httpStatus" to response.statusCode().toString(),
                     "responseBody" to body
-                )
+                ),
+                kind = CoverageErrorKind.API_RESPONSE,
             )
         }
         return try {
@@ -63,7 +61,8 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
             throw CoverageApiException(
                 "Failed to parse coverage API response",
                 e,
-                mapOf("url" to url, "error" to e.message, "body" to response.body().take(500))
+                mapOf("url" to url, "error" to e.message, "body" to response.body().take(500)),
+                kind = CoverageErrorKind.PARSE,
             )
         }
     }
@@ -75,7 +74,7 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
         makeRequest("/api/ide/commits/$commitHash/coverage/$filePath")
 
     private fun runGitCommand(gitRoot: File, vararg args: String): String? =
-        Companion.runGitCommand(gitRoot, *args)
+        runGitCommand(gitRoot, *args)
 
     private fun getDefaultBranch(gitRoot: File): String {
         val configured = CoverageApiSettings.getInstance().mergeBaseBranch.trim()
@@ -131,7 +130,8 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
         val mergeBase = getMergeBase(gitRoot, defaultBranch)
             ?: throw CoverageApiException(
                 "Could not compute git merge-base",
-                details = mapOf("gitRoot" to gitRoot.absolutePath, "defaultBranch" to defaultBranch)
+                details = mapOf("gitRoot" to gitRoot.absolutePath, "defaultBranch" to defaultBranch),
+                kind = CoverageErrorKind.GIT,
             )
         log.info("Coverage: merge-base = $mergeBase")
 
@@ -167,7 +167,8 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
                     "branchCommitsChecked" to branchCommits.size.toString(),
                     "localAncestorsChecked" to ancestors.size.toString(),
                     "apiCommitsAvailable" to apiCommits.size.toString()
-                )
+                ),
+                kind = CoverageErrorKind.NO_DATA,
             )
         log.info("Coverage: resolved commit = $matchAncestor (ancestor of merge-base)")
         return matchAncestor
@@ -177,13 +178,15 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
         val basePath = project.basePath
             ?: throw CoverageApiException(
                 "Could not determine project base path",
-                details = mapOf("project" to project.name)
+                details = mapOf("project" to project.name),
+                kind = CoverageErrorKind.PROJECT_SETUP,
             )
         val projectDir = File(basePath)
         val gitRootPath = runGitCommand(projectDir, "rev-parse", "--show-toplevel")
             ?: throw CoverageApiException(
                 "Could not find git repository root — is this project in a git repo?",
-                details = mapOf("projectDir" to basePath)
+                details = mapOf("projectDir" to basePath),
+                kind = CoverageErrorKind.GIT,
             )
         val gitRoot = File(gitRootPath)
         val commitHash = findCoverageCommit(gitRoot)
@@ -197,32 +200,7 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
         return CoverageResult(commitHash, gitRoot, mapOf(relativePath to response.resolveLines()))
     }
 
-    fun fetchCoverage(): CoverageResult {
-        val (commitHash, gitRoot) = resolveCommitAndGitRoot()
-        val basePath = project.basePath
-            ?: throw CoverageApiException("Could not determine project base path")
-        val projectDir = File(basePath)
 
-        val phpFiles = FilenameIndex.getAllFilesByExt(project, "php", GlobalSearchScope.projectScope(project))
-        val projectVf = LocalFileSystem.getInstance().findFileByIoFile(projectDir)
-            ?: throw CoverageApiException(
-                "Could not resolve project virtual file",
-                details = mapOf("projectDir" to basePath)
-            )
-        val result = mutableMapOf<String, Map<Int, List<String>>>()
-
-        for (virtualFile in phpFiles) {
-            val relativePath = VfsUtil.getRelativePath(virtualFile, projectVf) ?: continue
-            try {
-                val response = getFileCoverage(commitHash, relativePath)
-                result[relativePath] = response.resolveLines()
-            } catch (e: CoverageApiException) {
-                log.warn("Coverage: skipping $relativePath — ${e.message}")
-            }
-        }
-
-        return CoverageResult(commitHash, gitRoot, result)
-    }
 
     companion object {
         fun runGitCommand(gitRoot: File, vararg args: String): String? {
@@ -232,14 +210,13 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
                     .redirectErrorStream(false)
                     .start()
                 val output = process.inputStream.bufferedReader().readText().trim()
-                val stderr = process.errorStream.bufferedReader().readText().trim()
                 val exitCode = process.waitFor()
                 if (exitCode == 0 && output.isNotEmpty()) {
                     output
                 } else {
                     null
                 }
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 null
             }
         }

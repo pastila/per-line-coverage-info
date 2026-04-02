@@ -6,7 +6,6 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.diagnostic.Logger
-import com.intellij.openapi.diagnostic.RuntimeExceptionWithAttachments
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
@@ -53,12 +52,26 @@ class LoadCoverageAction : AnAction() {
         val apiClient = CoverageApiClient(apiUrl, bearerToken, project)
         val result = try {
             apiClient.fetchCoverageForFile(relativePath)
-        } catch (e: CoverageApiException) {
-            log.error("Coverage API error", e)
-            throw RuntimeExceptionWithAttachments(e.message ?: "Coverage API error", e)
-        } catch (e: Exception) {
-            log.error("Unexpected error fetching coverage", e)
-            throw RuntimeExceptionWithAttachments("Unexpected error fetching coverage data: ${e.message}", e)
+        } catch (ex: CoverageApiException) {
+            log.warn("Coverage error", ex)
+            val title = when (ex.kind) {
+                CoverageErrorKind.NETWORK       -> "API Connection Error"
+                CoverageErrorKind.API_RESPONSE  -> "API Error"
+                CoverageErrorKind.PARSE         -> "API Response Error"
+                CoverageErrorKind.GIT           -> "Git Error"
+                CoverageErrorKind.NO_DATA       -> "No Coverage Data"
+                CoverageErrorKind.PROJECT_SETUP -> "Project Configuration Error"
+            }
+            Messages.showErrorDialog(project, ex.userMessage, title)
+            return
+        } catch (ex: Exception) {
+            log.warn("Unexpected coverage error", ex)
+            Messages.showErrorDialog(
+                project,
+                "An unexpected error occurred while loading coverage data:\n${ex.message}",
+                "Coverage Error"
+            )
+            return
         }
 
         if (result.coverageData.isEmpty()) {
