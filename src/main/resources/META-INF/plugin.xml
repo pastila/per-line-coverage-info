@@ -10,6 +10,8 @@
     <depends optional="true" config-file="behat-integration.xml">com.jetbrains.php.behat</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <errorHandler
+            implementation="com.github.yakov255.perlinecoverageinfo.CoverageErrorReporter"/>
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.LineMappingService"/>
         <applicationConfigurable

@@ -5,6 +5,8 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.diagnostic.RuntimeExceptionWithAttachments
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
@@ -12,6 +14,8 @@ import com.jetbrains.php.lang.PhpLanguage
 import java.io.File
 
 class LoadCoverageAction : AnAction() {
+
+    private val log = Logger.getInstance(LoadCoverageAction::class.java)
 
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
@@ -47,10 +51,18 @@ class LoadCoverageAction : AnAction() {
         }
 
         val apiClient = CoverageApiClient(apiUrl, bearerToken, project)
-        val result = apiClient.fetchCoverageForFile(relativePath)
+        val result = try {
+            apiClient.fetchCoverageForFile(relativePath)
+        } catch (e: CoverageApiException) {
+            log.error("Coverage API error", e)
+            throw RuntimeExceptionWithAttachments(e.message ?: "Coverage API error", e)
+        } catch (e: Exception) {
+            log.error("Unexpected error fetching coverage", e)
+            throw RuntimeExceptionWithAttachments("Unexpected error fetching coverage data: ${e.message}", e)
+        }
 
-        if (result == null || result.coverageData.isEmpty()) {
-            Messages.showErrorDialog(project, "Failed to fetch coverage data from API. Check your settings and API availability.", "API Error")
+        if (result.coverageData.isEmpty()) {
+            Messages.showInfoMessage(project, "No coverage data found for this file at the current commit.", "No Coverage Data")
             return
         }
 

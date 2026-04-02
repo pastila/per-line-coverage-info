@@ -23,7 +23,7 @@ class CoverageGutterRenderer(
 
     override fun getTooltipText(): String {
         return if (tests.isNotEmpty()) {
-            "Line $lineNumber covered by ${tests.size} test(s):\n${tests.joinToString("\n") { "• $it" }}"
+            "Line $lineNumber covered by ${tests.size} test(s)"
         } else {
             "Line $lineNumber: not covered"
         }
@@ -46,5 +46,11 @@ class CoverageGutterRenderer(
         CoverageTestsPanel.showTestsInPanel(project, lineNumber, filePath, tests)
     }
 
-    override fun getAccessibleName(): String = getTooltipText()
+    override fun getAccessibleName(): String {
+        return if (tests.isNotEmpty()) {
+            "Line $lineNumber covered by ${tests.size} tests"
+        } else {
+            "Line $lineNumber not covered"
+        }
+    }
 }

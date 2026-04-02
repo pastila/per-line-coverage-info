@@ -12,7 +12,10 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
 
     data class State(
         var apiUrl: String = "https://coverage.yakov255.ru/",
-        var bearerToken: String = ""
+        var bearerToken: String = "",
+        var mergeBaseBranch: String = "behat-run-necessary-tests",
+        /** Branch name sent to the coverage API. Leave empty to use the same value as mergeBaseBranch. */
+        var apiBranchName: String = "master"
     )
 
     private var state = State()
@@ -30,6 +33,23 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
     var bearerToken: String
         get() = state.bearerToken
         set(value) { state.bearerToken = value }
+
+    var mergeBaseBranch: String
+        get() = state.mergeBaseBranch
+        set(value) { state.mergeBaseBranch = value }
+
+    /**
+     * Branch name used in API calls (e.g. "master" when the coverage server stores
+     * data under master regardless of which branch actually ran the tests).
+     * Falls back to [mergeBaseBranch] when empty.
+     */
+    var apiBranchName: String
+        get() = state.apiBranchName
+        set(value) { state.apiBranchName = value }
+
+    /** The branch name to pass to the coverage API. */
+    val effectiveApiBranch: String
+        get() = state.apiBranchName.trim().ifEmpty { state.mergeBaseBranch }
 
     companion object {
         fun getInstance(): CoverageApiSettings = service()

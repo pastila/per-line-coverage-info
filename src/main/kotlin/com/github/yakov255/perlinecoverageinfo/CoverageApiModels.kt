@@ -18,12 +18,15 @@ data class IdeFileCoverageResponse(
      */
     fun resolveLines(): Map<Int, List<String>> {
         val result = mutableMapOf<Int, List<String>>()
+        val resolvedSets = mutableMapOf<Int, List<String>>()
         for ((lineStr, setIndex) in lines) {
             val lineNum = lineStr.toIntOrNull() ?: continue
             if (setIndex < 0 || setIndex >= testSets.size) {
                 result[lineNum] = emptyList()
             } else {
-                result[lineNum] = testSets[setIndex].mapNotNull { tests.getOrNull(it) }
+                result[lineNum] = resolvedSets.getOrPut(setIndex) {
+                    testSets[setIndex].mapNotNull { tests.getOrNull(it) }
+                }
             }
         }
         return result

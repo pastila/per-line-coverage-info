@@ -1,5 +1,6 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
@@ -15,52 +16,74 @@ import java.time.Duration
 
 class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "", private val project: Project) {
 
+    private val log = Logger.getInstance(CoverageApiClient::class.java)
     private val baseUrl = apiEndpoint.trimEnd('/')
 
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .build()
 
-    private inline fun <reified T> makeRequest(endpoint: String): T? {
+    private inline fun <reified T> makeRequest(endpoint: String): T {
         val url = "$baseUrl$endpoint"
-        return try {
-            val requestBuilder = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .GET()
-                .header("Accept", "application/json")
-            if (bearerToken.isNotEmpty()) {
-                requestBuilder.header("Authorization", "Bearer $bearerToken")
-            }
-            val request = requestBuilder.build()
-
-            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
-
-            if (response.statusCode() == 200) {
-                Json.decodeFromString<T>(response.body())
-            } else {
-                null
-            }
+        log.info("Coverage API request: GET $url")
+        val requestBuilder = HttpRequest.newBuilder()
+            .uri(URI.create(url))
+            .GET()
+            .header("Accept", "application/json")
+        if (bearerToken.isNotEmpty()) {
+            requestBuilder.header("Authorization", "Bearer <redacted>")
+        }
+        val response = try {
+            httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
         } catch (e: Exception) {
-            null
+            log.warn("Coverage API network error for $url", e)
+            throw CoverageApiException(
+                "Network error contacting coverage API",
+                e,
+                mapOf("url" to url, "error" to e.message)
+            )
+        }
+        log.info("Coverage API response: HTTP ${response.statusCode()} for $url")
+        if (response.statusCode() != 200) {
+            val body = response.body().take(500)
+            log.warn("Coverage API returned HTTP ${response.statusCode()} for $url. Body: $body")
+            throw CoverageApiException(
+                "Coverage API returned HTTP ${response.statusCode()}",
+                details = mapOf(
+                    "url" to url,
+                    "httpStatus" to response.statusCode().toString(),
+                    "responseBody" to body
+                )
+            )
+        }
+        return try {
+            Json.decodeFromString<T>(response.body())
+        } catch (e: Exception) {
+            log.warn("Coverage API JSON parse error for $url", e)
+            throw CoverageApiException(
+                "Failed to parse coverage API response",
+                e,
+                mapOf("url" to url, "error" to e.message, "body" to response.body().take(500))
+            )
         }
     }
 
-    fun getBranchCommits(branch: String): BranchCommitsResponse? =
-        makeRequest<BranchCommitsResponse>("/api/ide/branches/$branch/commits")
+    fun getBranchCommits(branch: String): BranchCommitsResponse =
+        makeRequest("/api/ide/branches/$branch/commits")
 
-    fun getFileCoverage(commitHash: String, filePath: String): IdeFileCoverageResponse? =
-        makeRequest<IdeFileCoverageResponse>("/api/ide/commits/$commitHash/coverage/$filePath")
+    fun getFileCoverage(commitHash: String, filePath: String): IdeFileCoverageResponse =
+        makeRequest("/api/ide/commits/$commitHash/coverage/$filePath")
 
     private fun runGitCommand(gitRoot: File, vararg args: String): String? =
         Companion.runGitCommand(gitRoot, *args)
 
     private fun getDefaultBranch(gitRoot: File): String {
-        // Try to detect the default branch from the remote
+        val configured = CoverageApiSettings.getInstance().mergeBaseBranch.trim()
+        if (configured.isNotEmpty()) return configured
         val symbolic = runGitCommand(gitRoot, "symbolic-ref", "refs/remotes/origin/HEAD")
         if (symbolic != null) {
             return symbolic.removePrefix("refs/remotes/origin/")
         }
-        // Fallback: try main, then master
         val branches = runGitCommand(gitRoot, "branch", "--list", "main", "master") ?: return "main"
         return if (branches.lines().any { it.trim().trimStart('*').trim() == "main" }) "main" else "master"
     }
@@ -76,90 +99,126 @@ class CoverageApiClient(apiEndpoint: String, private val bearerToken: String = "
     }
 
     /**
-     * Finds the best commit hash to use for coverage queries:
-     * 1. Gets the merge-base between HEAD and the default branch
-     * 2. Fetches available commits from the API for that branch
-     * 3. Finds the nearest ancestor commit that has coverage data
+     * Returns commits reachable from [to] but not from [from], most-recent first.
+     * Equivalent to `git log --format=%H from..to`.
      */
-    private fun findCoverageCommit(gitRoot: File): String? {
+    private fun getCommitsInRange(gitRoot: File, from: String, to: String): List<String> {
+        val output = runGitCommand(gitRoot, "log", "--format=%H", "$from..$to") ?: return emptyList()
+        return output.lines().filter { it.isNotBlank() }
+    }
+
+    /**
+     * Finds the best commit hash to use for coverage queries.
+     *
+     * Supports two topologies:
+     *
+     * 1. Coverage lives on the same branch queried (e.g. master):
+     *    merge-base(HEAD, master) might itself be an API commit, or one of its
+     *    ancestors is → old "walk ancestors" path.
+     *
+     * 2. Coverage lives on a dedicated branch (e.g. behat-run-necessary-tests)
+     *    that merges master daily and stores coverage run commits:
+     *    - merge-base(HEAD, coverageBranch) = some master commit M
+     *    - API commits (C1, C2, …) are ON the coverage branch, not on master
+     *    - Walk commits in M..coverageBranch (most-recent first) and pick the
+     *      first one that has API coverage.  This is the most recent coverage
+     *      run whose master base is ≥ where the current branch diverged.
+     */
+    private fun findCoverageCommit(gitRoot: File): String {
         val defaultBranch = getDefaultBranch(gitRoot)
+        log.info("Coverage: default branch = $defaultBranch, gitRoot = $gitRoot")
 
         val mergeBase = getMergeBase(gitRoot, defaultBranch)
-        if (mergeBase == null) {
-            return null
-        }
+            ?: throw CoverageApiException(
+                "Could not compute git merge-base",
+                details = mapOf("gitRoot" to gitRoot.absolutePath, "defaultBranch" to defaultBranch)
+            )
+        log.info("Coverage: merge-base = $mergeBase")
 
-        val apiResponse = getBranchCommits(defaultBranch)
-        if (apiResponse == null) {
-            return null
-        }
+        val apiBranch = CoverageApiSettings.getInstance().effectiveApiBranch
+        val apiResponse = getBranchCommits(apiBranch)
         val apiCommits = apiResponse.commits.toSet()
+        log.info("Coverage: API returned ${apiCommits.size} commits for branch $apiBranch (git branch: $defaultBranch)")
 
-        // Check if merge-base itself has coverage
+        // Fast path: merge-base itself has coverage (topology 1 exact match).
         if (mergeBase in apiCommits) {
+            log.info("Coverage: resolved commit = $mergeBase (exact merge-base)")
             return mergeBase
         }
 
-        // Walk backward from merge-base to find nearest commit with coverage
-        val ancestors = getLocalAncestorCommits(gitRoot, mergeBase)
-        val match = ancestors.firstOrNull { it in apiCommits }
-        if (match != null) {
-        } else {
+        // Topology 2: API commits are on the coverage branch, not on master.
+        // Walk commits reachable from the coverage branch but not from merge-base
+        // (i.e. coverage-branch-specific commits added after the shared master state).
+        val branchCommits = getCommitsInRange(gitRoot, mergeBase, defaultBranch)
+        val matchOnBranch = branchCommits.firstOrNull { it in apiCommits }
+        if (matchOnBranch != null) {
+            log.info("Coverage: resolved commit = $matchOnBranch (most recent coverage run after merge-base on $defaultBranch)")
+            return matchOnBranch
         }
-        return match
+
+        // Topology 1 fallback: walk ancestors of merge-base (coverage built on master commits).
+        val ancestors = getLocalAncestorCommits(gitRoot, mergeBase)
+        val matchAncestor = ancestors.firstOrNull { it in apiCommits }
+            ?: throw CoverageApiException(
+                "No coverage data found for this branch",
+                details = mapOf(
+                    "defaultBranch" to defaultBranch,
+                    "mergeBase" to mergeBase,
+                    "branchCommitsChecked" to branchCommits.size.toString(),
+                    "localAncestorsChecked" to ancestors.size.toString(),
+                    "apiCommitsAvailable" to apiCommits.size.toString()
+                )
+            )
+        log.info("Coverage: resolved commit = $matchAncestor (ancestor of merge-base)")
+        return matchAncestor
     }
 
-    private fun resolveCommitAndGitRoot(): Pair<String, File>? {
+    private fun resolveCommitAndGitRoot(): Pair<String, File> {
         val basePath = project.basePath
-        if (basePath == null) {
-            return null
-        }
+            ?: throw CoverageApiException(
+                "Could not determine project base path",
+                details = mapOf("project" to project.name)
+            )
         val projectDir = File(basePath)
         val gitRootPath = runGitCommand(projectDir, "rev-parse", "--show-toplevel")
-        if (gitRootPath == null) {
-            return null
-        }
+            ?: throw CoverageApiException(
+                "Could not find git repository root — is this project in a git repo?",
+                details = mapOf("projectDir" to basePath)
+            )
         val gitRoot = File(gitRootPath)
-
         val commitHash = findCoverageCommit(gitRoot)
-        if (commitHash == null) {
-            return null
-        }
         return Pair(commitHash, gitRoot)
     }
 
-    fun fetchCoverageForFile(relativePath: String): CoverageResult? {
-        val (commitHash, gitRoot) = resolveCommitAndGitRoot() ?: return null
-
+    fun fetchCoverageForFile(relativePath: String): CoverageResult {
+        val (commitHash, gitRoot) = resolveCommitAndGitRoot()
+        log.info("Coverage: fetching coverage for file $relativePath at commit $commitHash")
         val response = getFileCoverage(commitHash, relativePath)
-        if (response == null) {
-            return null
-        }
-        val result = mapOf(relativePath to response.resolveLines())
-        return CoverageResult(commitHash, gitRoot, result)
+        return CoverageResult(commitHash, gitRoot, mapOf(relativePath to response.resolveLines()))
     }
 
-    fun fetchCoverage(): CoverageResult? {
-        val (commitHash, gitRoot) = resolveCommitAndGitRoot() ?: return null
-        val basePath = project.basePath ?: return null
+    fun fetchCoverage(): CoverageResult {
+        val (commitHash, gitRoot) = resolveCommitAndGitRoot()
+        val basePath = project.basePath
+            ?: throw CoverageApiException("Could not determine project base path")
         val projectDir = File(basePath)
 
-        // Get all PHP files and fetch coverage for each
         val phpFiles = FilenameIndex.getAllFilesByExt(project, "php", GlobalSearchScope.projectScope(project))
         val projectVf = LocalFileSystem.getInstance().findFileByIoFile(projectDir)
-        if (projectVf == null) {
-            return null
-        }
+            ?: throw CoverageApiException(
+                "Could not resolve project virtual file",
+                details = mapOf("projectDir" to basePath)
+            )
         val result = mutableMapOf<String, Map<Int, List<String>>>()
 
         for (virtualFile in phpFiles) {
-            // Use path relative to project root for the API (matches how coverage data is stored)
             val relativePath = VfsUtil.getRelativePath(virtualFile, projectVf) ?: continue
-            val response = getFileCoverage(commitHash, relativePath)
-            if (response == null) {
-                continue
+            try {
+                val response = getFileCoverage(commitHash, relativePath)
+                result[relativePath] = response.resolveLines()
+            } catch (e: CoverageApiException) {
+                log.warn("Coverage: skipping $relativePath — ${e.message}")
             }
-            result[relativePath] = response.resolveLines()
         }
 
         return CoverageResult(commitHash, gitRoot, result)
