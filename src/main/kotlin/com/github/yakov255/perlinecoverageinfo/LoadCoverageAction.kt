@@ -20,11 +20,17 @@ class LoadCoverageAction : AnAction() {
 
     override fun update(e: AnActionEvent) {
         if (e.place == ActionPlaces.EDITOR_GUTTER_POPUP) {
-            val project = e.project
+            val project = e.project ?: run { e.presentation.isEnabledAndVisible = false; return }
             val psiFile = e.getData(CommonDataKeys.PSI_FILE)
+            val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
             val isPhp = psiFile?.language == PhpLanguage.INSTANCE
-            val hasCoverage = project != null && CoverageDataService.getInstance(project).hasData()
-            e.presentation.isEnabledAndVisible = isPhp && !hasCoverage
+
+            val basePath = project.basePath
+            val projectVf = if (basePath != null) LocalFileSystem.getInstance().findFileByIoFile(File(basePath)) else null
+            val relativePath = if (virtualFile != null && projectVf != null) VfsUtil.getRelativePath(virtualFile, projectVf) else null
+            val hasCoverageForFile = relativePath != null && CoverageDataService.getInstance(project).getCoverage(relativePath) != null
+
+            e.presentation.isEnabledAndVisible = isPhp && !hasCoverageForFile
         }
     }
 
