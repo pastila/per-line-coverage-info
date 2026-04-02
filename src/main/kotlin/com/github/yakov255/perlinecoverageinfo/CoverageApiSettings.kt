@@ -12,7 +12,7 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
 
     data class State(
         var apiUrl: String = "https://coverage.yakov255.ru/",
-        var bearerToken: String = "",
+        var bearerToken: String = "4f47a77e3a9d9478611535ee804718f0a73fff0179751d3d1131814ce4252d18",
         var mergeBaseBranch: String = "behat-run-necessary-tests",
         /** Branch name sent to the coverage API. Leave empty to use the same value as mergeBaseBranch. */
         var apiBranchName: String = "master"
