@@ -7,7 +7,16 @@ import com.intellij.openapi.editor.markup.ActiveGutterRenderer
 import com.intellij.openapi.editor.markup.FillingLineMarkerRenderer
 import com.intellij.openapi.editor.markup.LineMarkerRendererEx
 import com.intellij.openapi.fileEditor.FileDocumentManager
+import java.awt.Color
+import java.awt.Font
+import java.awt.Graphics
+import java.awt.Graphics2D
+import java.awt.Rectangle
+import java.awt.RenderingHints
 import java.awt.event.MouseEvent
+
+private val COLOR_COVERED = Color(100, 180, 120)
+private val COLOR_UNCOVERED = Color(210, 110, 110)
 
 class CoverageGutterRenderer(
     private val lineNumber: Int,
@@ -17,9 +26,27 @@ class CoverageGutterRenderer(
 
     override fun getTextAttributesKey(): TextAttributesKey = attrKey
 
-    override fun getMaxWidth(): Int = 8
+    override fun getMaxWidth(): Int = 20
 
     override fun getPosition(): LineMarkerRendererEx.Position = LineMarkerRendererEx.Position.LEFT
+
+    override fun paint(editor: Editor, g: Graphics, r: Rectangle) {
+        val g2 = g as? Graphics2D ?: return
+
+        g2.color = if (tests.isNotEmpty()) COLOR_COVERED else COLOR_UNCOVERED
+        g2.fillRect(r.x, r.y, r.width, r.height)
+
+        if (tests.isNotEmpty()) {
+            val label = minOf(tests.size, 99).toString()
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+            g2.color = Color.WHITE
+            g2.font = Font(Font.MONOSPACED, Font.BOLD, (r.height * 0.65f).toInt().coerceIn(7, 10))
+            val fm = g2.fontMetrics
+            val x = r.x + (r.width - fm.stringWidth(label)) / 2
+            val y = r.y + (r.height + fm.ascent - fm.descent) / 2
+            g2.drawString(label, x, y)
+        }
+    }
 
     override fun getTooltipText(): String {
         return if (tests.isNotEmpty()) {
