@@ -58,7 +58,9 @@ class CoverageResolver(
 
         val mergeBase = getMergeBase(gitRoot, coverageBranch)
             ?: throw CoverageApiException(
-                "Could not compute git merge-base",
+                "Could not compute git merge-base between HEAD and '$coverageBranch'.\n\n" +
+                    "Make sure the branch 'origin/$coverageBranch' exists and has been fetched.\n" +
+                    "Try running: git fetch origin $coverageBranch",
                 details = mapOf("gitRoot" to gitRoot.absolutePath, "coverageBranch" to coverageBranch),
                 kind = CoverageErrorKind.GIT,
             )
@@ -92,11 +94,33 @@ class CoverageResolver(
             return Pair(matchAncestor, pipelineCommitSet[matchAncestor]!!)
         }
 
+        val currentHead = runGitCommand(gitRoot, "rev-parse", "--short", "HEAD") ?: "unknown"
+        val currentBranch = runGitCommand(gitRoot, "rev-parse", "--abbrev-ref", "HEAD") ?: "unknown"
+        val mergeBaseShort = mergeBase.take(8)
+
         throw CoverageApiException(
-            "No coverage pipeline found for this branch",
+            buildString {
+                appendLine("No coverage pipeline found for this branch.")
+                appendLine()
+                appendLine("What was tried:")
+                appendLine("• Current branch: $currentBranch ($currentHead)")
+                appendLine("• Coverage branch: $coverageBranch")
+                appendLine("• Merge-base: $mergeBaseShort")
+                appendLine("• Pipelines available on '$coverageBranch': ${pipelineCommitSet.size}")
+                appendLine("• Commits checked on coverage branch after merge-base: ${branchCommits.size}")
+                appendLine("• Ancestor commits checked before merge-base: ${ancestors.size}")
+                appendLine()
+                append("None of the checked commits matched a pipeline on '$coverageBranch'.")
+                if (pipelineCommitSet.isEmpty()) {
+                    appendLine()
+                    append("There are no successful pipelines on branch '$coverageBranch'. Check that the branch exists and has CI runs.")
+                }
+            },
             details = mapOf(
                 "coverageBranch" to coverageBranch,
                 "mergeBase" to mergeBase,
+                "currentHead" to currentHead,
+                "currentBranch" to currentBranch,
                 "branchCommitsChecked" to branchCommits.size.toString(),
                 "localAncestorsChecked" to ancestors.size.toString(),
                 "pipelinesAvailable" to pipelineCommitSet.size.toString(),

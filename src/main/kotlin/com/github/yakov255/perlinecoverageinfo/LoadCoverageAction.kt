@@ -57,7 +57,13 @@ class LoadCoverageAction : AnAction() {
 
                     if (artifactJobs.isEmpty()) {
                         throw CoverageApiException(
-                            "No jobs with artifacts found in pipeline ${resolved.pipelineId}",
+                            buildString {
+                                appendLine("No jobs with artifacts found in pipeline #${resolved.pipelineId}.")
+                                appendLine()
+                                appendLine("Pipeline has ${jobs.size} job(s): ${jobs.joinToString(", ") { "${it.name} (${it.status})" }}")
+                                appendLine()
+                                append("Make sure the CI pipeline produces downloadable artifacts.")
+                            },
                             details = mapOf(
                                 "pipelineId" to resolved.pipelineId.toString(),
                                 "totalJobs" to jobs.size.toString(),
@@ -108,7 +114,13 @@ class LoadCoverageAction : AnAction() {
 
                     if (covtCount == 0) {
                         throw CoverageApiException(
-                            "No coverage data (.covt) found in any artifact of pipeline ${resolved.pipelineId}",
+                            buildString {
+                                appendLine("No coverage data (.covt) found in any artifact of pipeline #${resolved.pipelineId}.")
+                                appendLine()
+                                appendLine("Downloaded artifacts from ${artifactJobs.size} job(s): ${artifactJobs.joinToString(", ") { it.name }}")
+                                appendLine()
+                                append("Make sure the CI jobs produce .covt or .covt.gz files in their artifacts.")
+                            },
                             details = mapOf(
                                 "pipelineId" to resolved.pipelineId.toString(),
                                 "artifactJobs" to artifactJobs.size.toString(),
