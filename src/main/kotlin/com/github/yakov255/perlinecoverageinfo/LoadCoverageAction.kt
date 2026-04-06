@@ -9,6 +9,8 @@ import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 
 class LoadCoverageAction : AnAction() {
 
@@ -144,6 +146,17 @@ class LoadCoverageAction : AnAction() {
 
                     ApplicationManager.getApplication().invokeLater {
                         CoverageHighlighter.applyToOpenEditors(project)
+
+                        if (resolved.fallback) {
+                            NotificationGroupManager.getInstance()
+                                .getNotificationGroup("Coverage Notifications")
+                                .createNotification(
+                                    "Coverage loaded from latest pipeline",
+                                    "Coverage may not exactly match your current code.\n${resolved.fallbackReason}",
+                                    NotificationType.WARNING,
+                                )
+                                .notify(project)
+                        }
                     }
 
                     indicator.fraction = 1.0

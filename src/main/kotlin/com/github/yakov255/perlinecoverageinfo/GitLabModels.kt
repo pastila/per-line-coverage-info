@@ -45,3 +45,10 @@ data class PipelineCommit(
     val commitHash: String,
     val pipelineId: Long,
 )
+
+@Serializable
+data class GitLabCommit(
+    val id: String,
+    @SerialName("short_id") val shortId: String,
+    val title: String,
+)

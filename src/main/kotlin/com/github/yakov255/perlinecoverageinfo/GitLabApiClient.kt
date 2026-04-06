@@ -145,4 +145,24 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
 
     fun getPipelineCommits(projectId: Long, ref: String): List<PipelineCommit> =
         listPipelines(projectId, ref).map { PipelineCommit(commitHash = it.sha, pipelineId = it.id) }
+
+    /**
+     * Computes merge-base server-side via GitLab API.
+     * Returns the merge-base commit SHA, or null if the refs are unknown or have no common ancestor.
+     */
+    fun getMergeBase(projectId: Long, ref1: String, ref2: String): String? {
+        val endpoint = "/api/v4/projects/$projectId/repository/merge_base" +
+            "?refs[]=${encode(ref1)}&refs[]=${encode(ref2)}"
+        return try {
+            val commit: GitLabCommit = makeRequest(endpoint)
+            commit.id
+        } catch (e: CoverageApiException) {
+            if (e.details["httpStatus"] == "400" || e.details["httpStatus"] == "404") {
+                log.info("GitLab merge_base returned ${e.details["httpStatus"]} for refs [$ref1, $ref2] — refs not found or no common ancestor")
+                null
+            } else {
+                throw e
+            }
+        }
+    }
 }

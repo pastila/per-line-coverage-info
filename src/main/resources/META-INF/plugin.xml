@@ -26,6 +26,10 @@
                     factoryClass="com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory"
                     secondary="false"
                     icon="AllIcons.Toolwindows.ToolWindowCoverage"/>
+        <notificationGroup id="Coverage Notifications"
+                           displayType="BALLOON"
+                           bundle="messages.CoverageBundle"
+                           key="notification.group.coverage"/>
     </extensions>
 
     <actions>
