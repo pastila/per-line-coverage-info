@@ -80,18 +80,23 @@ class CoverageApiSettingsConfigurable : Configurable {
 
     private inner class ProjectSearchDialog : DialogWrapper(true) {
         private val searchField = JBTextField()
-        private val searchButton = JButton("Search")
         private val listModel = DefaultListModel<GitLabProject>()
         private val resultList = JBList(listModel)
+        private val statusLabel = JLabel("Loading projects...")
+        private var allProjects: List<GitLabProject> = emptyList()
         var selectedProject: GitLabProject? = null
 
         init {
-            title = "Search GitLab Projects"
+            title = "Select GitLab Project"
             init()
 
-            searchButton.addActionListener { performSearch() }
-            searchField.addActionListener { performSearch() }
-            resultList.cellRenderer = ListCellRenderer { _, value, _, isSelected, cellHasFocus ->
+            searchField.document.addDocumentListener(object : DocumentListener {
+                override fun insertUpdate(e: DocumentEvent?) = filterList()
+                override fun removeUpdate(e: DocumentEvent?) = filterList()
+                override fun changedUpdate(e: DocumentEvent?) = filterList()
+            })
+
+            resultList.cellRenderer = ListCellRenderer { _, value, _, isSelected, _ ->
                 JLabel(value?.pathWithNamespace ?: "").apply {
                     isOpaque = true
                     if (isSelected) {
@@ -102,62 +107,55 @@ class CoverageApiSettingsConfigurable : Configurable {
                 }
             }
             resultList.selectionMode = ListSelectionModel.SINGLE_SELECTION
+
+            loadProjects()
         }
 
         override fun createCenterPanel(): JComponent {
-            val searchPanel = JPanel(BorderLayout(JBUI.scale(8), 0)).apply {
-                add(searchField, BorderLayout.CENTER)
-                add(searchButton, BorderLayout.EAST)
-            }
             val scrollPane = JScrollPane(resultList).apply {
                 preferredSize = Dimension(JBUI.scale(500), JBUI.scale(300))
             }
             return JPanel(BorderLayout(0, JBUI.scale(8))).apply {
-                add(searchPanel, BorderLayout.NORTH)
+                add(searchField, BorderLayout.NORTH)
                 add(scrollPane, BorderLayout.CENTER)
+                add(statusLabel, BorderLayout.SOUTH)
                 border = JBUI.Borders.empty(8)
             }
         }
 
-        private fun performSearch() {
-            val query = searchField.text.trim()
-            if (query.isEmpty()) return
-
+        private fun loadProjects() {
             val domain = gitlabDomainField.text.trimEnd('/')
             val token = bearerTokenField.text
-            log.warn("[DEBUG] performSearch: query='$query', domain='$domain', tokenLen=${token.length}")
-
-            searchButton.isEnabled = false
-            searchButton.text = "Searching..."
-            listModel.clear()
 
             ApplicationManager.getApplication().executeOnPooledThread {
                 try {
                     val client = GitLabApiClient("https://$domain", token)
-                    val projects = client.searchProjects(query)
-                    log.warn("[DEBUG] searchProjects returned ${projects.size} results")
+                    val projects = client.listMemberProjects()
+                    log.warn("[DEBUG] listMemberProjects returned ${projects.size} results")
 
                     SwingUtilities.invokeLater {
-                        listModel.clear()
-                        projects.forEach { listModel.addElement(it) }
-                        searchButton.text = "Search"
-                        searchButton.isEnabled = true
+                        allProjects = projects
+                        filterList()
+                        statusLabel.text = "${projects.size} project(s) loaded"
                     }
                 } catch (e: Exception) {
-                    log.warn("[DEBUG] search failed: ${e::class.simpleName}: ${e.message}", e)
+                    log.warn("[DEBUG] load projects failed: ${e::class.simpleName}: ${e.message}", e)
                     SwingUtilities.invokeLater {
-                        searchButton.text = "Search"
-                        searchButton.isEnabled = true
-                        listModel.clear()
-                        JOptionPane.showMessageDialog(
-                            contentPanel,
-                            "Search failed: ${e.message}",
-                            "Error",
-                            JOptionPane.ERROR_MESSAGE
-                        )
+                        statusLabel.text = "Failed to load: ${e.message}"
                     }
                 }
             }
+        }
+
+        private fun filterList() {
+            val query = searchField.text.trim().lowercase()
+            listModel.clear()
+            val filtered = if (query.isEmpty()) {
+                allProjects
+            } else {
+                allProjects.filter { it.pathWithNamespace.lowercase().contains(query) || it.name.lowercase().contains(query) }
+            }
+            filtered.forEach { listModel.addElement(it) }
         }
 
         override fun doOKAction() {

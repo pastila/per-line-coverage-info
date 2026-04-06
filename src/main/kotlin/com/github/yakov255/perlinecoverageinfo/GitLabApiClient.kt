@@ -107,6 +107,20 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
     fun searchProjects(query: String): List<GitLabProject> =
         makeRequest("/api/v4/projects?search=${encode(query)}&membership=true&per_page=20")
 
+    fun listMemberProjects(): List<GitLabProject> {
+        val all = mutableListOf<GitLabProject>()
+        var page = 1
+        while (true) {
+            val batch: List<GitLabProject> = makeRequest(
+                "/api/v4/projects?membership=true&per_page=100&page=$page&order_by=last_activity_at"
+            )
+            all.addAll(batch)
+            if (batch.size < 100) break
+            page++
+        }
+        return all
+    }
+
     fun listPipelines(
         projectId: Long,
         ref: String,
