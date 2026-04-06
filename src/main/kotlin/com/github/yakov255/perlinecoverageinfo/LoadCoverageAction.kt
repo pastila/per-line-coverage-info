@@ -51,13 +51,13 @@ class LoadCoverageAction : AnAction() {
                     indicator.fraction = 0.2
 
                     val jobs = gitLabClient.listPipelineJobs(settings.gitlabProjectId, resolved.pipelineId)
-                    val coverageJobs = jobs.filter { job ->
-                        job.artifacts.any { it.filename.contains("binary-coverage") }
+                    val artifactJobs = jobs.filter { job ->
+                        job.status == "success" && job.artifactsFile != null
                     }
 
-                    if (coverageJobs.isEmpty()) {
+                    if (artifactJobs.isEmpty()) {
                         throw CoverageApiException(
-                            "No binary-coverage artifacts found in pipeline ${resolved.pipelineId}",
+                            "No jobs with artifacts found in pipeline ${resolved.pipelineId}",
                             details = mapOf(
                                 "pipelineId" to resolved.pipelineId.toString(),
                                 "totalJobs" to jobs.size.toString(),
@@ -67,15 +67,16 @@ class LoadCoverageAction : AnAction() {
                         )
                     }
 
-                    log.info("Coverage: found ${coverageJobs.size} jobs with binary-coverage artifacts in pipeline ${resolved.pipelineId}")
+                    log.info("Coverage: found ${artifactJobs.size} jobs with artifacts in pipeline ${resolved.pipelineId}")
 
                     indicator.text = "Downloading coverage artifacts..."
                     indicator.fraction = 0.3
 
                     val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
-                    val totalJobs = coverageJobs.size
+                    val totalJobs = artifactJobs.size
+                    var covtCount = 0
 
-                    for ((index, job) in coverageJobs.withIndex()) {
+                    for ((index, job) in artifactJobs.withIndex()) {
                         indicator.text = "Downloading artifact from job '${job.name}'... (${index + 1}/$totalJobs)"
                         indicator.fraction = 0.3 + 0.5 * (index.toDouble() / totalJobs)
 
@@ -85,6 +86,11 @@ class LoadCoverageAction : AnAction() {
                         log.info("Coverage: downloaded ${zipBytes.size} bytes from job ${job.name} (id=${job.id})")
 
                         val parsed = BinaryCoverageParser.parseZipArtifact(zipBytes)
+                        if (parsed == null) {
+                            log.info("Coverage: no .covt file in artifact from job ${job.name}, skipping")
+                            continue
+                        }
+                        covtCount++
                         log.info("Coverage: parsed ${parsed.size} files from job ${job.name}")
 
                         for ((filePath, lineMap) in parsed) {
@@ -100,6 +106,17 @@ class LoadCoverageAction : AnAction() {
                         }
                     }
 
+                    if (covtCount == 0) {
+                        throw CoverageApiException(
+                            "No coverage data (.covt) found in any artifact of pipeline ${resolved.pipelineId}",
+                            details = mapOf(
+                                "pipelineId" to resolved.pipelineId.toString(),
+                                "artifactJobs" to artifactJobs.size.toString(),
+                            ),
+                            kind = CoverageErrorKind.NO_DATA,
+                        )
+                    }
+
                     val finalCoverage: Map<String, Map<Int, List<String>>> = mergedCoverage.mapValues { (_, lineMap) ->
                         lineMap.mapValues { (_, tests) -> tests.toList() }
                     }
@@ -111,7 +128,7 @@ class LoadCoverageAction : AnAction() {
                     dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
                     dataService.setCoverageAll(finalCoverage)
 
-                    log.info("Coverage: loaded coverage for ${finalCoverage.size} files from ${coverageJobs.size} artifacts at commit ${resolved.commitHash}")
+                    log.info("Coverage: loaded coverage for ${finalCoverage.size} files from $covtCount coverage artifacts at commit ${resolved.commitHash}")
 
                     ApplicationManager.getApplication().invokeLater {
                         CoverageHighlighter.applyToOpenEditors(project)

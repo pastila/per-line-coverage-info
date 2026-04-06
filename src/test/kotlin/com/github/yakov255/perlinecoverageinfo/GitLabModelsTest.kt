@@ -40,7 +40,7 @@ class GitLabModelsTest {
     @Test
     fun testDeserializeGitLabJob() {
         val input = """
-            {"id": 789, "name": "test-job", "status": "success", "pipeline": {"id": 456}, "artifacts": [{"filename": "coverage.zip", "size": 1024}]}
+            {"id": 789, "name": "test-job", "status": "success", "pipeline": {"id": 456}, "artifacts": [{"filename": "coverage.zip", "size": 1024}], "artifacts_file": {"filename": "artifacts.zip", "size": 2048}}
         """.trimIndent()
 
         val job = json.decodeFromString<GitLabJob>(input)
@@ -52,6 +52,9 @@ class GitLabModelsTest {
         assertEquals(1, job.artifacts.size)
         assertEquals("coverage.zip", job.artifacts[0].filename)
         assertEquals(1024L, job.artifacts[0].size)
+        assertNotNull("artifacts_file should be deserialized", job.artifactsFile)
+        assertEquals("artifacts.zip", job.artifactsFile!!.filename)
+        assertEquals(2048L, job.artifactsFile!!.size)
     }
 
     @Test
@@ -67,5 +70,6 @@ class GitLabModelsTest {
         assertEquals("failed", job.status)
         assertEquals(200L, job.pipeline.id)
         assertTrue("Artifacts should default to empty list", job.artifacts.isEmpty())
+        assertNull("artifacts_file should default to null", job.artifactsFile)
     }
 }

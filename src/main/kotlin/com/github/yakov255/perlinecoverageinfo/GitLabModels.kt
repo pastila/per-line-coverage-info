@@ -27,6 +27,7 @@ data class GitLabJob(
     val status: String,
     val pipeline: GitLabJobPipeline,
     val artifacts: List<GitLabArtifact> = emptyList(),
+    @SerialName("artifacts_file") val artifactsFile: GitLabArtifact? = null,
 )
 
 @Serializable

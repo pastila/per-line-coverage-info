@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.zip.GZIPOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
@@ -88,16 +89,43 @@ class BinaryCoverageParserTest {
     }
 
     @Test
-    fun testParseZipArtifactThrowsWhenNoCovtInZip() {
+    fun testParseZipArtifactReturnsNullWhenNoCovtInZip() {
         val zipBytes = createZip("readme.txt", "no coverage here".toByteArray())
+        val result = BinaryCoverageParser.parseZipArtifact(zipBytes)
+        assertNull("Should return null when ZIP has no .covt file", result)
+    }
 
-        try {
-            BinaryCoverageParser.parseZipArtifact(zipBytes)
-            fail("Expected CoverageApiException when ZIP has no .covt")
-        } catch (e: CoverageApiException) {
-            assertEquals(CoverageErrorKind.ARTIFACT_PARSE, e.kind)
-            assertTrue(e.message!!.contains("No .covt file"))
-        }
+    @Test
+    fun testExtractCovtGzFromZip() {
+        val covtContent = File("php-sample-code/calc/coverage.covt").readBytes()
+
+        // Gzip the .covt content
+        val gzipBaos = ByteArrayOutputStream()
+        GZIPOutputStream(gzipBaos).use { it.write(covtContent) }
+        val gzippedBytes = gzipBaos.toByteArray()
+
+        // Create ZIP with .covt.gz entry
+        val zipBytes = createZip("coverage.covt.gz", gzippedBytes)
+
+        val extracted = BinaryCoverageParser.extractCovtFromZip(zipBytes)
+        assertNotNull("Should extract and decompress .covt.gz file from ZIP", extracted)
+        assertArrayEquals("Decompressed content should match original .covt", covtContent, extracted)
+    }
+
+    @Test
+    fun testParseZipArtifactWithGzippedCovt() {
+        val covtContent = File("php-sample-code/calc/coverage.covt").readBytes()
+
+        val gzipBaos = ByteArrayOutputStream()
+        GZIPOutputStream(gzipBaos).use { it.write(covtContent) }
+        val gzippedBytes = gzipBaos.toByteArray()
+
+        val zipBytes = createZip("coverage.covt.gz", gzippedBytes)
+
+        val result = BinaryCoverageParser.parseZipArtifact(zipBytes)
+        assertNotNull("Should parse gzipped .covt from ZIP", result)
+        assertEquals("Expected exactly 1 file entry", 1, result!!.size)
+        assertTrue(result.containsKey("calc/src/BasicCalculator.php"))
     }
 
     private fun createZip(entryName: String, content: ByteArray): ByteArray {

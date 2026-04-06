@@ -3,6 +3,7 @@ package com.github.yakov255.perlinecoverageinfo
 import com.intellij.openapi.diagnostic.Logger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.zip.GZIPInputStream
 import java.util.zip.ZipInputStream
 
 /**
@@ -157,18 +158,27 @@ object BinaryCoverageParser {
     }
 
     /**
-     * Extracts the first `.covt` file from a ZIP archive.
+     * Extracts the first `.covt` or `.covt.gz` file from a ZIP archive.
+     * If a `.covt.gz` entry is found, it is decompressed via GZIP before returning.
      *
-     * @return the raw bytes of the `.covt` entry, or `null` if none found.
+     * @return the raw bytes of the `.covt` data, or `null` if none found.
      */
     fun extractCovtFromZip(zipBytes: ByteArray): ByteArray? {
         try {
             ZipInputStream(zipBytes.inputStream()).use { zis ->
                 var entry = zis.nextEntry
                 while (entry != null) {
-                    if (!entry.isDirectory && entry.name.endsWith(".covt")) {
-                        log.info("COVT: found ${entry.name} in ZIP archive")
-                        return zis.readBytes()
+                    if (!entry.isDirectory) {
+                        val name = entry.name
+                        if (name.endsWith(".covt.gz")) {
+                            log.info("COVT: found gzipped ${name} in ZIP archive, decompressing")
+                            val gzippedBytes = zis.readBytes()
+                            return GZIPInputStream(gzippedBytes.inputStream()).use { it.readBytes() }
+                        }
+                        if (name.endsWith(".covt")) {
+                            log.info("COVT: found ${name} in ZIP archive")
+                            return zis.readBytes()
+                        }
                     }
                     entry = zis.nextEntry
                 }
@@ -181,17 +191,14 @@ object BinaryCoverageParser {
     }
 
     /**
-     * Convenience method: extracts a `.covt` file from a ZIP archive and parses it.
+     * Convenience method: extracts a `.covt` or `.covt.gz` file from a ZIP archive and parses it.
      *
+     * @return parsed coverage data, or `null` if the ZIP contains no `.covt`/`.covt.gz` entry.
      * @throws CoverageApiException with kind [CoverageErrorKind.ARTIFACT_PARSE] if
-     *         extraction fails or parsing fails.
+     *         a `.covt` file is found but parsing fails.
      */
-    fun parseZipArtifact(zipBytes: ByteArray): Map<String, Map<Int, List<String>>> {
-        val covtBytes = extractCovtFromZip(zipBytes)
-            ?: throw CoverageApiException(
-                "No .covt file found in ZIP artifact",
-                kind = CoverageErrorKind.ARTIFACT_PARSE,
-            )
+    fun parseZipArtifact(zipBytes: ByteArray): Map<String, Map<Int, List<String>>>? {
+        val covtBytes = extractCovtFromZip(zipBytes) ?: return null
         try {
             return parseCovtBytes(covtBytes)
         } catch (e: CoverageApiException) {
