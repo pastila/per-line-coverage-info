@@ -23,6 +23,7 @@ class CoverageApiSettingsConfigurable : Configurable {
     private val gitlabDomainField = JBTextField()
     private val bearerTokenField = JBTextField()
     private val coverageBranchField = JBTextField()
+    private val coverageRootPrefixField = JBTextField()
     private val projectNameLabel = JBTextField().apply { isEditable = false }
     private val tokenLink = HyperlinkLabel("Create a Personal Access Token (scope: read_api)")
 
@@ -58,6 +59,7 @@ class CoverageApiSettingsConfigurable : Configurable {
             .addComponentToRightColumn(tokenLink)
             .addLabeledComponent("GitLab Project:", projectPanel)
             .addLabeledComponent("Coverage Branch:", coverageBranchField)
+            .addLabeledComponent("Coverage Root (optional):", coverageRootPrefixField)
             .addComponentFillVertically(JPanel(), 0)
             .panel
     }
@@ -172,7 +174,8 @@ class CoverageApiSettingsConfigurable : Configurable {
                bearerTokenField.text != settings.bearerToken ||
                selectedProjectId != settings.gitlabProjectId ||
                selectedProjectName != settings.gitlabProjectName ||
-               coverageBranchField.text != settings.coverageBranch
+               coverageBranchField.text != settings.coverageBranch ||
+               coverageRootPrefixField.text != settings.coverageRootPrefix
     }
 
     override fun apply() {
@@ -182,6 +185,7 @@ class CoverageApiSettingsConfigurable : Configurable {
         settings.gitlabProjectId = selectedProjectId
         settings.gitlabProjectName = selectedProjectName
         settings.coverageBranch = coverageBranchField.text
+        settings.coverageRootPrefix = coverageRootPrefixField.text
     }
 
     override fun reset() {
@@ -192,5 +196,6 @@ class CoverageApiSettingsConfigurable : Configurable {
         selectedProjectName = settings.gitlabProjectName
         projectNameLabel.text = selectedProjectName
         coverageBranchField.text = settings.coverageBranch
+        coverageRootPrefixField.text = settings.coverageRootPrefix
     }
 }

@@ -14,6 +14,10 @@
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageErrorReporter"/>
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.LineMappingService"/>
+        <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageLoadService"/>
+        <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageCacheService"/>
         <applicationConfigurable
             parentId="tools"
             instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"
@@ -32,9 +36,19 @@
                            key="notification.group.coverage"/>
     </extensions>
 
+    <projectListeners>
+        <listener class="com.github.yakov255.perlinecoverageinfo.CoverageBranchListener"
+                  topic="com.intellij.openapi.vcs.BranchChangeListener"/>
+    </projectListeners>
+
     <actions>
         <action id="LoadCoverageFromGitLab" class="com.github.yakov255.perlinecoverageinfo.LoadCoverageAction"
                 text="Load Coverage from GitLab" description="Download coverage artifacts from GitLab and display per-line coverage">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <keyboard-shortcut first-keystroke="control shift F10" keymap="$default"/>
+        </action>
+        <action id="LoadLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.LoadLocalCoverageAction"
+                text="Load Coverage from File" description="Load per-line coverage from a local .covt file">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
         <action id="ClearCoverageData" class="com.github.yakov255.perlinecoverageinfo.ClearCoverageAction"
