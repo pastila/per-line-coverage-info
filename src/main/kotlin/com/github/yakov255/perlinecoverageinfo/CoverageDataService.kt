@@ -26,6 +26,11 @@ class CoverageDataService {
         data[filePath] = lines
     }
 
+    fun setCoverageAll(allData: Map<String, Map<Int, List<String>>>) {
+        data.clear()
+        data.putAll(allData)
+    }
+
     fun getCoverage(filePath: String): Map<Int, List<String>>? = data[filePath]
 
     fun allFiles(): Set<String> = data.keys

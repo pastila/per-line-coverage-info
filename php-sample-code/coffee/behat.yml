@@ -1,0 +1,22 @@
+default:
+  suites:
+    default:
+      contexts:
+        - CoverageViewer\Test\Coffee\Tests\FeatureContext
+      paths:
+        - features
+  extensions:
+    DVDoug\Behat\CodeCoverage\Extension:
+      branchAndPathCoverage: false # Флажок нужен при установке xdebug + pcov одновременно. Не пытаться использовать xdebug
+      filter:
+        include:
+          directories:
+            'coffee/src': ~ # Относительно рабочей директории при запуске behat
+      reports:
+        perLine:
+          target: ./coverage.covt
+          pathToCoverageRoot: /app
+        text:
+          showOnlySummary: true
+          showColors: true
+          showUncoveredFiles: false

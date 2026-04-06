@@ -5,8 +5,9 @@ package com.github.yakov255.perlinecoverageinfo
  */
 enum class CoverageErrorKind {
     NETWORK,
-    API_RESPONSE,
+    GITLAB_API,
     PARSE,
+    ARTIFACT_PARSE,
     GIT,
     NO_DATA,
     PROJECT_SETUP,

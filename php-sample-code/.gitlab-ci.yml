@@ -1,0 +1,127 @@
+---
+
+stages:
+  - test
+
+codecov-init-php:
+  stage: test
+  image: php:8.2
+  variables:
+    CODECOV_URL: "https://codecov.example.com"
+    CODECOV_TOKEN: ""
+  script:
+    - |
+      echo "Creating commit in Codecov"
+      ./codecov -u ${CODECOV_URL} create-commit \
+        -t ${CODECOV_TOKEN} \
+        --git-service gitlab_enterprise
+      
+      echo "Creating report in Codecov"
+      ./codecov -u ${CODECOV_URL} create-report \
+        -t ${CODECOV_TOKEN} \
+        --git-service gitlab_enterprise
+  tags:
+    - ci-docker
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+.test:behat:
+  stage: test
+  image: php:8.2
+  variables:
+    CODECOV_URL: "https://codecov.example.com"
+    PHP_MOD_PCOV: "yes"
+    CODECOV_TOKEN: ""
+  before_script:
+    - php-configure
+    - chown -R 33:33 /web
+    - (cd $PROJECT_DIR && composer install)
+    - BUILD_DIR=$(pwd)
+  after_script:
+    - BUILD_DIR=${CI_PROJECT_DIR}
+    - cd $BUILD_DIR
+    - |
+      # Only upload coverage if the behat tests passed
+      if [ "${CI_JOB_STATUS}" != "success" ]; then
+        echo "Skipping coverage upload because behat tests failed"
+        exit 0
+      fi
+      
+      if [ ! -f "$BUILD_DIR/$PROJECT_DIR/coverage.cobertura.xml" ]; then
+        echo "No coverage file found at $BUILD_DIR/$PROJECT_DIR/coverage.cobertura.xml"
+        exit 1
+      fi
+      
+      echo "Uploading coverage for ${CODECOV_FLAG}"
+      cd $BUILD_DIR
+      ./codecov -u ${CODECOV_URL} do-upload \
+        -t ${CODECOV_TOKEN} \
+        --git-service gitlab_enterprise \
+        -f $BUILD_DIR/$PROJECT_DIR/coverage.cobertura.xml \
+        --flag "${CODECOV_FLAG}" \
+        -n "${CI_JOB_NAME}" \
+        --fail-on-error
+
+  tags:
+    - ci-docker
+
+test:behat:calc:
+  extends: .test:behat
+  variables:
+    PROJECT_DIR: "calc"
+    CODECOV_FLAG: "calc"
+  script:
+    - cd $PROJECT_DIR
+    - vendor/bin/behat --config behat.yml
+  needs:
+    - job: codecov-init-php
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - calc/**/*
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+test:behat:coffee:
+  extends: .test:behat
+  variables:
+    PROJECT_DIR: "coffee"
+    CODECOV_FLAG: "coffee"
+  script:
+    - cd $PROJECT_DIR
+    - vendor/bin/behat --config behat.yml
+  needs:
+    - job: codecov-init-php
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - coffee/**/*
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+codecov-send-notification-php:
+  stage: test
+  image: php:8.2
+  variables:
+    CODECOV_URL: "https://codecov.example.com"
+    CODECOV_TOKEN: ""
+  script:
+    - |
+      echo "Sending notifications to Codecov to finalize coverage reports"
+      ./codecov -u ${CODECOV_URL} send-notifications \
+        -t ${CODECOV_TOKEN} \
+        --git-service gitlab_enterprise
+  needs:
+    - job: codecov-init-php
+      optional: false
+    - job: test:behat:calc
+      optional: true
+    - job: test:behat:coffee
+      optional: true
+  tags:
+    - ci-docker
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - calc/**/*
+        - coffee/**/*
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

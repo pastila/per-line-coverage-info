@@ -11,11 +11,11 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> {
 
     data class State(
-        var apiUrl: String = "https://coverage.yakov255.ru/",
-        var bearerToken: String = "4f47a77e3a9d9478611535ee804718f0a73fff0179751d3d1131814ce4252d18",
-        var mergeBaseBranch: String = "behat-run-necessary-tests",
-        /** Branch name sent to the coverage API. Leave empty to use the same value as mergeBaseBranch. */
-        var apiBranchName: String = "master"
+        var gitlabDomain: String = "gitlab.com",
+        var bearerToken: String = "",
+        var gitlabProjectId: Long = 0,
+        var gitlabProjectName: String = "",
+        var coverageBranch: String = "behat-run-necessary-tests",
     )
 
     private var state = State()
@@ -26,30 +26,28 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
         XmlSerializerUtil.copyBean(state, this.state)
     }
 
-    var apiUrl: String
-        get() = state.apiUrl
-        set(value) { state.apiUrl = value }
+    var gitlabDomain: String
+        get() = state.gitlabDomain
+        set(value) { state.gitlabDomain = value }
 
     var bearerToken: String
         get() = state.bearerToken
         set(value) { state.bearerToken = value }
 
-    var mergeBaseBranch: String
-        get() = state.mergeBaseBranch
-        set(value) { state.mergeBaseBranch = value }
+    var gitlabProjectId: Long
+        get() = state.gitlabProjectId
+        set(value) { state.gitlabProjectId = value }
 
-    /**
-     * Branch name used in API calls (e.g. "master" when the coverage server stores
-     * data under master regardless of which branch actually ran the tests).
-     * Falls back to [mergeBaseBranch] when empty.
-     */
-    var apiBranchName: String
-        get() = state.apiBranchName
-        set(value) { state.apiBranchName = value }
+    var gitlabProjectName: String
+        get() = state.gitlabProjectName
+        set(value) { state.gitlabProjectName = value }
 
-    /** The branch name to pass to the coverage API. */
-    val effectiveApiBranch: String
-        get() = state.apiBranchName.trim().ifEmpty { state.mergeBaseBranch }
+    var coverageBranch: String
+        get() = state.coverageBranch
+        set(value) { state.coverageBranch = value }
+
+    val gitlabBaseUrl: String
+        get() = "https://${state.gitlabDomain.trimEnd('/')}"
 
     companion object {
         fun getInstance(): CoverageApiSettings = service()

@@ -77,7 +77,7 @@ class LineMappingService(private val project: Project) {
         val gitRoot = dataService.gitRoot ?: return null
 
         val gitPath = toGitRelativePath(relativePath) ?: return null
-        val oldContent = CoverageApiClient.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
+        val oldContent = CoverageResolver.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
         if (oldContent != null) {
             oldContentCache[relativePath] = oldContent
         }

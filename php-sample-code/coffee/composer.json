@@ -1,0 +1,23 @@
+{
+    "name": "coverage-viewer/test",
+    "repositories": [
+        {
+            "type": "path",
+            "url": "/php-behat-coverage-extension"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "CoverageViewer\\Test\\Coffee\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "CoverageViewer\\Test\\Coffee\\Tests\\": "features/bootstrap/"
+        }
+    },
+    "require-dev": {
+        "behat/behat": "^3.26",
+        "dvdoug/behat-code-coverage": "^5.3"
+    }
+}

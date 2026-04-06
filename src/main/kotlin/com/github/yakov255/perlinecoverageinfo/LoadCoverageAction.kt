@@ -1,16 +1,14 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
-import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.Logger
+import com.intellij.openapi.progress.ProgressIndicator
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.Task
 import com.intellij.openapi.ui.Messages
-import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VfsUtil
-import com.jetbrains.php.lang.PhpLanguage
-import java.io.File
 
 class LoadCoverageAction : AnAction() {
 
@@ -19,77 +17,133 @@ class LoadCoverageAction : AnAction() {
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 
     override fun update(e: AnActionEvent) {
-        if (e.place == ActionPlaces.EDITOR_GUTTER_POPUP) {
-            val project = e.project ?: run { e.presentation.isEnabledAndVisible = false; return }
-            val psiFile = e.getData(CommonDataKeys.PSI_FILE)
-            val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE)
-            val isPhp = psiFile?.language == PhpLanguage.INSTANCE
-
-            val basePath = project.basePath
-            val projectVf = if (basePath != null) LocalFileSystem.getInstance().findFileByIoFile(File(basePath)) else null
-            val relativePath = if (virtualFile != null && projectVf != null) VfsUtil.getRelativePath(virtualFile, projectVf) else null
-            val hasCoverageForFile = relativePath != null && CoverageDataService.getInstance(project).getCoverage(relativePath) != null
-
-            e.presentation.isEnabledAndVisible = isPhp && !hasCoverageForFile
-        }
+        e.presentation.isEnabledAndVisible = e.project != null
     }
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        val virtualFile = e.getData(CommonDataKeys.VIRTUAL_FILE) ?: return
-
         val settings = CoverageApiSettings.getInstance()
-        val apiUrl = settings.apiUrl
-        val bearerToken = settings.bearerToken
 
-        if (apiUrl.isBlank()) {
-            Messages.showErrorDialog(project, "API URL is not configured. Please set it in Settings > Tools > Coverage API.", "Configuration Error")
+        if (settings.gitlabDomain.isBlank()) {
+            Messages.showErrorDialog(project, "GitLab domain is not configured.\nPlease set it in Settings > Tools > GitLab Coverage.", "Configuration Error")
+            return
+        }
+        if (settings.bearerToken.isBlank()) {
+            Messages.showErrorDialog(project, "GitLab access token is not configured.\nPlease set it in Settings > Tools > GitLab Coverage.", "Configuration Error")
+            return
+        }
+        if (settings.gitlabProjectId <= 0) {
+            Messages.showErrorDialog(project, "GitLab project is not selected.\nPlease select a project in Settings > Tools > GitLab Coverage.", "Configuration Error")
             return
         }
 
-        val basePath = project.basePath ?: return
-        val projectVf = LocalFileSystem.getInstance().findFileByIoFile(File(basePath)) ?: return
-        val relativePath = VfsUtil.getRelativePath(virtualFile, projectVf)
-        if (relativePath == null) {
-            Messages.showErrorDialog(project, "Could not determine relative path for the current file.", "Error")
-            return
-        }
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Coverage from GitLab", true) {
+            override fun run(indicator: ProgressIndicator) {
+                try {
+                    indicator.text = "Resolving coverage pipeline..."
+                    indicator.fraction = 0.0
 
-        val apiClient = CoverageApiClient(apiUrl, bearerToken, project)
-        val result = try {
-            apiClient.fetchCoverageForFile(relativePath)
-        } catch (ex: CoverageApiException) {
-            log.warn("Coverage error", ex)
-            val title = when (ex.kind) {
-                CoverageErrorKind.NETWORK       -> "API Connection Error"
-                CoverageErrorKind.API_RESPONSE  -> "API Error"
-                CoverageErrorKind.PARSE         -> "API Response Error"
-                CoverageErrorKind.GIT           -> "Git Error"
-                CoverageErrorKind.NO_DATA       -> "No Coverage Data"
-                CoverageErrorKind.PROJECT_SETUP -> "Project Configuration Error"
+                    val gitLabClient = GitLabApiClient(settings.gitlabBaseUrl, settings.bearerToken)
+                    val resolver = CoverageResolver(gitLabClient, project)
+                    val resolved = resolver.resolve()
+
+                    indicator.text = "Finding coverage artifacts..."
+                    indicator.fraction = 0.2
+
+                    val jobs = gitLabClient.listPipelineJobs(settings.gitlabProjectId, resolved.pipelineId)
+                    val coverageJobs = jobs.filter { job ->
+                        job.artifacts.any { it.filename.contains("binary-coverage") }
+                    }
+
+                    if (coverageJobs.isEmpty()) {
+                        throw CoverageApiException(
+                            "No binary-coverage artifacts found in pipeline ${resolved.pipelineId}",
+                            details = mapOf(
+                                "pipelineId" to resolved.pipelineId.toString(),
+                                "totalJobs" to jobs.size.toString(),
+                                "jobNames" to jobs.joinToString(", ") { it.name },
+                            ),
+                            kind = CoverageErrorKind.NO_DATA,
+                        )
+                    }
+
+                    log.info("Coverage: found ${coverageJobs.size} jobs with binary-coverage artifacts in pipeline ${resolved.pipelineId}")
+
+                    indicator.text = "Downloading coverage artifacts..."
+                    indicator.fraction = 0.3
+
+                    val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
+                    val totalJobs = coverageJobs.size
+
+                    for ((index, job) in coverageJobs.withIndex()) {
+                        indicator.text = "Downloading artifact from job '${job.name}'... (${index + 1}/$totalJobs)"
+                        indicator.fraction = 0.3 + 0.5 * (index.toDouble() / totalJobs)
+
+                        if (indicator.isCanceled) return
+
+                        val zipBytes = gitLabClient.downloadJobArtifacts(settings.gitlabProjectId, job.id)
+                        log.info("Coverage: downloaded ${zipBytes.size} bytes from job ${job.name} (id=${job.id})")
+
+                        val parsed = BinaryCoverageParser.parseZipArtifact(zipBytes)
+                        log.info("Coverage: parsed ${parsed.size} files from job ${job.name}")
+
+                        for ((filePath, lineMap) in parsed) {
+                            val existingFileMap = mergedCoverage.getOrPut(filePath) { mutableMapOf() }
+                            for ((lineNum, testNames) in lineMap) {
+                                val existingTests = existingFileMap.getOrPut(lineNum) { mutableListOf() }
+                                for (testName in testNames) {
+                                    if (testName !in existingTests) {
+                                        existingTests.add(testName)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    val finalCoverage: Map<String, Map<Int, List<String>>> = mergedCoverage.mapValues { (_, lineMap) ->
+                        lineMap.mapValues { (_, tests) -> tests.toList() }
+                    }
+
+                    indicator.text = "Applying coverage highlights..."
+                    indicator.fraction = 0.9
+
+                    val dataService = CoverageDataService.getInstance(project)
+                    dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
+                    dataService.setCoverageAll(finalCoverage)
+
+                    log.info("Coverage: loaded coverage for ${finalCoverage.size} files from ${coverageJobs.size} artifacts at commit ${resolved.commitHash}")
+
+                    ApplicationManager.getApplication().invokeLater {
+                        CoverageHighlighter.applyToOpenEditors(project)
+                    }
+
+                    indicator.fraction = 1.0
+
+                } catch (ex: CoverageApiException) {
+                    log.warn("Coverage error", ex)
+                    val title = when (ex.kind) {
+                        CoverageErrorKind.NETWORK        -> "Connection Error"
+                        CoverageErrorKind.GITLAB_API     -> "GitLab API Error"
+                        CoverageErrorKind.PARSE          -> "Response Error"
+                        CoverageErrorKind.ARTIFACT_PARSE -> "Coverage Artifact Error"
+                        CoverageErrorKind.GIT            -> "Git Error"
+                        CoverageErrorKind.NO_DATA        -> "No Coverage Data"
+                        CoverageErrorKind.PROJECT_SETUP  -> "Configuration Error"
+                    }
+                    ApplicationManager.getApplication().invokeLater {
+                        Messages.showErrorDialog(project, ex.userMessage, title)
+                    }
+                } catch (ex: Exception) {
+                    log.warn("Unexpected coverage error", ex)
+                    ApplicationManager.getApplication().invokeLater {
+                        Messages.showErrorDialog(
+                            project,
+                            "An unexpected error occurred while loading coverage data:\n${ex.message}",
+                            "Coverage Error"
+                        )
+                    }
+                }
             }
-            Messages.showErrorDialog(project, ex.userMessage, title)
-            return
-        } catch (ex: Exception) {
-            log.warn("Unexpected coverage error", ex)
-            Messages.showErrorDialog(
-                project,
-                "An unexpected error occurred while loading coverage data:\n${ex.message}",
-                "Coverage Error"
-            )
-            return
-        }
-
-        if (result.coverageData.isEmpty()) {
-            Messages.showInfoMessage(project, "No coverage data found for this file at the current commit.", "No Coverage Data")
-            return
-        }
-
-        val dataService = CoverageDataService.getInstance(project)
-        dataService.setCoverageContext(result.commitHash, result.gitRoot)
-        dataService.setCoverage(relativePath, result.coverageData[relativePath] ?: return)
-
-        // Apply annotations to all currently open editors
-        CoverageHighlighter.applyToOpenEditors(project)
+        })
     }
 }

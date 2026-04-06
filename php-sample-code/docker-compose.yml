@@ -1,0 +1,21 @@
+networks:
+  app:
+    driver: bridge
+
+services:
+  php:
+    build:
+      args:
+        UID: ${USER_ID}
+        GID: ${GROUP_ID}
+    user: "${USER_ID}:${GROUP_ID}"
+    volumes:
+      - .:/app
+      - ../php-behat-coverage-extension:/php-behat-coverage-extension
+    networks:
+      app:
+    working_dir: /app
+    stdin_open: true
+    tty: true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

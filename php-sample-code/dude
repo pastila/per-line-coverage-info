@@ -1,0 +1,190 @@
+#!/bin/bash
+
+# dude - Project helper script for PHP Docker development environment
+# Provides a clean interface for common docker compose operations
+
+set -e
+
+# Set USER_ID/GROUP_ID for docker compose (avoid readonly Bash UID/GID)
+USER_ID="${USER_ID:-$(id -u)}"
+GROUP_ID="${GROUP_ID:-$(id -g)}"
+export USER_ID GROUP_ID
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+# Function to print usage
+usage() {
+    cat << EOF
+${GREEN}dude${NC} - Project helper for PHP Docker development
+
+Usage: dude <command> [options]
+
+Commands:
+  build                  Build Docker containers
+  down                   Stop Docker containers
+  run <cmd>              Run command in new PHP container
+  self-test              Run Docker setup self-test
+  help                   Show this help message
+
+Examples:
+  dude build
+  dude run php -v
+  dude self-test
+
+EOF
+}
+
+# Function to print test status
+print_test_status() {
+    if [ $1 -eq 0 ]; then
+        echo -e "${GREEN}✓ $2${NC}"
+    else
+        echo -e "${RED}✗ $2${NC}"
+        exit 1
+    fi
+}
+
+# Function to cleanup test artifacts
+cleanup_test() {
+    echo "Cleaning up test artifacts..."
+    rm -f .uidgid-test .uidgid-test.container
+}
+# Upsert a key=value into .env (idempotent)
+set_env_value() {
+    local VAR="$1"; local VAL="$2"
+    [ -f .env ] || touch .env
+    if grep -qE "^${VAR}=" .env; then
+        sed -i.bak -E "s|^${VAR}=.*|${VAR}=${VAL}|" .env && rm -f .env.bak
+    else
+        echo "${VAR}=${VAL}" >> .env
+    fi
+    echo "Set ${VAR}=${VAL} in .env"
+}
+
+# Fix project ownership on host
+fix_perms() {
+    echo "Fixing ownership of project files to ${USER_ID}:${GROUP_ID} ..."
+    if chown -R "${USER_ID}:${GROUP_ID}" . 2>/dev/null; then
+        echo -e "${GREEN}✓ Ownership updated${NC}"
+    else
+        echo -e "${YELLOW}Could not update some files. Try: sudo chown -R ${USER_ID}:${GROUP_ID} .${NC}"
+    fi
+}
+
+# Function to run self-test
+run_self_test() {
+    echo -e "${YELLOW}Running Docker setup self-test...${NC}"
+
+    # Set trap for cleanup
+    trap cleanup_test EXIT
+
+    # Build containers
+    echo "Building containers..."
+    docker compose build
+    print_test_status $? "Container build"
+
+    # No test file needed for CLI-only project
+
+    # Test PHP execution (CLI only)
+    echo "Testing PHP execution..."
+    if docker compose run --rm php php -r "echo 'PHP Version: ' . phpversion() . PHP_EOL;" | grep -q "PHP Version:"; then
+        print_test_status 0 "PHP execution"
+    else
+        print_test_status 1 "PHP execution failed"
+    fi
+
+    # Test Xdebug presence
+    if docker compose run --rm php php -r "echo 'Xdebug loaded: ' . (extension_loaded('xdebug') ? 'Yes' : 'No') . PHP_EOL;" | grep -q "Xdebug loaded: Yes"; then
+        print_test_status 0 "Xdebug loaded"
+    else
+        print_test_status 1 "Xdebug not loaded"
+    fi
+
+    # Test container connectivity
+    echo "Testing container connectivity..."
+    if docker compose run --rm php php -v | grep -q "PHP 8.2"; then
+        print_test_status 0 "PHP container connectivity"
+    else
+        print_test_status 1 "PHP container connectivity failed"
+    fi
+
+    # Verify container UID/GID match host
+    echo "Verifying container UID/GID match host..."
+    CUID=$(docker compose run --rm php id -u | tr -d '\r')
+    CGID=$(docker compose run --rm php id -g | tr -d '\r')
+    if [ "$CUID" = "$USER_ID" ] && [ "$CGID" = "$GROUP_ID" ]; then
+        print_test_status 0 "Container UID/GID match host ($CUID:$CGID)"
+    else
+        echo "Expected $USER_ID:$GROUP_ID but got $CUID:$CGID"
+        print_test_status 1 "Container UID/GID mismatch"
+    fi
+
+    # Test bind mount write ownership from container and verify on host
+    echo "Testing bind mount write ownership..."
+    docker compose run --rm php bash -lc 'echo uidgid_test > /app/.uidgid-test && stat -c %u:%g /app/.uidgid-test' > .uidgid-test.container 2>/dev/null || true
+    HOST_STAT=$(stat -c %u:%g ./.uidgid-test 2>/dev/null || true)
+    CONTAINER_STAT=$(tail -n1 .uidgid-test.container 2>/dev/null || true)
+    if [ "$HOST_STAT" = "$USER_ID:$GROUP_ID" ] && [ "$CONTAINER_STAT" = "$USER_ID:$GROUP_ID" ]; then
+        print_test_status 0 "Bind mount write ownership OK ($HOST_STAT)"
+    else
+        echo "Expected: $USER_ID:$GROUP_ID"
+        echo "Host stat: ${HOST_STAT:-<missing>}"
+        echo "Container stat: ${CONTAINER_STAT:-<missing>}"
+        print_test_status 1 "Bind mount ownership mismatch"
+    fi
+
+    echo -e "${GREEN}All tests passed!${NC}"
+}
+
+# Function to get assigned port
+get_port() {
+    # Port function removed as nginx is no longer used
+    echo ""
+}
+
+# Main command handler
+case "${1:-run}" in
+    build)
+        echo -e "${YELLOW}Building containers...${NC}"
+        docker compose build
+        echo -e "${GREEN}✓ Build complete${NC}"
+        ;;
+    down)
+        echo -e "${YELLOW}Stopping containers...${NC}"
+        docker compose down
+        echo -e "${GREEN}✓ Containers stopped${NC}"
+        ;;
+    run)
+        if [ -z "$2" ]; then
+            # Interactive mode (no command provided)
+            echo -e "${GREEN}Entering interactive PHP container shell...${NC}"
+            docker compose run --rm php bash
+        else
+            # Execute command (shift to remove 'run' from args)
+            shift
+            docker compose run --rm php "$@"
+        fi
+        ;;
+    port)
+        echo -e "${RED}Error: Port command removed as nginx is no longer used${NC}"
+        exit 1
+        ;;
+    fix-perms)
+        fix_perms
+        ;;
+    self-test)
+        run_self_test
+        ;;
+    help|--help|-h)
+        usage
+        ;;
+    *)
+        echo -e "${RED}Error: Unknown command '$1'${NC}"
+        usage
+        exit 1
+        ;;
+esac
