@@ -1,6 +1,8 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.ide.BrowserUtil
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.HyperlinkLabel
@@ -15,6 +17,8 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
 class CoverageApiSettingsConfigurable : Configurable {
+
+    private val log = Logger.getInstance(CoverageApiSettingsConfigurable::class.java)
 
     private val gitlabDomainField = JBTextField()
     private val bearerTokenField = JBTextField()
@@ -119,20 +123,40 @@ class CoverageApiSettingsConfigurable : Configurable {
             val query = searchField.text.trim()
             if (query.isEmpty()) return
 
+            val domain = gitlabDomainField.text.trimEnd('/')
+            val token = bearerTokenField.text
+            log.warn("[DEBUG] performSearch: query='$query', domain='$domain', tokenLen=${token.length}")
+
+            searchButton.isEnabled = false
+            searchButton.text = "Searching..."
             listModel.clear()
-            try {
-                val domain = gitlabDomainField.text.trimEnd('/')
-                val client = GitLabApiClient("https://$domain", bearerTokenField.text)
-                val projects = client.searchProjects(query)
-                projects.forEach { listModel.addElement(it) }
-            } catch (e: Exception) {
-                listModel.clear()
-                JOptionPane.showMessageDialog(
-                    contentPanel,
-                    "Search failed: ${e.message}",
-                    "Error",
-                    JOptionPane.ERROR_MESSAGE
-                )
+
+            ApplicationManager.getApplication().executeOnPooledThread {
+                try {
+                    val client = GitLabApiClient("https://$domain", token)
+                    val projects = client.searchProjects(query)
+                    log.warn("[DEBUG] searchProjects returned ${projects.size} results")
+
+                    SwingUtilities.invokeLater {
+                        listModel.clear()
+                        projects.forEach { listModel.addElement(it) }
+                        searchButton.text = "Search"
+                        searchButton.isEnabled = true
+                    }
+                } catch (e: Exception) {
+                    log.warn("[DEBUG] search failed: ${e::class.simpleName}: ${e.message}", e)
+                    SwingUtilities.invokeLater {
+                        searchButton.text = "Search"
+                        searchButton.isEnabled = true
+                        listModel.clear()
+                        JOptionPane.showMessageDialog(
+                            contentPanel,
+                            "Search failed: ${e.message}",
+                            "Error",
+                            JOptionPane.ERROR_MESSAGE
+                        )
+                    }
+                }
             }
         }
 

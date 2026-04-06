@@ -22,7 +22,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
 
     private inline fun <reified T> makeRequest(endpoint: String): T {
         val url = "${this.baseUrl}$endpoint"
-        log.info("GitLab API request: GET $url")
+        log.warn("[DEBUG] GitLab API request: GET $url")
         val request = HttpRequest.newBuilder()
             .uri(URI.create(url))
             .GET()
@@ -32,7 +32,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
         val response = try {
             httpClient.send(request, HttpResponse.BodyHandlers.ofString())
         } catch (e: Exception) {
-            log.warn("GitLab API network error for $url", e)
+            log.warn("[DEBUG] GitLab API network error for $url", e)
             throw CoverageApiException(
                 "Network error contacting GitLab API",
                 e,
@@ -40,7 +40,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                 kind = CoverageErrorKind.NETWORK,
             )
         }
-        log.info("GitLab API response: HTTP ${response.statusCode()} for $url")
+        log.warn("[DEBUG] GitLab API response: HTTP ${response.statusCode()} for $url, body=${response.body().take(200)}")
         if (response.statusCode() != 200) {
             val body = response.body().take(500)
             log.warn("GitLab API returned HTTP ${response.statusCode()} for $url. Body: $body")
