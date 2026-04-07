@@ -5,7 +5,6 @@ import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.colors.CodeInsightColors
 import com.intellij.openapi.editor.markup.HighlighterLayer
 import com.intellij.openapi.editor.markup.HighlighterTargetArea
-import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
@@ -33,20 +32,6 @@ object CoverageHighlighter {
 
         val document = editor.document
         val virtualFile = FileDocumentManager.getInstance().getFile(document) ?: return
-
-        // Monorepo filter: skip files outside the configured coverage root prefix
-        val rootPrefix = CoverageApiSettings.getInstance().coverageRootPrefix.trim().trimStart('/')
-        if (rootPrefix.isNotEmpty()) {
-            val basePath = project.basePath
-            if (basePath != null) {
-                val baseVf = LocalFileSystem.getInstance().findFileByPath(basePath)
-                val fileVf = LocalFileSystem.getInstance().findFileByPath(virtualFile.path)
-                if (baseVf != null && fileVf != null) {
-                    val relPath = VfsUtil.getRelativePath(fileVf, baseVf)
-                    if (relPath != null && !relPath.startsWith(rootPrefix)) return
-                }
-            }
-        }
 
         val lineMappingService = LineMappingService.getInstance(project)
         val coverageLines = lineMappingService.getMappedCoverage(virtualFile.path, document.text)
@@ -80,13 +65,6 @@ object CoverageHighlighter {
         }
         for (h in toRemove) {
             editor.markupModel.removeHighlighter(h)
-        }
-    }
-
-    fun clearAllEditors(project: Project) {
-        for (editor in EditorFactory.getInstance().allEditors) {
-            if (editor.project != project) continue
-            clearCoverageHighlighters(editor)
         }
     }
 

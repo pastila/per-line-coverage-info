@@ -16,7 +16,6 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
         var gitlabProjectId: Long = 0,
         var gitlabProjectName: String = "",
         var coverageBranch: String = "behat-run-necessary-tests",
-        var coverageRootPrefix: String = "",
     )
 
     private var state = State()
@@ -46,10 +45,6 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
     var coverageBranch: String
         get() = state.coverageBranch
         set(value) { state.coverageBranch = value }
-
-    var coverageRootPrefix: String
-        get() = state.coverageRootPrefix
-        set(value) { state.coverageRootPrefix = value }
 
     val gitlabBaseUrl: String
         get() = "https://${state.gitlabDomain.trimEnd('/')}"
