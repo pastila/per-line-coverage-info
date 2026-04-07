@@ -16,7 +16,7 @@ import com.intellij.openapi.project.Project
  * are parsed from the .cov4 binary only when an editor requests them.
  */
 @Service(Service.Level.PROJECT)
-class CoverageDataService {
+class CoverageDataService(private val project: Project) {
 
     private val log = Logger.getInstance(CoverageDataService::class.java)
 
@@ -85,6 +85,7 @@ class CoverageDataService {
         coverageCommitHash = null
         gitRoot = null
         isStale = false
+        LineMappingService.getInstance(project).clear()
     }
 
     fun hasData(): Boolean = data.isNotEmpty() || cov4Reader != null
@@ -93,6 +94,9 @@ class CoverageDataService {
         this.coverageCommitHash = commitHash
         this.gitRoot = gitRoot
         this.isStale = stale
+        // Drop old-content cache entries from previous commits so the LRU stays
+        // focused on files relevant to the currently active coverage.
+        LineMappingService.getInstance(project).pruneToCommit(commitHash)
     }
 
     private fun closeCov4Reader() {

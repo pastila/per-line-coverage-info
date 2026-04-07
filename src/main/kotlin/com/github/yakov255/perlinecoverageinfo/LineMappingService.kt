@@ -17,8 +17,20 @@ import com.intellij.openapi.vfs.VfsUtil
 @Service(Service.Level.PROJECT)
 class LineMappingService(private val project: Project) {
 
-    /** Per-file cached old content from the coverage commit. */
-    private val oldContentCache = mutableMapOf<String, String>()
+    /**
+     * Per-file cached old content, keyed by (commitHash, relativePath).
+     *
+     * Keyed by commit hash so that a coverage reload pointing at a different
+     * commit does not surface stale content. Uses access-order LRU with a
+     * hard cap so the cache can't grow unboundedly across many commits.
+     */
+    private val oldContentCache = object : LinkedHashMap<Pair<String, String>, String>(
+        16, 0.75f, /* accessOrder = */ true
+    ) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<Pair<String, String>, String>): Boolean {
+            return size > MAX_CACHED_FILES
+        }
+    }
 
     /**
      * Returns mapped coverage for a file, translating old line numbers to current ones.
@@ -49,6 +61,20 @@ class LineMappingService(private val project: Project) {
         oldContentCache.clear()
     }
 
+    /**
+     * Drops cache entries whose commit hash does not match [activeCommit].
+     * Called from [CoverageDataService.setCoverageContext] so entries from a
+     * previous coverage commit don't occupy slots in the LRU after a reload.
+     * Entries for the active commit are preserved so consecutive loads that
+     * resolve to the same commit stay warm.
+     */
+    fun pruneToCommit(activeCommit: String) {
+        val it = oldContentCache.entries.iterator()
+        while (it.hasNext()) {
+            if (it.next().key.first != activeCommit) it.remove()
+        }
+    }
+
     fun toRelativePath(absolutePath: String): String? {
         val basePath = project.basePath ?: return null
         val baseVf = LocalFileSystem.getInstance().findFileByPath(basePath) ?: return null
@@ -70,16 +96,17 @@ class LineMappingService(private val project: Project) {
     }
 
     private fun getOrFetchOldContent(relativePath: String): String? {
-        oldContentCache[relativePath]?.let { return it }
-
         val dataService = CoverageDataService.getInstance(project)
         val commitHash = dataService.coverageCommitHash ?: return null
         val gitRoot = dataService.gitRoot ?: return null
 
+        val key = commitHash to relativePath
+        oldContentCache[key]?.let { return it }
+
         val gitPath = toGitRelativePath(relativePath) ?: return null
         val oldContent = CoverageResolver.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
         if (oldContent != null) {
-            oldContentCache[relativePath] = oldContent
+            oldContentCache[key] = oldContent
         }
         return oldContent
     }
@@ -100,6 +127,9 @@ class LineMappingService(private val project: Project) {
     }
 
     companion object {
+        /** Hard cap on the (commit, path) LRU. At ~50KB per file that's ~25MB worst case. */
+        private const val MAX_CACHED_FILES = 500
+
         fun getInstance(project: Project): LineMappingService = project.service()
     }
 }
