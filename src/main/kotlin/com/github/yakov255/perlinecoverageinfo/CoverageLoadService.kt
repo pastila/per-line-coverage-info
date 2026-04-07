@@ -179,6 +179,7 @@ class CoverageLoadService(private val project: Project) {
         val jobs = gitLabClient.listPipelineJobs(settings.gitlabProjectId, resolved.pipelineId)
         val artifactJobs = jobs.filter { job ->
             job.status == "success" && job.artifactsFile != null
+                && job.name.contains("behat", ignoreCase = true)
         }
 
         if (artifactJobs.isEmpty()) {
