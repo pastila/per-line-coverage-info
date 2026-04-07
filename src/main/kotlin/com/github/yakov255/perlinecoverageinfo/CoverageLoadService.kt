@@ -135,10 +135,19 @@ class CoverageLoadService(private val project: Project) {
 
                     val result = downloadArtifacts(indicator, gitLabClient, resolved)
 
-                    // Write COV4 to cache
+                    // Write COV4 to cache, then drop the in-memory merged map and use a
+                    // reader-backed view of the freshly-written file. This keeps steady-state
+                    // memory bounded (only the Cov4Reader index + lazily-decoded files) and
+                    // unifies the post-load state with the cache-hit path above.
                     cache.writeCov4(resolved.commitHash, resolved.pipelineId, result.coverage)
 
-                    applyCoverage(result)
+                    val freshReader = cache.get(resolved.commitHash)
+                    if (freshReader != null) {
+                        applyCoverageFromReader(freshReader, result.resolved, result.artifactCount)
+                    } else {
+                        log.warn("Coverage: failed to reopen freshly-written .cov4, falling back to in-memory map")
+                        applyCoverage(result)
+                    }
                 } catch (ex: CoverageApiException) {
                     log.warn("Coverage error", ex)
                     if (showErrors) {
@@ -289,17 +298,47 @@ class CoverageLoadService(private val project: Project) {
         ApplicationManager.getApplication().invokeLater {
             CoverageHighlighter.applyToOpenEditors(project)
             notifyIfFallback(result.resolved)
+            notifyRefreshedFromStale(wasStale, previousCommit, result.resolved)
+        }
+    }
 
-            if (wasStale && previousCommit != result.resolved.commitHash) {
-                NotificationGroupManager.getInstance()
-                    .getNotificationGroup("Coverage Notifications")
-                    .createNotification(
-                        "Coverage updated",
-                        "Fresh coverage from commit ${result.resolved.commitHash.take(8)} (was ${previousCommit?.take(8) ?: "unknown"}).",
-                        NotificationType.INFORMATION,
-                    )
-                    .notify(project)
-            }
+    /**
+     * Reader-backed counterpart to [applyCoverage]. Used right after a fresh
+     * download: the merged map is written to `.cov4`, reopened as a
+     * [Cov4Reader], and handed to [CoverageDataService] so the in-memory map
+     * can be garbage-collected.
+     */
+    private fun applyCoverageFromReader(reader: Cov4Reader, resolved: ResolvedPipeline, artifactCount: Int) {
+        val dataService = CoverageDataService.getInstance(project)
+        val wasStale = dataService.isStale
+        val previousCommit = dataService.coverageCommitHash
+
+        dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot, stale = false)
+        dataService.setCov4Reader(reader)
+
+        log.info("Coverage: loaded coverage via reader for ${reader.allFilePaths.size} files from $artifactCount coverage artifacts at commit ${resolved.commitHash}")
+
+        ApplicationManager.getApplication().invokeLater {
+            CoverageHighlighter.applyToOpenEditors(project)
+            notifyIfFallback(resolved)
+            notifyRefreshedFromStale(wasStale, previousCommit, resolved)
+        }
+    }
+
+    private fun notifyRefreshedFromStale(
+        wasStale: Boolean,
+        previousCommit: String?,
+        resolved: ResolvedPipeline,
+    ) {
+        if (wasStale && previousCommit != resolved.commitHash) {
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup("Coverage Notifications")
+                .createNotification(
+                    "Coverage updated",
+                    "Fresh coverage from commit ${resolved.commitHash.take(8)} (was ${previousCommit?.take(8) ?: "unknown"}).",
+                    NotificationType.INFORMATION,
+                )
+                .notify(project)
         }
     }
 

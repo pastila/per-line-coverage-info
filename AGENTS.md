@@ -35,7 +35,7 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 ### Loading pipeline
 | File | Purpose |
 |------|---------|
-| `CoverageLoadService.kt` | Project service orchestrating the whole flow. `loadOfflineFirst()` walks recent HEAD commits, opens the first cached `.cov4` (marks stale), shows highlights immediately, then refreshes from GitLab in the background. `loadFromGitLab()` runs resolver → checks cache → `downloadArtifacts()` → writes `.cov4` → applies coverage. All heavy work runs under a `Task.Backgroundable` progress indicator. |
+| `CoverageLoadService.kt` | Project service orchestrating the whole flow. `loadOfflineFirst()` walks recent HEAD commits, opens the first cached `.cov4` (marks stale), shows highlights immediately, then refreshes from GitLab in the background. `loadFromGitLab()` runs resolver → checks cache → `downloadArtifacts()` → writes `.cov4` → **reopens it as a `Cov4Reader` and drops the merged map** so steady-state memory stays bounded. All three load paths (cache hit, offline-first, fresh download) converge on the same reader-backed state. All heavy work runs under a `Task.Backgroundable` progress indicator. |
 | `LoadCoverageAction.kt` | Tools menu: **Load Coverage from GitLab**. Validates settings, then delegates to `CoverageLoadService`. |
 | `LoadLocalCoverageAction.kt` | Tools menu: **Load Coverage from File**. Loads a local `.covt` (or `.covt.gz`) directly, bypassing GitLab. |
 | `ClearCoverageAction.kt` | Tools menu: clears highlighters + in-memory data. |
@@ -47,13 +47,13 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 | `BinaryCoverageParser.kt` | Parses the **COVT** binary format produced by the PHP extension (magic `COVT`, `FILE`…`ENDF` markers, little-endian). Also unzips CI artifact zips and finds `.covt`/`.covt.gz` entries, merging their contents. Output shape: `Map<filePath, Map<lineNumber, List<testName>>>`. |
 | `Cov4Writer.kt` | Writes a random-access **COV4** file (see `coverage_storage_format_v4.md`): header + interned test-name table + per-file index + per-file chunks with line→test-set mappings. |
 | `Cov4Reader.kt` | Reads COV4 on demand: parses the index eagerly, then lazily decodes a single file's coverage when requested. Implements `Closeable`. Used by `CoverageDataService` as a reader-backed fallback so the whole pipeline cache never needs to sit in memory. |
-| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<gitlabProjectId>/`. Key is **commit hash** (same commit → same coverage, independent of pipeline ID). Stores `<commit>.cov4` files + `cache-index.json` metadata. Provides `get()` (returns a `Cov4Reader`), `writeCov4()`, `cleanup(maxAgeDays = 7)`, `findCachedCommit(candidates)` for offline-first lookup. |
+| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<gitlabProjectId>/`. Key is **commit hash** (same commit → same coverage, independent of pipeline ID). Stores `<commit>.cov4` files + `cache-index.json` metadata. Provides `get()` (returns a `Cov4Reader`), `writeCov4()`, `findCachedCommit(candidates)`, and `cleanup(maxAgeDays = 7)`. Cleanup is self-healing: it retries on delete failure (entry stays in the index), drops index entries whose `.cov4` file is missing, and deletes orphan `.cov4` files with no index entry. |
 
 ### In-memory model
 | File | Purpose |
 |------|---------|
-| `CoverageDataService.kt` | Project service holding the current coverage. Dual-mode: **in-memory** `Map<path, Map<line, List<test>>>` (freshly downloaded or loaded from local `.covt`) OR **reader-backed** via a `Cov4Reader` (from disk cache). Tracks `coverageCommitHash`, `gitRoot`, `isStale`. |
-| `LineMappingService.kt` | Bridges stale coverage and drifted source. Fetches the file content at `coverageCommitHash` via `git show` (cached per file), then uses IntelliJ's `ComparisonManager` through `CoverageLineMapper` to translate old line numbers to current document line numbers every time highlights are re-applied. |
+| `CoverageDataService.kt` | Project service holding the current coverage. Dual-mode: **in-memory** `Map<path, Map<line, List<test>>>` (freshly downloaded or loaded from local `.covt`) OR **reader-backed** via a `Cov4Reader` (from disk cache). Tracks `coverageCommitHash`, `gitRoot`, `isStale`. `setCoverageContext()` prunes `LineMappingService`'s old-content cache to the active commit; `clear()` wipes it entirely. |
+| `LineMappingService.kt` | Bridges stale coverage and drifted source. Fetches the file content at `coverageCommitHash` via `git show`, caches it, then uses IntelliJ's `ComparisonManager` through `CoverageLineMapper` to translate old line numbers to current document line numbers every time highlights are re-applied. The content cache is keyed by `(commitHash, relativePath)` and backed by an access-order LRU capped at `MAX_CACHED_FILES = 500`, so entries from previous coverage commits become dead but harmless and the cache size is bounded. `pruneToCommit()` drops entries from non-active commits; `clear()` resets the whole cache. |
 | `CoverageLineMapper.kt` | Pure functions: diff old vs current content, build old→new line map, remap a coverage map. |
 
 ### Rendering
@@ -91,13 +91,14 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 3. `loadFromGitLab(showErrors = false)` runs in the background under a progress task:
    - `CoverageCacheService.cleanup()` prunes entries older than 7 days.
    - `CoverageResolver.resolve()` → `ResolvedPipeline(commitHash, pipelineId, gitRoot, fallback?)`.
-   - If `cache.get(commitHash) != null` → reuse cached COV4 reader, skip download.
+   - If `cache.get(commitHash) != null` → reuse cached COV4 reader, skip download (`applyCoverageFromReader`).
    - Otherwise `downloadArtifacts()`:
      - List pipeline jobs, filter `status == "success" && name contains "behat"` with artifacts.
      - Download each job artifact zip, extract `.covt`/`.covt.gz` via `BinaryCoverageParser.parseZipArtifact`.
      - Merge per-file line→test maps across jobs (dedup test names).
    - `Cov4Writer.write()` stores the merged result as `<commit>.cov4`; index updated.
-   - `applyCoverage()` swaps in the fresh data and, if the previous was stale, notifies "Coverage updated".
+   - `cache.get(commitHash)` reopens the file we just wrote; the merged in-memory map is dropped and `applyCoverageFromReader()` installs the reader. If the reopen fails (I/O error, disk full), falls back to `applyCoverage()` with the in-memory map.
+   - The shared `notifyRefreshedFromStale()` helper fires a "Coverage updated" notification if the previous data was stale and the commit hash changed.
 4. `CoverageHighlighter.applyToOpenEditors()` runs on the EDT. For each editor it resolves the file's coverage through `LineMappingService` (which diffs cached old content vs live document) and installs per-line gutter renderers.
 
 ## Local `.covt` Path
