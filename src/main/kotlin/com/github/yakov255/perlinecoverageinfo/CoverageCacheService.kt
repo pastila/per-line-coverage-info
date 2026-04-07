@@ -106,24 +106,75 @@ class CoverageCacheService(private val project: Project) {
     }
 
     /**
-     * Removes cache entries older than [maxAgeDays] days.
+     * Removes cache entries older than [maxAgeDays] days, then reconciles the
+     * index with the files actually on disk:
+     *  - index entries whose `.cov4` file is missing are dropped
+     *  - `.cov4` files in the cache dir with no matching index entry are deleted
+     *
+     * If a `.cov4` file fails to delete, the matching index entry is kept so the
+     * next cleanup can retry.
      */
     fun cleanup(maxAgeDays: Int = 7) {
-        val index = readIndex() ?: return
+        val dir = cacheDir()
+        val index = readIndex() ?: CacheIndex(entries = emptyList())
         val cutoff = System.currentTimeMillis() - maxAgeDays * 24 * 60 * 60 * 1000L
-        val (keep, remove) = index.entries.partition { it.timestampMs > cutoff }
+        val (freshEntries, expiredEntries) = index.entries.partition { it.timestampMs > cutoff }
 
-        if (remove.isEmpty()) return
-
-        for (entry in remove) {
-            val cov4File = File(cacheDir(), "${entry.commitHash}.cov4")
-            if (cov4File.exists()) {
-                cov4File.delete()
+        // Try to delete each expired entry's file. Keep entries whose delete failed
+        // so the next cleanup retries, and drop them from the index on success or
+        // if the file is already gone.
+        val expiredRetained = mutableListOf<CacheEntry>()
+        var expiredDeleted = 0
+        for (entry in expiredEntries) {
+            val cov4File = File(dir, "${entry.commitHash}.cov4")
+            if (!cov4File.exists()) {
+                // Already gone — drop the stale index entry.
+                continue
+            }
+            if (cov4File.delete()) {
+                expiredDeleted++
                 log.info("Coverage cache: cleaned up commit ${entry.commitHash}")
+            } else {
+                log.warn("Coverage cache: failed to delete ${cov4File.absolutePath}; will retry on next cleanup")
+                expiredRetained.add(entry)
             }
         }
-        writeIndex(CacheIndex(entries = keep))
-        log.info("Coverage cache: removed ${remove.size} expired entries, ${keep.size} remaining")
+
+        // Drop index entries whose file is missing (crashed write, manual rm, etc.).
+        val (existing, missing) = freshEntries.partition { File(dir, "${it.commitHash}.cov4").exists() }
+        if (missing.isNotEmpty()) {
+            log.info("Coverage cache: dropped ${missing.size} index entries with no file on disk")
+        }
+
+        // Delete orphan .cov4 files on disk that no index entry references.
+        val knownHashes = (existing + expiredRetained).map { it.commitHash }.toHashSet()
+        var orphansDeleted = 0
+        var orphansFailed = 0
+        dir.listFiles { f -> f.isFile && f.name.endsWith(".cov4") }?.forEach { file ->
+            val hash = file.name.removeSuffix(".cov4")
+            if (hash !in knownHashes) {
+                if (file.delete()) {
+                    orphansDeleted++
+                    log.info("Coverage cache: deleted orphan file ${file.name}")
+                } else {
+                    orphansFailed++
+                    log.warn("Coverage cache: failed to delete orphan ${file.absolutePath}")
+                }
+            }
+        }
+
+        val finalEntries = existing + expiredRetained
+        if (finalEntries.size != index.entries.size) {
+            writeIndex(CacheIndex(entries = finalEntries))
+        }
+
+        if (expiredDeleted > 0 || missing.isNotEmpty() || orphansDeleted > 0 || orphansFailed > 0) {
+            log.info(
+                "Coverage cache: cleanup done — expired=$expiredDeleted, " +
+                    "missingIndexDropped=${missing.size}, orphansDeleted=$orphansDeleted, " +
+                    "orphansFailed=$orphansFailed, remaining=${finalEntries.size}"
+            )
+        }
     }
 
     private fun readIndex(): CacheIndex? {
