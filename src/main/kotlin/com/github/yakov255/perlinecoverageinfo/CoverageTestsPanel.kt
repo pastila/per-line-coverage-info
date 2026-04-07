@@ -142,13 +142,23 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         allTests = tests
 
         val fileName = filePath.substringAfterLast("/")
+        val dataService = CoverageDataService.getInstance(project)
+        val commitInfo = buildCommitInfo(dataService)
+
         if (tests.isEmpty()) {
-            titleLabel.text = "<html><a style='text-decoration:underline'>$fileName:$lineNumber</a> — not covered</html>"
+            titleLabel.text = "<html><a style='text-decoration:underline'>$fileName:$lineNumber</a> — not covered$commitInfo</html>"
         } else {
-            titleLabel.text = "<html><a style='text-decoration:underline'>$fileName:$lineNumber</a> — ${tests.size} test(s)</html>"
+            titleLabel.text = "<html><a style='text-decoration:underline'>$fileName:$lineNumber</a> — ${tests.size} test(s)$commitInfo</html>"
         }
 
         buildTree(tests)
+    }
+
+    private fun buildCommitInfo(dataService: CoverageDataService): String {
+        val commitHash = dataService.coverageCommitHash ?: return ""
+        val shortHash = commitHash.take(8)
+        val staleMarker = if (dataService.isStale) " ⚠ stale" else ""
+        return " <span style='color:gray;font-size:smaller'>(from $shortHash$staleMarker)</span>"
     }
 
     private fun buildTree(tests: List<String>) {

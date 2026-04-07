@@ -14,6 +14,14 @@ class LoadCoverageAction : AnAction() {
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        CoverageLoadService.getInstance(project).loadFromGitLab(showErrors = true)
+        val loadService = CoverageLoadService.getInstance(project)
+        // Manual trigger: use offline-first (show cached immediately, then fetch fresh)
+        // but fall back to loadFromGitLab with errors if settings are invalid
+        val validationError = loadService.validateSettings()
+        if (validationError != null) {
+            loadService.loadFromGitLab(showErrors = true)
+            return
+        }
+        loadService.loadOfflineFirst()
     }
 }

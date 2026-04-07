@@ -34,6 +34,10 @@ class CoverageDataService {
     var gitRoot: java.io.File? = null
         private set
 
+    /** Whether the current coverage is from an older (cached) commit, not the freshly resolved one. */
+    var isStale: Boolean = false
+        private set
+
     fun setCoverage(filePath: String, lines: Map<Int, List<String>>) {
         data[filePath] = lines
     }
@@ -80,13 +84,15 @@ class CoverageDataService {
         data.clear()
         coverageCommitHash = null
         gitRoot = null
+        isStale = false
     }
 
     fun hasData(): Boolean = data.isNotEmpty() || cov4Reader != null
 
-    fun setCoverageContext(commitHash: String, gitRoot: java.io.File) {
+    fun setCoverageContext(commitHash: String, gitRoot: java.io.File, stale: Boolean = false) {
         this.coverageCommitHash = commitHash
         this.gitRoot = gitRoot
+        this.isStale = stale
     }
 
     private fun closeCov4Reader() {

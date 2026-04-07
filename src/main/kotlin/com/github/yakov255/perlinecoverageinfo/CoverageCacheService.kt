@@ -35,6 +35,29 @@ class CoverageCacheService(private val project: Project) {
     }
 
     /**
+     * Returns the set of all commit hashes that have cached .cov4 files.
+     * Used for fast offline lookup without opening readers.
+     */
+    fun cachedCommitHashes(): Set<String> {
+        val index = readIndex() ?: return emptySet()
+        val dir = cacheDir()
+        return index.entries
+            .filter { File(dir, "${it.commitHash}.cov4").exists() }
+            .map { it.commitHash }
+            .toSet()
+    }
+
+    /**
+     * Finds the first commit from [candidates] that has a cached .cov4 file.
+     * Returns the commit hash, or null if none are cached.
+     */
+    fun findCachedCommit(candidates: List<String>): String? {
+        val cached = cachedCommitHashes()
+        if (cached.isEmpty()) return null
+        return candidates.firstOrNull { it in cached }
+    }
+
+    /**
      * Looks up cached coverage for a commit.
      * Returns a [Cov4Reader] for on-demand file access, or null if not cached.
      * The caller owns the reader lifecycle and must close it when done.

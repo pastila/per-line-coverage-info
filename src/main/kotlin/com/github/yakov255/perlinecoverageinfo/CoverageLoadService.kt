@@ -14,6 +14,9 @@ import com.intellij.openapi.ui.Messages
 
 /**
  * Project-level service that orchestrates loading coverage data from GitLab.
+ * Supports offline-first: shows cached (possibly stale) coverage immediately,
+ * then fetches fresh coverage in the background.
+ *
  * Used by LoadCoverageAction (manual) and CoverageBranchListener (automatic).
  */
 @Service(Service.Level.PROJECT)
@@ -33,6 +36,56 @@ class CoverageLoadService(private val project: Project) {
             settings.gitlabProjectId <= 0 -> "GitLab project is not selected.\nPlease select a project in Settings > Tools > GitLab Coverage."
             else -> null
         }
+    }
+
+    /**
+     * Offline-first coverage loading:
+     * 1. Walks git history to find any cached .cov4 file
+     * 2. Shows cached coverage immediately (marked as stale)
+     * 3. Fetches fresh coverage from GitLab in background
+     * 4. When fresh data arrives, replaces stale data and refreshes highlights
+     *
+     * If no cache is found, falls through to normal GitLab loading.
+     */
+    fun loadOfflineFirst() {
+        val cache = CoverageCacheService.getInstance(project)
+        val dataService = CoverageDataService.getInstance(project)
+
+        // Try to find cached coverage from git history
+        val gitRoot = findGitRoot()
+        if (gitRoot != null) {
+            val commits = getRecentCommits(gitRoot, 200)
+            if (commits.isNotEmpty()) {
+                val cachedCommit = cache.findCachedCommit(commits)
+                if (cachedCommit != null) {
+                    val reader = cache.get(cachedCommit)
+                    if (reader != null) {
+                        log.info("Coverage: offline-first hit — showing cached coverage from commit ${cachedCommit.take(8)}")
+                        dataService.setCoverageContext(cachedCommit, gitRoot, stale = true)
+                        dataService.setCov4Reader(reader)
+
+                        ApplicationManager.getApplication().invokeLater {
+                            CoverageHighlighter.applyToOpenEditors(project)
+                            NotificationGroupManager.getInstance()
+                                .getNotificationGroup("Coverage Notifications")
+                                .createNotification(
+                                    "Showing cached coverage",
+                                    "Coverage from commit ${cachedCommit.take(8)}. Fetching fresh data…",
+                                    NotificationType.INFORMATION,
+                                )
+                                .notify(project)
+                        }
+
+                        // Now fetch fresh in background (errors are silent)
+                        loadFromGitLab(showErrors = false)
+                        return
+                    }
+                }
+            }
+        }
+
+        // No cache found — go straight to GitLab
+        loadFromGitLab(showErrors = false)
     }
 
     /**
@@ -220,10 +273,14 @@ class CoverageLoadService(private val project: Project) {
 
     /**
      * Applies loaded coverage data to the project and refreshes highlights.
+     * If the previous coverage was stale (offline-first cache), notifies that it's been refreshed.
      */
     fun applyCoverage(result: CoverageLoadResult) {
         val dataService = CoverageDataService.getInstance(project)
-        dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot)
+        val wasStale = dataService.isStale
+        val previousCommit = dataService.coverageCommitHash
+
+        dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
         dataService.setCoverageAll(result.coverage)
 
         log.info("Coverage: loaded coverage for ${result.coverage.size} files from ${result.artifactCount} coverage artifacts at commit ${result.resolved.commitHash}")
@@ -231,6 +288,17 @@ class CoverageLoadService(private val project: Project) {
         ApplicationManager.getApplication().invokeLater {
             CoverageHighlighter.applyToOpenEditors(project)
             notifyIfFallback(result.resolved)
+
+            if (wasStale && previousCommit != result.resolved.commitHash) {
+                NotificationGroupManager.getInstance()
+                    .getNotificationGroup("Coverage Notifications")
+                    .createNotification(
+                        "Coverage updated",
+                        "Fresh coverage from commit ${result.resolved.commitHash.take(8)} (was ${previousCommit?.take(8) ?: "unknown"}).",
+                        NotificationType.INFORMATION,
+                    )
+                    .notify(project)
+            }
         }
     }
 
@@ -245,6 +313,26 @@ class CoverageLoadService(private val project: Project) {
                 )
                 .notify(project)
         }
+    }
+
+    /**
+     * Finds the git root for the project base directory.
+     */
+    private fun findGitRoot(): java.io.File? {
+        val basePath = project.basePath ?: return null
+        val projectDir = java.io.File(basePath)
+        val gitRootPath = CoverageResolver.runGitCommand(projectDir, "rev-parse", "--show-toplevel")
+            ?: return null
+        return java.io.File(gitRootPath)
+    }
+
+    /**
+     * Returns the last [count] commit hashes from the current HEAD.
+     */
+    private fun getRecentCommits(gitRoot: java.io.File, count: Int): List<String> {
+        val output = CoverageResolver.runGitCommand(gitRoot, "log", "--format=%H", "-n", count.toString())
+            ?: return emptyList()
+        return output.lines().filter { it.isNotBlank() }
     }
 
     companion object {
