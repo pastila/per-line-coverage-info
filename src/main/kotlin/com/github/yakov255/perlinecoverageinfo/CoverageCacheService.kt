@@ -8,17 +8,19 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
-import java.nio.file.Files
 
 /**
- * Manages disk-based cache of parsed coverage data.
+ * Manages disk-based cache of coverage data in COV4 binary format.
  *
  * Cache structure:
  * ```
  * ~/.cache/coverage-plugin/<projectId>/
- *   <pipelineId>.json       -- serialized coverage map
+ *   <commitHash>.cov4       -- merged binary coverage file (indexed, random-access)
  *   cache-index.json        -- metadata for all cached entries
  * ```
+ *
+ * Cache key is the **commit hash** (not pipeline ID), since the same commit
+ * always produces the same coverage regardless of which pipeline ran it.
  */
 @Service(Service.Level.PROJECT)
 class CoverageCacheService(private val project: Project) {
@@ -33,61 +35,51 @@ class CoverageCacheService(private val project: Project) {
     }
 
     /**
-     * Looks up cached coverage for a pipeline. Returns null if not cached or expired.
+     * Looks up cached coverage for a commit.
+     * Returns a [Cov4Reader] for on-demand file access, or null if not cached.
+     * The caller owns the reader lifecycle and must close it when done.
      */
-    fun get(pipelineId: Long): CachedCoverage? {
+    fun get(commitHash: String): Cov4Reader? {
         val index = readIndex() ?: return null
-        val entry = index.entries.find { it.pipelineId == pipelineId } ?: return null
-        val dataFile = File(cacheDir(), "${pipelineId}.json")
-        if (!dataFile.exists()) return null
+        val entry = index.entries.find { it.commitHash == commitHash } ?: return null
+        val cov4File = File(cacheDir(), "${commitHash}.cov4")
+        if (!cov4File.exists()) return null
 
         return try {
-            val data: Map<String, Map<String, List<String>>> =
-                json.decodeFromString(dataFile.readText())
-            // Convert String keys back to Int for line numbers
-            val coverage = data.mapValues { (_, lineMap) ->
-                lineMap.mapKeys { (k, _) -> k.toInt() }
+            Cov4Reader(cov4File).also {
+                log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB)")
             }
-            CachedCoverage(
-                coverage = coverage,
-                commitHash = entry.commitHash,
-                pipelineId = entry.pipelineId,
-            )
         } catch (e: Exception) {
-            log.warn("Coverage cache: failed to read cached data for pipeline $pipelineId", e)
+            log.warn("Coverage cache: failed to open COV4 file for commit $commitHash", e)
             null
         }
     }
 
     /**
-     * Stores coverage data in the disk cache.
+     * Writes merged coverage data to a .cov4 cache file.
      */
-    fun put(result: CoverageLoadResult) {
+    fun writeCov4(commitHash: String, pipelineId: Long, coverage: Map<String, Map<Int, List<String>>>) {
         val dir = cacheDir()
         dir.mkdirs()
+        val cov4File = File(dir, "${commitHash}.cov4")
 
-        // Serialize coverage: convert Int keys to String for JSON
-        val serializable = result.coverage.mapValues { (_, lineMap) ->
-            lineMap.mapKeys { (k, _) -> k.toString() }
-        }
-        val dataFile = File(dir, "${result.resolved.pipelineId}.json")
         try {
-            dataFile.writeText(json.encodeToString(serializable))
+            Cov4Writer.write(coverage, cov4File)
         } catch (e: Exception) {
-            log.warn("Coverage cache: failed to write data for pipeline ${result.resolved.pipelineId}", e)
+            log.warn("Coverage cache: failed to write COV4 for commit $commitHash", e)
             return
         }
 
-        // Update index
         val index = readIndex() ?: CacheIndex(entries = emptyList())
         val newEntry = CacheEntry(
-            pipelineId = result.resolved.pipelineId,
-            commitHash = result.resolved.commitHash,
+            commitHash = commitHash,
+            pipelineId = pipelineId,
             timestampMs = System.currentTimeMillis(),
         )
-        val updated = index.entries.filter { it.pipelineId != result.resolved.pipelineId } + newEntry
+        val updated = index.entries.filter { it.commitHash != commitHash } + newEntry
         writeIndex(CacheIndex(entries = updated))
-        log.info("Coverage cache: stored pipeline ${result.resolved.pipelineId} (${result.coverage.size} files)")
+
+        log.info("Coverage cache: stored commit $commitHash as COV4 (${cov4File.length() / 1024}KB, ${coverage.size} files)")
     }
 
     /**
@@ -101,10 +93,10 @@ class CoverageCacheService(private val project: Project) {
         if (remove.isEmpty()) return
 
         for (entry in remove) {
-            val dataFile = File(cacheDir(), "${entry.pipelineId}.json")
-            if (dataFile.exists()) {
-                dataFile.delete()
-                log.info("Coverage cache: cleaned up pipeline ${entry.pipelineId}")
+            val cov4File = File(cacheDir(), "${entry.commitHash}.cov4")
+            if (cov4File.exists()) {
+                cov4File.delete()
+                log.info("Coverage cache: cleaned up commit ${entry.commitHash}")
             }
         }
         writeIndex(CacheIndex(entries = keep))
@@ -138,18 +130,12 @@ class CoverageCacheService(private val project: Project) {
     }
 }
 
-data class CachedCoverage(
-    val coverage: Map<String, Map<Int, List<String>>>,
-    val commitHash: String,
-    val pipelineId: Long,
-)
-
 @Serializable
 private data class CacheIndex(val entries: List<CacheEntry>)
 
 @Serializable
 private data class CacheEntry(
-    val pipelineId: Long,
     val commitHash: String,
+    val pipelineId: Long,
     val timestampMs: Long,
 )

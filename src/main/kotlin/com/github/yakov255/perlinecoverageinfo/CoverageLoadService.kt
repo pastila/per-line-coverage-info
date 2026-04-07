@@ -64,21 +64,27 @@ class CoverageLoadService(private val project: Project) {
                     val resolver = CoverageResolver(gitLabClient, project)
                     val resolved = resolver.resolve()
 
-                    // Check disk cache
+                    // Check disk cache by commit hash
                     val cache = CoverageCacheService.getInstance(project)
-                    val cached = cache.get(resolved.pipelineId)
-                    if (cached != null) {
-                        log.info("Coverage: loaded from disk cache (pipeline ${resolved.pipelineId})")
-                        applyCoverage(CoverageLoadResult(
-                            coverage = cached.coverage,
-                            resolved = resolved,
-                            artifactCount = 0,
-                        ))
+                    val reader = cache.get(resolved.commitHash)
+                    if (reader != null) {
+                        log.info("Coverage: loaded from COV4 cache (commit ${resolved.commitHash})")
+                        val dataService = CoverageDataService.getInstance(project)
+                        dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
+                        dataService.setCov4Reader(reader)
+
+                        ApplicationManager.getApplication().invokeLater {
+                            CoverageHighlighter.applyToOpenEditors(project)
+                            notifyIfFallback(resolved)
+                        }
                         return
                     }
 
                     val result = downloadArtifacts(indicator, gitLabClient, resolved)
-                    cache.put(result)
+
+                    // Write COV4 to cache
+                    cache.writeCov4(resolved.commitHash, resolved.pipelineId, result.coverage)
+
                     applyCoverage(result)
                 } catch (ex: CoverageApiException) {
                     log.warn("Coverage error", ex)
@@ -224,17 +230,20 @@ class CoverageLoadService(private val project: Project) {
 
         ApplicationManager.getApplication().invokeLater {
             CoverageHighlighter.applyToOpenEditors(project)
+            notifyIfFallback(result.resolved)
+        }
+    }
 
-            if (result.resolved.fallback) {
-                NotificationGroupManager.getInstance()
-                    .getNotificationGroup("Coverage Notifications")
-                    .createNotification(
-                        "Coverage loaded from latest pipeline",
-                        "Coverage may not exactly match your current code.\n${result.resolved.fallbackReason}",
-                        NotificationType.WARNING,
-                    )
-                    .notify(project)
-            }
+    private fun notifyIfFallback(resolved: ResolvedPipeline) {
+        if (resolved.fallback) {
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup("Coverage Notifications")
+                .createNotification(
+                    "Coverage loaded from latest pipeline",
+                    "Coverage may not exactly match your current code.\n${resolved.fallbackReason}",
+                    NotificationType.WARNING,
+                )
+                .notify(project)
         }
     }
 
