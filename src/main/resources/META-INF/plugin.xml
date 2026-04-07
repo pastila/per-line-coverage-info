@@ -58,5 +58,9 @@
                 text="Hide Coverage" description="Hide coverage annotations from all editors">
             <add-to-group group-id="EditorGutterPopupMenu" anchor="after" relative-to-action="EditorGutterVcsPopupMenu"/>
         </action>
+        <action id="ShowCoverageInGutter" class="com.github.yakov255.perlinecoverageinfo.ShowCoverageGutterAction"
+                text="Show Coverage" description="Show coverage annotations in all editors">
+            <add-to-group group-id="EditorGutterPopupMenu" anchor="after" relative-to-action="HideCoverageFromGutter"/>
+        </action>
     </actions>
 </idea-plugin>
