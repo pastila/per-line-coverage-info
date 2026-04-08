@@ -58,6 +58,86 @@ object BehatTestRunner {
         return settings
     }
 
+    /**
+     * Bundles multiple feature files / scenarios into a single Behat launch using the
+     * custom `--paths` option. [pathsByFile] maps a feature file absolute path to the
+     * list of 1-based scenario line numbers to run; an empty list means "run the
+     * entire file".
+     *
+     * Example produced CLI options (as a single string passed via test runner options):
+     *   --paths=features/a.feature:10,20 --paths=features/b.feature
+     */
+    private fun createMultiPathsConfig(
+        project: Project,
+        pathsByFile: Map<String, List<Int>>
+    ): com.intellij.execution.RunnerAndConfigurationSettings? {
+        if (pathsByFile.isEmpty()) return null
+        val configType = BehatRunConfigurationType.getInstance()
+        val factory = configType.configurationFactories.firstOrNull() ?: return null
+        val runManager = RunManager.getInstance(project)
+        val name = if (pathsByFile.size == 1) {
+            "Behat: ${pathsByFile.keys.first().substringAfterLast("/")}"
+        } else {
+            "Behat: ${pathsByFile.size} paths"
+        }
+        val settings = runManager.createConfiguration(name, factory)
+        val config = settings.configuration as? BehatRunConfiguration ?: return null
+
+        val runnerSettings = config.settings.runnerSettings
+        // Force ConfigurationFile scope so the handler does not append any positional
+        // path argument — paths are driven exclusively through `--paths`. We
+        // intentionally do NOT touch `isUseAlternativeConfigurationFile` or
+        // `configurationFilePath`: those are inherited from the run configuration
+        // template the user edits via "Edit Configuration Templates", so both the
+        // default `behat.yml` and a custom config file location are honored.
+        runnerSettings.scope = PhpTestRunnerSettings.Scope.ConfigurationFile
+
+        val pathsArgs = pathsByFile.entries.joinToString(" ") { (file, lines) ->
+            buildPathsArg(file, lines)
+        }
+        val existing = runnerSettings.testRunnerOptions.orEmpty()
+        runnerSettings.testRunnerOptions = if (existing.isBlank()) pathsArgs else "$existing $pathsArgs"
+        return settings
+    }
+
+    private fun buildPathsArg(file: String, lines: List<Int>): String {
+        val suffix = if (lines.isEmpty()) "" else ":${lines.joinToString(",")}"
+        // Quote the whole value when the path contains whitespace so the
+        // ParametersList tokenizer keeps it as a single argument.
+        return if (file.any { it.isWhitespace() }) "--paths=\"$file$suffix\"" else "--paths=$file$suffix"
+    }
+
+    /**
+     * Runs multiple feature files / scenarios in a single Behat launch.
+     * See [createMultiPathsConfig] for the [pathsByFile] format.
+     */
+    fun runMultiplePaths(
+        project: Project,
+        pathsByFile: Map<String, List<Int>>,
+        debug: Boolean = false
+    ) {
+        val settings = createMultiPathsConfig(project, pathsByFile) ?: return
+        execute(project, settings, debug)
+    }
+
+    /**
+     * Same as [runMultiplePaths] but invokes [onFinished] with the process exit code
+     * once the run completes (or with -1 if the run could not be started).
+     */
+    fun runMultiplePathsWithCallback(
+        project: Project,
+        pathsByFile: Map<String, List<Int>>,
+        onFinished: (Int) -> Unit,
+        debug: Boolean = false
+    ) {
+        val settings = createMultiPathsConfig(project, pathsByFile)
+        if (settings == null) {
+            onFinished(-1)
+            return
+        }
+        executeWithCallback(project, settings, onFinished, debug)
+    }
+
     private fun execute(
         project: Project,
         settings: com.intellij.execution.RunnerAndConfigurationSettings,
@@ -76,53 +156,22 @@ object BehatTestRunner {
         ProgramRunnerUtil.executeConfiguration(settings, executor)
     }
 
-    /**
-     * Runs a single scenario and invokes [onFinished] with the process exit code
-     * once the run completes. Exit code 0 means success.
-     * If the run cannot be started, [onFinished] is invoked with -1.
-     */
-    fun runScenarioWithCallback(
-        project: Project,
-        featureFilePath: String,
-        scenarioName: String,
-        onFinished: (Int) -> Unit
-    ) {
-        val settings = createScenarioConfig(project, featureFilePath, scenarioName)
-        if (settings == null) {
-            onFinished(-1)
-            return
-        }
-        executeWithCallback(project, settings, onFinished)
-    }
-
-    /**
-     * Runs an entire feature file and invokes [onFinished] with the process exit code
-     * once the run completes.
-     */
-    fun runFeatureFileWithCallback(
-        project: Project,
-        featureFilePath: String,
-        onFinished: (Int) -> Unit
-    ) {
-        val settings = createFeatureFileConfig(project, featureFilePath)
-        if (settings == null) {
-            onFinished(-1)
-            return
-        }
-        executeWithCallback(project, settings, onFinished)
-    }
-
     private fun executeWithCallback(
         project: Project,
         settings: com.intellij.execution.RunnerAndConfigurationSettings,
-        onFinished: (Int) -> Unit
+        onFinished: (Int) -> Unit,
+        debug: Boolean = false
     ) {
         val runManager = RunManager.getInstance(project)
         settings.isTemporary = true
         runManager.addConfiguration(settings)
         runManager.selectedConfiguration = settings
 
-        val executor = DefaultRunExecutor.getRunExecutorInstance()
+        val executor: Executor = if (debug) {
+            DefaultDebugExecutor.getDebugExecutorInstance()
+        } else {
+            DefaultRunExecutor.getRunExecutorInstance()
+        }
         val runner = ProgramRunner.getRunner(executor.id, settings.configuration)
         if (runner == null) {
             onFinished(-1)

@@ -147,12 +147,12 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
                 val group = DefaultActionGroup().apply {
                     if (canRunTest(testName)) {
-                        add(object : AnAction("Run Test") {
+                        add(object : AnAction("Run Test", null, AllIcons.Actions.Execute) {
                             override fun actionPerformed(e: AnActionEvent) {
                                 runTest(testName, debug = false)
                             }
                         })
-                        add(object : AnAction("Debug Test") {
+                        add(object : AnAction("Debug Test", null, AllIcons.Actions.StartDebugger) {
                             override fun actionPerformed(e: AnActionEvent) {
                                 runTest(testName, debug = true)
                             }
@@ -256,16 +256,51 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         val runAllAction = object : AnAction(
             "Run All",
-            "Run all Behat tests sequentially, stop on the first failing test",
+            "Run all Behat tests in a single launch via --paths",
             AllIcons.Actions.RunAll
         ) {
             override fun actionPerformed(e: AnActionEvent) {
-                runAllBehatSequentially()
+                runAllBehatBundled(debug = false)
             }
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = !runAllInProgress &&
                     BehatTestRunner.isAvailable() &&
                     allTests.any { isBehatTest(it) }
+            }
+            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+        }
+
+        val runAllDebugAction = object : AnAction(
+            "Run All With Debug",
+            "Debug all Behat tests in a single launch via --paths",
+            AllIcons.Actions.StartDebugger
+        ) {
+            override fun actionPerformed(e: AnActionEvent) {
+                runAllBehatBundled(debug = true)
+            }
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = !runAllInProgress &&
+                    BehatTestRunner.isAvailable() &&
+                    allTests.any { isBehatTest(it) }
+            }
+            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+        }
+
+        val runSelectedAction = object : AnAction(
+            "Run Selected",
+            "Run selected Behat tests in a single launch via --paths",
+            AllIcons.Actions.Execute
+        ) {
+            override fun actionPerformed(e: AnActionEvent) {
+                if (runAllInProgress) return
+                val sel = selectedBehatTests()
+                if (sel.isEmpty()) return
+                runBehatBundled(sel, debug = false)
+            }
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = !runAllInProgress &&
+                    BehatTestRunner.isAvailable() &&
+                    selectedBehatTests().isNotEmpty()
             }
             override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
         }
@@ -298,7 +333,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         val normalToolbar = ActionManager.getInstance().createActionToolbar(
             "CoverageTestsPanelToolbar",
-            DefaultActionGroup(runAllAction, Separator.getInstance(), findHeadAction, findWtAction),
+            DefaultActionGroup(runAllAction, runAllDebugAction, runSelectedAction, Separator.getInstance(), findHeadAction, findWtAction),
             true
         )
         normalToolbar.targetComponent = this
@@ -314,7 +349,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             DefaultActionGroup(
                 findHeadAction, findWtAction, refreshAction,
                 Separator.getInstance(),
-                runAllAction, removeSelectedAction,
+                runAllAction, runAllDebugAction, runSelectedAction, removeSelectedAction,
                 Separator.getInstance(),
                 backAction,
             ),
@@ -800,58 +835,75 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         }
     }
 
-    private fun runAllBehatSequentially() {
+    private fun runAllBehatBundled(debug: Boolean = false) {
         if (runAllInProgress) return
         if (!BehatTestRunner.isAvailable()) return
         val behatTests = allTests.filter { isBehatTest(it) }
         if (behatTests.isEmpty()) return
-        runAllInProgress = true
-        runBehatSequence(behatTests, 0)
+        runBehatBundled(behatTests, debug)
     }
 
-    private fun runBehatSequence(tests: List<String>, index: Int) {
-        if (index >= tests.size) {
-            runAllInProgress = false
-            return
-        }
-        val testName = tests[index]
-        val featurePath = testName.substringBeforeLast(":", "")
-        val lineStr = testName.substringAfterLast(":", "")
-        val lineNumber = lineStr.toIntOrNull()
+    /**
+     * Launches a single Behat process for [tests], using the custom `--paths` option
+     * to bundle multiple feature files / scenarios. Lines under the same feature file
+     * are grouped together (`--paths=foo.feature:10,20`); a test without a `:line`
+     * suffix is treated as "run the entire file".
+     */
+    private fun runBehatBundled(tests: List<String>, debug: Boolean) {
+        val pathsByFile = buildPathsByFile(tests)
+        if (pathsByFile.isEmpty()) return
+        runAllInProgress = true
+        BehatTestRunner.runMultiplePathsWithCallback(
+            project,
+            pathsByFile,
+            onFinished = { runAllInProgress = false },
+            debug = debug,
+        )
+    }
 
-        val projectDir = project.guessProjectDir()
-        val vf = projectDir?.let { VfsUtil.findRelativeFile(featurePath, it) }
-        if (vf == null) {
-            // Skip tests we can't resolve and continue.
-            ApplicationManager.getApplication().invokeLater {
-                runBehatSequence(tests, index + 1)
+    private fun buildPathsByFile(tests: List<String>): Map<String, List<Int>> {
+        val projectDir = project.guessProjectDir() ?: return emptyMap()
+        val map = linkedMapOf<String, MutableList<Int>>()
+        val wholeFile = mutableSetOf<String>()
+        for (test in tests) {
+            if (!isBehatTest(test)) continue
+            val featurePath = test.substringBeforeLast(":", test)
+            val lineStr = test.substringAfterLast(":", "")
+            val lineNumber = lineStr.toIntOrNull()
+            val vf = VfsUtil.findRelativeFile(featurePath, projectDir) ?: continue
+            val absolutePath = vf.path
+            val list = map.getOrPut(absolutePath) { mutableListOf() }
+            if (lineNumber == null) {
+                wholeFile.add(absolutePath)
+                list.clear()
+            } else if (absolutePath !in wholeFile) {
+                if (lineNumber !in list) list.add(lineNumber)
             }
-            return
         }
-        val absolutePath = vf.path
+        return map
+    }
 
-        val onFinished: (Int) -> Unit = { exitCode ->
-            if (exitCode == 0) {
-                ApplicationManager.getApplication().invokeLater {
-                    runBehatSequence(tests, index + 1)
+    /** Collects Behat tests reachable from the current tree selection (recursing into groups). */
+    private fun selectedBehatTests(): List<String> {
+        val paths = tree.selectionPaths ?: return emptyList()
+        val collected = linkedSetOf<String>()
+        for (p in paths) {
+            val node = p.lastPathComponent as? DefaultMutableTreeNode ?: continue
+            collectBehatLeaves(node, collected)
+        }
+        return collected.toList()
+    }
+
+    private fun collectBehatLeaves(node: DefaultMutableTreeNode, into: MutableSet<String>) {
+        when (val data = node.userObject) {
+            is TestNodeData.BehatScenario -> into.add(data.originalTestName)
+            is TestNodeData.BehatGroup -> into.add(data.featurePath)
+            else -> {
+                for (i in 0 until node.childCount) {
+                    val child = node.getChildAt(i) as? DefaultMutableTreeNode ?: continue
+                    collectBehatLeaves(child, into)
                 }
-            } else {
-                runAllInProgress = false
             }
-        }
-
-        if (lineNumber != null) {
-            val scenarioName = ReadAction.compute<String?, Throwable> {
-                val psiFile = PsiManager.getInstance(project).findFile(vf) as? GherkinFile ?: return@compute null
-                findScenarioAtLine(psiFile, lineNumber)
-            }
-            if (scenarioName != null) {
-                BehatTestRunner.runScenarioWithCallback(project, absolutePath, scenarioName, onFinished)
-            } else {
-                BehatTestRunner.runFeatureFileWithCallback(project, absolutePath, onFinished)
-            }
-        } else {
-            BehatTestRunner.runFeatureFileWithCallback(project, absolutePath, onFinished)
         }
     }
 
