@@ -127,28 +127,20 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
                 val node = path.lastPathComponent as? DefaultMutableTreeNode ?: return
                 val testName = resolveFullTestName(node) ?: return
 
-                val group = DefaultActionGroup().apply {
-                    if (canRunTest(testName)) {
-                        add(object : AnAction("Run Test", null, AllIcons.Actions.Execute) {
-                            override fun actionPerformed(e: AnActionEvent) {
-                                runTest(testName, debug = false)
-                            }
-                        })
-                        add(object : AnAction("Debug Test", null, AllIcons.Actions.StartDebugger) {
-                            override fun actionPerformed(e: AnActionEvent) {
-                                runTest(testName, debug = true)
-                            }
-                        })
-                    }
-                    add(object : AnAction("Go to Test") {
-                        override fun actionPerformed(e: AnActionEvent) {
-                            CoverageTestNavigator.navigateToTest(project, testName)
-                        }
+                val menu = javax.swing.JPopupMenu()
+                if (canRunTest(testName)) {
+                    menu.add(javax.swing.JMenuItem("Run Test", AllIcons.Actions.Execute).apply {
+                        addActionListener { runTest(testName, debug = false) }
                     })
+                    menu.add(javax.swing.JMenuItem("Debug Test", AllIcons.Actions.StartDebugger).apply {
+                        addActionListener { runTest(testName, debug = true) }
+                    })
+                    menu.addSeparator()
                 }
-                val popupMenu = ActionManager.getInstance()
-                    .createActionPopupMenu("CoverageTestsPanel", group)
-                popupMenu.component.show(comp, x, y)
+                menu.add(javax.swing.JMenuItem("Go to Test").apply {
+                    addActionListener { CoverageTestNavigator.navigateToTest(project, testName) }
+                })
+                menu.show(comp, x, y)
             }
         })
 
