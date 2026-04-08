@@ -8,14 +8,16 @@ class ShowCoverageGutterAction : AnAction() {
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
+        CoverageGutterVisibilityService.getInstance(project).visible = true
         CoverageHighlighter.applyToOpenEditors(project)
     }
 
     override fun update(e: AnActionEvent) {
         val project = e.project
-        // Show only when coverage data exists but highlights are currently hidden
+        // Show only when coverage data exists and highlights are currently hidden
         e.presentation.isEnabledAndVisible = project != null &&
-            CoverageDataService.getInstance(project).hasData()
+            CoverageDataService.getInstance(project).hasData() &&
+            !CoverageGutterVisibilityService.getInstance(project).visible
     }
 
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT

@@ -2,7 +2,6 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.diff.comparison.ComparisonManager
 import com.intellij.diff.comparison.ComparisonPolicy
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.DumbProgressIndicator
 
 /**
@@ -13,7 +12,8 @@ import com.intellij.openapi.progress.DumbProgressIndicator
  */
 object CoverageLineMapper {
 
-    private val log = Logger.getInstance(CoverageLineMapper::class.java)
+    @Suppress("unused")
+    private val log = CoverageLog.get(CoverageLineMapper::class.java)
 
     /**
      * Computes a line mapping from old content to current content using ComparisonManager.

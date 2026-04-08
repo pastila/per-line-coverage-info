@@ -4,7 +4,6 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import java.io.File
@@ -16,7 +15,7 @@ import java.util.zip.GZIPInputStream
  */
 class LoadLocalCoverageAction : AnAction() {
 
-    private val log = Logger.getInstance(LoadLocalCoverageAction::class.java)
+    private val log = CoverageLog.get(LoadLocalCoverageAction::class.java)
 
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
 

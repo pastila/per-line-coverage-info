@@ -5,7 +5,6 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -22,7 +21,7 @@ import com.intellij.openapi.ui.Messages
 @Service(Service.Level.PROJECT)
 class CoverageLoadService(private val project: Project) {
 
-    private val log = Logger.getInstance(CoverageLoadService::class.java)
+    private val log = CoverageLog.get(CoverageLoadService::class.java)
 
     /**
      * Validates that GitLab settings are configured.

@@ -1,6 +1,5 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.diagnostic.Logger
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
@@ -19,7 +18,7 @@ import java.util.zip.CRC32
  */
 class Cov4Reader(private val file: File) : AutoCloseable {
 
-    private val log = Logger.getInstance(Cov4Reader::class.java)
+    private val log = CoverageLog.get(Cov4Reader::class.java)
 
     private val tests: List<String>
     private val fileIndex: Map<Long, IndexEntry>  // pathHash → entry

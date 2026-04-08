@@ -15,9 +15,13 @@
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.LineMappingService"/>
         <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageGutterVisibilityService"/>
+        <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageLoadService"/>
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageCacheService"/>
+        <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.AffectedTestsService"/>
         <applicationConfigurable
             parentId="tools"
             instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"

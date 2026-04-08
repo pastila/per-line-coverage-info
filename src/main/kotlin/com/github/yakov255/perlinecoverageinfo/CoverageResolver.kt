@@ -1,6 +1,5 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import java.io.File
 
@@ -17,7 +16,7 @@ class CoverageResolver(
     private val project: Project,
 ) {
 
-    private val log = Logger.getInstance(CoverageResolver::class.java)
+    private val log = CoverageLog.get(CoverageResolver::class.java)
 
     fun resolve(): ResolvedPipeline {
         val basePath = project.basePath

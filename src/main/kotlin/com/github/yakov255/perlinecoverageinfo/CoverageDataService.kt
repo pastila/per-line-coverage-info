@@ -2,7 +2,6 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 
 /**
@@ -18,7 +17,7 @@ import com.intellij.openapi.project.Project
 @Service(Service.Level.PROJECT)
 class CoverageDataService(private val project: Project) {
 
-    private val log = Logger.getInstance(CoverageDataService::class.java)
+    private val log = CoverageLog.get(CoverageDataService::class.java)
 
     /** In-memory coverage: file-path → (line-number → list-of-test-names) */
     private val data = mutableMapOf<String, Map<Int, List<String>>>()

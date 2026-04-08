@@ -1,6 +1,5 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.diagnostic.Logger
 import kotlinx.serialization.json.Json
 import java.net.URI
 import java.net.URLEncoder
@@ -11,7 +10,7 @@ import java.time.Duration
 
 class GitLabApiClient(baseUrl: String, private val privateToken: String) {
 
-    private val log = Logger.getInstance(GitLabApiClient::class.java)
+    private val log = CoverageLog.get(GitLabApiClient::class.java)
     private val baseUrl = baseUrl.trimEnd('/')
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -22,7 +21,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
 
     private inline fun <reified T> makeRequest(endpoint: String): T {
         val url = "${this.baseUrl}$endpoint"
-        log.warn("[DEBUG] GitLab API request: GET $url")
+        log.debug("GitLab API request: GET $url")
         val request = HttpRequest.newBuilder()
             .uri(URI.create(url))
             .GET()
@@ -32,7 +31,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
         val response = try {
             httpClient.send(request, HttpResponse.BodyHandlers.ofString())
         } catch (e: Exception) {
-            log.warn("[DEBUG] GitLab API network error for $url", e)
+            log.warn("GitLab API network error for $url", e)
             throw CoverageApiException(
                 "Network error contacting GitLab API",
                 e,
@@ -40,7 +39,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                 kind = CoverageErrorKind.NETWORK,
             )
         }
-        log.warn("[DEBUG] GitLab API response: HTTP ${response.statusCode()} for $url, body=${response.body().take(200)}")
+        log.debug("GitLab API response: HTTP ${response.statusCode()} for $url, body=${response.body().take(200)}")
         if (response.statusCode() != 200) {
             val body = response.body().take(500)
             log.warn("GitLab API returned HTTP ${response.statusCode()} for $url. Body: $body")

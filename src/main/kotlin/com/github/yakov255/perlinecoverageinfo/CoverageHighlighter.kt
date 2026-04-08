@@ -26,9 +26,20 @@ object CoverageHighlighter {
         }
     }
 
+    fun clearAllEditors(project: Project) {
+        for (editor in EditorFactory.getInstance().allEditors) {
+            if (editor.project != project) continue
+            clearCoverageHighlighters(editor)
+        }
+    }
+
     fun applyToEditor(editor: Editor, project: Project) {
         val dataService = CoverageDataService.getInstance(project)
         if (!dataService.hasData()) return
+        if (!CoverageGutterVisibilityService.getInstance(project).visible) {
+            clearCoverageHighlighters(editor)
+            return
+        }
 
         val document = editor.document
         val virtualFile = FileDocumentManager.getInstance().getFile(document) ?: return
@@ -75,13 +86,6 @@ object CoverageHighlighter {
         val fileVf = LocalFileSystem.getInstance().findFileByPath(absolutePath) ?: return null
         val relativePath = VfsUtil.getRelativePath(fileVf, baseVf) ?: return null
 
-        return dataService.getCoverage(absolutePath)
-            ?: dataService.getCoverage(relativePath)
-            ?: dataService.getCoverage("/$relativePath")
-            ?: dataService.allFiles().firstNotNullOfOrNull { storedPath ->
-                if (storedPath.endsWith(relativePath) || relativePath.endsWith(storedPath.trimStart('/'))) {
-                    dataService.getCoverage(storedPath)
-                } else null
-            }
+        return CoveragePathResolver.resolve(dataService, listOf(absolutePath, relativePath))
     }
 }

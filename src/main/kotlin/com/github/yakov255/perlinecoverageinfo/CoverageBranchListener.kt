@@ -1,6 +1,5 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.vcs.BranchChangeListener
 
@@ -10,7 +9,7 @@ import com.intellij.openapi.vcs.BranchChangeListener
  */
 class CoverageBranchListener(private val project: Project) : BranchChangeListener {
 
-    private val log = Logger.getInstance(CoverageBranchListener::class.java)
+    private val log = CoverageLog.get(CoverageBranchListener::class.java)
 
     override fun branchWillChange(branchName: String) {
         // Don't clear coverage — offline-first will replace it with cached data

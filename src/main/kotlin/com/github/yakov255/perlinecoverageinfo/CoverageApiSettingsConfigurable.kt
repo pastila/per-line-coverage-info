@@ -2,7 +2,6 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.HyperlinkLabel
@@ -18,7 +17,7 @@ import javax.swing.event.DocumentListener
 
 class CoverageApiSettingsConfigurable : Configurable {
 
-    private val log = Logger.getInstance(CoverageApiSettingsConfigurable::class.java)
+    private val log = CoverageLog.get(CoverageApiSettingsConfigurable::class.java)
 
     private val gitlabDomainField = JBTextField()
     private val bearerTokenField = JBTextField()
@@ -131,7 +130,7 @@ class CoverageApiSettingsConfigurable : Configurable {
                 try {
                     val client = GitLabApiClient("https://$domain", token)
                     val projects = client.listMemberProjects()
-                    log.warn("[DEBUG] listMemberProjects returned ${projects.size} results")
+                    log.debug("listMemberProjects returned ${projects.size} results")
 
                     SwingUtilities.invokeLater {
                         allProjects = projects
@@ -139,7 +138,7 @@ class CoverageApiSettingsConfigurable : Configurable {
                         statusLabel.text = "${projects.size} project(s) loaded"
                     }
                 } catch (e: Exception) {
-                    log.warn("[DEBUG] load projects failed: ${e::class.simpleName}: ${e.message}", e)
+                    log.warn("load projects failed: ${e::class.simpleName}: ${e.message}", e)
                     SwingUtilities.invokeLater {
                         statusLabel.text = "Failed to load: ${e.message}"
                     }

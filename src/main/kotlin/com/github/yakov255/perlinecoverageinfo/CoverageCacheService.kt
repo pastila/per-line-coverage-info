@@ -2,7 +2,6 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -25,7 +24,7 @@ import java.io.File
 @Service(Service.Level.PROJECT)
 class CoverageCacheService(private val project: Project) {
 
-    private val log = Logger.getInstance(CoverageCacheService::class.java)
+    private val log = CoverageLog.get(CoverageCacheService::class.java)
     private val json = Json { prettyPrint = false }
 
     private fun cacheDir(): File {

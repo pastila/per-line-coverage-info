@@ -1,6 +1,5 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.diagnostic.Logger
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.GZIPInputStream
@@ -14,7 +13,7 @@ import java.util.zip.ZipInputStream
  */
 object BinaryCoverageParser {
 
-    private val log = Logger.getInstance(BinaryCoverageParser::class.java)
+    private val log = CoverageLog.get(BinaryCoverageParser::class.java)
 
     private const val MAGIC = 0x434F5654u       // "COVT"
     private const val VERSION = 1u

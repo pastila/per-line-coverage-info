@@ -63,24 +63,37 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 | `CoverageGutterRenderer.kt` | `LineMarkerRenderer` drawing the gutter strip + click popup listing the covering tests. Uses `BehatTestRunner` to re-run a selected test. |
 | `CoverageIcons.kt` | Icon constants (green/red). |
 | `CoverageEditorListener.kt` | `EditorFactoryListener` — applies highlights on editor open, installs a debounced `DocumentListener` (300ms) that re-applies highlights after edits so the line mapping refreshes. |
-| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Editor gutter popup actions to toggle coverage display. |
+| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Editor gutter popup actions to toggle coverage display **project-wide**. They flip `CoverageGutterVisibilityService` and either `clearAllEditors` or `applyToOpenEditors`. The actions are mutually exclusive in the popup (only the relevant one is visible) and require coverage data to exist. |
+| `CoverageGutterVisibilityService.kt` | Project-level `PersistentStateComponent` (`coverageGutterVisibility.xml`) holding a single `visible: Boolean` flag. Persists across IDE restarts. `CoverageHighlighter.applyToEditor` early-returns (and clears) when `visible == false`, so newly opened editors and document-change re-highlights also respect the toggle. |
 
 ### Tests tool window
 | File | Purpose |
 |------|---------|
-| `CoverageTestsToolWindowFactory.kt` | Registers the **Coverage Tests** bottom tool window. |
-| `CoverageTestsPanel.kt` | UI listing tests covering the current file/line, with run/debug buttons hooking into `BehatTestRunner`. |
+| `CoverageTestsToolWindowFactory.kt` | Registers the **Coverage Tests** bottom tool window with two tabs: **Tests** (`CoverageTestsPanel`) and **Log** (`CoverageLogPanel`). Both contents are non-closable. |
+| `CoverageTestsPanel.kt` | Dual-mode UI. **Normal mode** (per-line): lists tests covering the clicked line, groups by feature file / PHPUnit class, Run All action. **Affected mode** (per-change): activated by Find HEAD / Find Working Tree toolbar buttons; shows a `OnePixelSplitter` with a `CheckboxTree` of affected files on the left and the test tree on the right. Files pane supports tree/flat toggle, expand/collapse all, check/uncheck all, per-node Δ (unique contribution). Toolbar: Find HEAD, Find Working Tree, Refresh, Run All, Remove Selected, Back. F5 = Refresh. Switches back to normal mode via Back. |
+| `CoverageLogPanel.kt` | Log tab. Wraps an IntelliJ `ConsoleView` (scrollback / search / copy for free) and subscribes to `CoverageLogService` via the atomic `subscribe(parent, listener)` so the backfill and live stream are gap-free and dupe-free. Maps `CoverageLogService.Level` → `ConsoleViewContentType.LOG_*_OUTPUT` for level-colored output. Toolbar exposes Clear (wipes both buffer and console) and Scroll-to-End. |
+
+### Affected-tests analysis
+| File | Purpose |
+|------|---------|
+| `ChangedLinesAnalyzer.kt` | Runs `git diff -U0 -M <coverageCommit> [HEAD]` and parses the unified diff into `List<FileChange>`. Each `FileChange` carries the old-side line numbers affected by the hunk (those are the coverage-map keys to look up). Supports two modes: `COMMITTED` (diff to HEAD) and `WORKING_TREE` (diff to working tree including unstaged changes). |
+| `CoveragePathResolver.kt` | Shared path-lookup helper used by both `CoverageHighlighter` and `AffectedTestsService`. Tries each candidate path as-is, with a leading `/`, and finally via suffix match across all stored paths. Centralises the four-way path normalization so it stays consistent. |
+| `AffectedTestsService.kt` | Project service. Calls `ChangedLinesAnalyzer.analyze()`, looks up each affected old line in `CoverageDataService` via `CoveragePathResolver`, and returns `AffectedTests(tests, perFile, newFiles, deletedFiles, filesWithoutCoverage, mode)`. |
+| `AffectedTestsModel.kt` | Pure (Swing-free) data model for the affected-files view. Holds `perFile`, a reverse index `test→files`, mutable `checkedFiles` and `removedTests`. Exposes `displayedTests` (union over checked files minus removed) and `deltaForFiles(subtreeFiles)` (number of currently-displayed tests that would disappear if the subtree were unchecked). All recomputation is O(tests × depth); unit-testable without Swing. |
+| `ToggleAffectedFilesViewAction.kt` | `ToggleAction` for the files-pane toolbar: switches between tree view and flat list. Stateless — reads/writes state via lambdas injected from `CoverageTestsPanel`. |
 
 ### Behat runner
 | File | Purpose |
 |------|---------|
-| `BehatTestRunner.kt` | Locates Behat run configuration template and executes a specific scenario (`feature:line` form) from the gutter popup / tool window. |
+| `BehatTestRunner.kt` | Locates Behat run configuration template and executes a specific scenario (`feature:line` form) from the gutter popup / tool window. The `*WithCallback` variants build the run via `ExecutionEnvironmentBuilder.build(callback)` and attach a `ProcessAdapter` so callers (e.g. the panel's Run All) get notified with the process exit code on `processTerminated` and can chain runs. |
 
-### Errors & telemetry
+### Errors, logging & telemetry
 | File | Purpose |
 |------|---------|
 | `CoverageApiException.kt` | Typed exception with `CoverageErrorKind` (`NETWORK`, `GITLAB_API`, `PARSE`, `ARTIFACT_PARSE`, `GIT`, `NO_DATA`, `PROJECT_SETUP`) and a detail map surfaced in error dialogs. |
 | `CoverageErrorReporter.kt` | IDE `ErrorReportSubmitter` for "Submit" button on plugin exceptions. |
+| `CoverageLog.kt` | Plugin-wide logger wrapper. `CoverageLog.get(Foo::class.java)` returns an object whose `info/warn/error/debug` methods write to **both** the platform `Logger` (so messages still land in `idea.log`) **and** `CoverageLogService` (so they appear in the Log tab). All plugin code uses this — never `Logger.getInstance` directly. |
+| `CoverageLogService.kt` | Application-level service holding a bounded ring buffer (`MAX_ENTRIES = 2000`) of `LogEntry(timestampMs, level, loggerName, message, throwable?)`. Thread-safe. `subscribe(Disposable, Listener)` atomically returns the backfill and registers a listener that fires for every subsequent append; `addListener` / `removeListener` are Disposable-free helpers used by unit tests. Listener exceptions are swallowed so a bad consumer can't break logging. |
 
 ## End-to-end Flow (GitLab path)
 
@@ -109,19 +122,20 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 
 ```bash
 ./gradlew compileKotlin   # compile
-./gradlew test            # unit tests (BinaryCoverageParserTest, Cov4WriterReaderTest, GitLabModelsTest)
+./gradlew test            # unit tests (BinaryCoverageParserTest, Cov4WriterReaderTest, GitLabModelsTest, AffectedTestsModelTest, ChangedLinesAnalyzerTest, CoverageLogServiceTest)
 ./gradlew buildPlugin     # distributable zip
 ./gradlew runIde          # sandbox IDE with the plugin
 ```
 
 ## Conventions
 
+- **Logging**: every plugin class declares `private val log = CoverageLog.get(Foo::class.java)` — never `Logger.getInstance(...)` directly. This ensures messages reach both `idea.log` and the in-IDE Log tab.
 - **HTTP**: Java's built-in `java.net.http.HttpClient`, no external HTTP deps.
 - **Git**: command-line `git` via `ProcessBuilder` (see `CoverageResolver.runGitCommand`); no JGit.
 - **Serialization**: kotlinx-serialization for GitLab JSON models and the cache index.
 - **Threading**: all network / parsing work runs under `Task.Backgroundable`; UI mutations via `ApplicationManager.getApplication().invokeLater`.
 - **Line numbers**: coverage data is **1-based** throughout (COVT, COV4, `LineMappingService`, highlighter loops offset by `+1`).
-- **Paths**: coverage files are stored with project-relative paths. `CoverageHighlighter.findCoverageForFile` tries absolute → relative → `/relative` → suffix-match before giving up. `LineMappingService.toGitRelativePath` rebases project-relative paths to the git root for `git show`.
+- **Paths**: coverage files are stored with project-relative paths. Path lookup always goes through `CoveragePathResolver.resolve()` which tries absolute → relative → `/relative` → suffix-match. `LineMappingService.toGitRelativePath` rebases project-relative paths to the git root for `git show`.
 - **Cache key**: commit hash, not pipeline ID.
 - **Error surfacing**: throw `CoverageApiException` with a `CoverageErrorKind`; `CoverageLoadService.errorTitle` maps to user-visible dialog titles. Silent-mode callers (auto-trigger) only log.
 - **Notifications**: use the `Coverage Notifications` group registered in `plugin.xml` (balloon type).
