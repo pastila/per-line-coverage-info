@@ -79,6 +79,7 @@ class CoverageCacheService(private val project: Project) {
 
     /**
      * Writes merged coverage data to a .cov4 cache file.
+     * Computes and persists coverage statistics (file count, line counts) into the cache index.
      */
     fun writeCov4(commitHash: String, pipelineId: Long, coverage: Map<String, Map<Int, List<String>>>) {
         val dir = cacheDir()
@@ -92,16 +93,47 @@ class CoverageCacheService(private val project: Project) {
             return
         }
 
+        val totalFiles = coverage.size
+        val totalLines = coverage.values.sumOf { it.size }
+        val coveredLines = coverage.values.sumOf { lineMap -> lineMap.values.count { it.isNotEmpty() } }
+
         val index = readIndex() ?: CacheIndex(entries = emptyList())
         val newEntry = CacheEntry(
             commitHash = commitHash,
             pipelineId = pipelineId,
             timestampMs = System.currentTimeMillis(),
+            totalFiles = totalFiles,
+            totalLines = totalLines,
+            coveredLines = coveredLines,
         )
         val updated = index.entries.filter { it.commitHash != commitHash } + newEntry
         writeIndex(CacheIndex(entries = updated))
 
-        log.info("Coverage cache: stored commit $commitHash as COV4 (${cov4File.length() / 1024}KB, ${coverage.size} files)")
+        log.info("Coverage cache: stored commit $commitHash as COV4 (${cov4File.length() / 1024}KB, $totalFiles files, $coveredLines/$totalLines lines covered)")
+    }
+
+    /**
+     * Returns metadata for all locally cached artifacts, sorted newest-first.
+     * Entries whose .cov4 file is missing from disk are excluded.
+     */
+    fun listArtifacts(): List<ArtifactInfo> {
+        val dir = cacheDir()
+        val index = readIndex() ?: return emptyList()
+        return index.entries
+            .sortedByDescending { it.timestampMs }
+            .mapNotNull { entry ->
+                val cov4File = File(dir, "${entry.commitHash}.cov4")
+                if (!cov4File.exists()) return@mapNotNull null
+                ArtifactInfo(
+                    commitHash = entry.commitHash,
+                    pipelineId = entry.pipelineId,
+                    timestampMs = entry.timestampMs,
+                    fileSizeBytes = cov4File.length(),
+                    totalFiles = entry.totalFiles,
+                    totalLines = entry.totalLines,
+                    coveredLines = entry.coveredLines,
+                )
+            }
     }
 
     /**
@@ -211,4 +243,25 @@ private data class CacheEntry(
     val commitHash: String,
     val pipelineId: Long,
     val timestampMs: Long,
+    val totalFiles: Int = 0,
+    val totalLines: Int = 0,
+    val coveredLines: Int = 0,
 )
+
+/**
+ * Public metadata for a locally cached coverage artifact,
+ * used by [CoverageArtifactsPanel] to display the artifact list.
+ */
+data class ArtifactInfo(
+    val commitHash: String,
+    val pipelineId: Long,
+    val timestampMs: Long,
+    val fileSizeBytes: Long,
+    val totalFiles: Int,
+    val totalLines: Int,
+    val coveredLines: Int,
+) {
+    /** Percentage of tracked lines covered by at least one test, or null for legacy entries. */
+    val coveragePercent: Float?
+        get() = if (totalLines > 0) coveredLines.toFloat() / totalLines * 100f else null
+}

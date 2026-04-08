@@ -24,5 +24,11 @@ class CoverageTestsToolWindowFactory : ToolWindowFactory {
         }
         Disposer.register(logContent, logPanel)
         contentManager.addContent(logContent)
+
+        val artifactsPanel = CoverageArtifactsPanel(project)
+        val artifactsContent = contentFactory.createContent(artifactsPanel, "Artifacts", false).apply {
+            isCloseable = false
+        }
+        contentManager.addContent(artifactsContent)
     }
 }

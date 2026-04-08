@@ -90,8 +90,9 @@ class CoverageLoadService(private val project: Project) {
     /**
      * Loads coverage from GitLab in a background task with progress indicator.
      * @param showErrors If true, shows error dialogs on failure. If false (auto-trigger), logs errors silently.
+     * @param onComplete Called on the EDT when the task finishes (success or failure), so callers can refresh UI.
      */
-    fun loadFromGitLab(showErrors: Boolean = true) {
+    fun loadFromGitLab(showErrors: Boolean = true, onComplete: (() -> Unit)? = null) {
         val validationError = validateSettings()
         if (validationError != null) {
             if (showErrors) {
@@ -99,6 +100,7 @@ class CoverageLoadService(private val project: Project) {
             } else {
                 log.info("Coverage auto-load skipped: $validationError")
             }
+            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
             return
         }
 
@@ -166,6 +168,8 @@ class CoverageLoadService(private val project: Project) {
                             )
                         }
                     }
+                } finally {
+                    onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
                 }
             }
         })
