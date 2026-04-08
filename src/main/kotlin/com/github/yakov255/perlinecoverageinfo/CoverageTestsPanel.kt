@@ -358,6 +358,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
     private fun buildTree(tests: List<String>) {
         rootNode.removeAllChildren()
+        treeModel.reload()
 
         if (tests.isEmpty()) {
             rootNode.add(DefaultMutableTreeNode("No tests covering this line"))
@@ -365,6 +366,28 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             return
         }
 
+        // Resolve scenario names via PSI off the EDT, then populate the tree on EDT.
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val scenarioLabels = resolveScenarioLabels(tests)
+            ApplicationManager.getApplication().invokeLater {
+                populateTreeNodes(tests, scenarioLabels)
+            }
+        }
+    }
+
+    /** Resolves Behat scenario display labels via PSI. Must be called off the EDT. */
+    private fun resolveScenarioLabels(tests: List<String>): Map<String, String> {
+        return tests.filter { isBehatTest(it) }.associate { testName ->
+            val featurePath = testName.substringBeforeLast(":", testName)
+            val line = testName.substringAfterLast(":", "")
+            val label = CoverageTestNavigator.resolveScenarioName(project, featurePath, line) ?: "line $line"
+            testName to label
+        }
+    }
+
+    /** Populates the tree with resolved node data. Must be called on the EDT. */
+    private fun populateTreeNodes(tests: List<String>, scenarioLabels: Map<String, String>) {
+        rootNode.removeAllChildren()
         val (behatTests, phpunitTests) = tests.partition { isBehatTest(it) }
 
         // Group Behat tests by feature file path
@@ -375,9 +398,8 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             for ((featurePath, entries) in behatGrouped.toSortedMap()) {
                 val fileNode = DefaultMutableTreeNode(TestNodeData.BehatGroup(featurePath))
                 for (entry in entries) {
-                    val line = entry.substringAfterLast(":", "")
-                    val scenarioLabel = CoverageTestNavigator.resolveScenarioName(project, featurePath, line) ?: "line $line"
-                    fileNode.add(DefaultMutableTreeNode(TestNodeData.BehatScenario(scenarioLabel, entry)))
+                    val label = scenarioLabels[entry] ?: "line ${entry.substringAfterLast(":", "")}"
+                    fileNode.add(DefaultMutableTreeNode(TestNodeData.BehatScenario(label, entry)))
                 }
                 rootNode.add(fileNode)
             }
@@ -400,7 +422,6 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         }
 
         treeModel.reload()
-        // Expand all nodes
         for (i in 0 until tree.rowCount) {
             tree.expandRow(i)
         }
