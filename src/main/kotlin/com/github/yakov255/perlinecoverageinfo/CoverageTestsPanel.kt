@@ -1,11 +1,14 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.icons.AllIcons
-import com.intellij.openapi.actionSystem.*
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionToolbar
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.ReadAction
-import com.intellij.openapi.fileEditor.FileEditorManager
-import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
@@ -13,12 +16,6 @@ import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.wm.ToolWindowManager
-import com.intellij.psi.PsiManager
-import com.intellij.psi.search.FilenameIndex
-import com.intellij.psi.search.GlobalSearchScope
-import com.intellij.ui.CheckboxTree
-import com.intellij.ui.CheckboxTreeListener
-import com.intellij.ui.CheckedTreeNode
 import com.intellij.ui.ColoredTreeCellRenderer
 import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.PopupHandler
@@ -28,8 +25,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.treeStructure.Tree
 import com.intellij.util.ui.JBUI
 import icons.BehatIcons
-import org.jetbrains.plugins.cucumber.psi.GherkinFile
-import org.jetbrains.plugins.cucumber.psi.GherkinStepsHolder
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Cursor
@@ -42,22 +37,6 @@ import javax.swing.JTree
 import javax.swing.KeyStroke
 import javax.swing.tree.DefaultMutableTreeNode
 import javax.swing.tree.DefaultTreeModel
-
-private sealed class TestNodeData(val displayName: String) {
-    class BehatGroup(val featurePath: String) : TestNodeData(featurePath)
-    class BehatScenario(val label: String, val originalTestName: String) : TestNodeData(label)
-    class PhpUnitGroup(val className: String) : TestNodeData(className)
-    class PhpUnitMethod(val methodName: String, val fullTestName: String) : TestNodeData(methodName)
-}
-
-/** Node payloads for the affected-files pane (CheckboxTree). */
-private sealed class FileNodeData {
-    /** Directory subtree node. [files] is the set of file paths under this directory. */
-    class Dir(val displayName: String, val files: Set<String>) : FileNodeData()
-
-    /** Leaf file node. */
-    class FileEntry(val path: String, val displayName: String) : FileNodeData()
-}
 
 class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
@@ -76,11 +55,15 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     // ── Affected mode ───────────────────────────────────────────────
     private var affectedModel: AffectedTestsModel? = null
     private var lastDiffMode: ChangedLinesAnalyzer.DiffMode? = null
-    private var isTreeView = true
 
-    // Files checkbox tree
-    private val filesRoot = CheckedTreeNode(null)
-    private val filesTree: CheckboxTree
+    private val affectedFilesPane: AffectedFilesPane = AffectedFilesPane(project, ::onAffectedFilesCheckedChanged)
+
+    private fun onAffectedFilesCheckedChanged() {
+        val model = affectedModel ?: return
+        affectedFilesPane.syncModelFromTree(model)
+        updateTestsFromModel()
+    }
+
     private val affectedStatusLabel = JBLabel("")
 
     // Layout
@@ -91,7 +74,6 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     private val affectedPanel = JPanel(BorderLayout())
     private val splitter = OnePixelSplitter(false, 0.35f)
     private val affectedToolbarRef: ActionToolbar
-    private var syncPending = false
 
     init {
         // ── Shared test-tree setup ──────────────────────────────────
@@ -132,7 +114,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
                 if (e.clickCount == 2) {
                     val node = tree.lastSelectedPathComponent as? DefaultMutableTreeNode ?: return
                     val testName = resolveFullTestName(node) ?: return
-                    navigateToTest(testName)
+                    CoverageTestNavigator.navigateToTest(project, testName)
                 }
             }
         })
@@ -160,61 +142,13 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
                     }
                     add(object : AnAction("Go to Test") {
                         override fun actionPerformed(e: AnActionEvent) {
-                            navigateToTest(testName)
+                            CoverageTestNavigator.navigateToTest(project, testName)
                         }
                     })
                 }
                 val popupMenu = ActionManager.getInstance()
                     .createActionPopupMenu("CoverageTestsPanel", group)
                 popupMenu.component.show(comp, x, y)
-            }
-        })
-
-        // ── Files checkbox tree ─────────────────────────────────────
-        filesTree = CheckboxTree(object : CheckboxTree.CheckboxTreeCellRenderer() {
-            override fun customizeRenderer(
-                tree: JTree?, value: Any?, selected: Boolean,
-                expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean
-            ) {
-                val node = value as? CheckedTreeNode ?: return
-                val model = affectedModel ?: return
-                val r = textRenderer
-                when (val data = node.userObject) {
-                    is FileNodeData.Dir -> {
-                        r.icon = AllIcons.Nodes.Folder
-                        val testCount = data.files
-                            .flatMapTo(linkedSetOf<String>()) { model.perFile[it] ?: emptySet() }
-                            .size
-                        r.append("$testCount ", SimpleTextAttributes.REGULAR_ATTRIBUTES)
-                        val delta = model.deltaForFiles(data.files)
-                        if (delta > 0) {
-                            r.append("(-$delta) ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                        }
-                        r.append(data.displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
-                    }
-                    is FileNodeData.FileEntry -> {
-                        r.icon = AllIcons.FileTypes.Any_type
-                        val tests = model.perFile[data.path] ?: emptySet()
-                        r.append("${tests.size} ", SimpleTextAttributes.REGULAR_ATTRIBUTES)
-                        val delta = model.deltaForFiles(setOf(data.path))
-                        if (delta > 0) {
-                            r.append("(-$delta) ", SimpleTextAttributes.GRAYED_ATTRIBUTES)
-                        }
-                        r.append(data.displayName, SimpleTextAttributes.REGULAR_ATTRIBUTES)
-                    }
-                }
-            }
-        }, filesRoot)
-
-        filesTree.addCheckboxTreeListener(object : CheckboxTreeListener {
-            override fun nodeStateChanged(node: CheckedTreeNode) {
-                if (!syncPending) {
-                    syncPending = true
-                    ApplicationManager.getApplication().invokeLater {
-                        syncPending = false
-                        syncModelFromTree()
-                    }
-                }
             }
         })
 
@@ -327,7 +261,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         titleLabel.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
         titleLabel.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
-                navigateToSourceLine()
+                CoverageTestNavigator.navigateToSourceLine(project, currentFilePath, currentLineNumber)
             }
         })
 
@@ -363,71 +297,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         affectedTop.add(affectedToolbarRef.component, BorderLayout.WEST)
         affectedTop.add(affectedStatusLabel, BorderLayout.CENTER)
 
-        // Files pane with its own toolbar
-        val treeToggleAction = ToggleAffectedFilesViewAction(
-            isTreeView = { isTreeView },
-            toggle = { state ->
-                isTreeView = state
-                refreshFilesTree()
-            },
-        )
-
-        val expandAllAction = object : AnAction(
-            "Expand All", "Expand all nodes", AllIcons.Actions.Expandall
-        ) {
-            override fun actionPerformed(e: AnActionEvent) {
-                for (i in 0 until filesTree.rowCount) filesTree.expandRow(i)
-            }
-            override fun getActionUpdateThread() = ActionUpdateThread.EDT
-        }
-
-        val collapseAllAction = object : AnAction(
-            "Collapse All", "Collapse all nodes", AllIcons.Actions.Collapseall
-        ) {
-            override fun actionPerformed(e: AnActionEvent) {
-                for (i in filesTree.rowCount - 1 downTo 1) filesTree.collapseRow(i)
-            }
-            override fun getActionUpdateThread() = ActionUpdateThread.EDT
-        }
-
-        val checkAllAction = object : AnAction(
-            "Check All", "Check all files", AllIcons.Actions.Selectall
-        ) {
-            override fun actionPerformed(e: AnActionEvent) {
-                affectedModel?.checkAll()
-                refreshFilesTree()
-                updateTestsFromModel()
-            }
-            override fun getActionUpdateThread() = ActionUpdateThread.EDT
-        }
-
-        val uncheckAllAction = object : AnAction(
-            "Uncheck All", "Uncheck all files", AllIcons.Actions.Unselectall
-        ) {
-            override fun actionPerformed(e: AnActionEvent) {
-                affectedModel?.uncheckAll()
-                refreshFilesTree()
-                updateTestsFromModel()
-            }
-            override fun getActionUpdateThread() = ActionUpdateThread.EDT
-        }
-
-        val filesToolbar = ActionManager.getInstance().createActionToolbar(
-            "AffectedFilesToolbar",
-            DefaultActionGroup(
-                treeToggleAction, expandAllAction, collapseAllAction,
-                Separator.getInstance(),
-                checkAllAction, uncheckAllAction,
-            ),
-            true
-        )
-        filesToolbar.targetComponent = this
-
-        val filesPanel = JPanel(BorderLayout())
-        filesPanel.add(filesToolbar.component, BorderLayout.NORTH)
-        filesPanel.add(JBScrollPane(filesTree), BorderLayout.CENTER)
-
-        splitter.firstComponent = filesPanel
+        splitter.firstComponent = affectedFilesPane.component
 
         affectedPanel.add(affectedTop, BorderLayout.NORTH)
         affectedPanel.add(splitter, BorderLayout.CENTER)
@@ -514,7 +384,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
                 val fileNode = DefaultMutableTreeNode(TestNodeData.BehatGroup(featurePath))
                 for (entry in entries) {
                     val line = entry.substringAfterLast(":", "")
-                    val scenarioLabel = resolveScenarioName(featurePath, line) ?: "line $line"
+                    val scenarioLabel = CoverageTestNavigator.resolveScenarioName(project, featurePath, line) ?: "line $line"
                     fileNode.add(DefaultMutableTreeNode(TestNodeData.BehatScenario(scenarioLabel, entry)))
                 }
                 rootNode.add(fileNode)
@@ -549,7 +419,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     private fun findAffectedTests(mode: ChangedLinesAnalyzer.DiffMode) {
         lastDiffMode = mode
         log.info("Finding affected tests (mode=$mode)")
-        object : Task.Backgroundable(project, "Finding affected tests\u2026", true) {
+        object : Task.Backgroundable(project, "Finding affected tests…", true) {
             override fun run(indicator: ProgressIndicator) {
                 val result = AffectedTestsService.getInstance(project).compute(mode)
                 ApplicationManager.getApplication().invokeLater {
@@ -575,114 +445,13 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         if (result.newFiles.isNotEmpty()) parts += "${result.newFiles.size} new"
         if (result.deletedFiles.isNotEmpty()) parts += "${result.deletedFiles.size} deleted"
         if (result.filesWithoutCoverage.isNotEmpty()) parts += "${result.filesWithoutCoverage.size} no coverage"
-        affectedStatusLabel.text = parts.joinToString(" \u00b7 ")
+        affectedStatusLabel.text = parts.joinToString(" · ")
 
-        refreshFilesTree()
+        affectedFilesPane.populate(model)
         updateTestsFromModel()
         switchToAffected()
 
         log.info("Affected tests populated: ${model.displayedTests.size} tests across ${model.allFiles.size} files")
-    }
-
-    private fun refreshFilesTree() {
-        val model = affectedModel ?: return
-        filesRoot.removeAllChildren()
-
-        if (isTreeView) {
-            buildTreeNodes(model)
-        } else {
-            buildFlatNodes(model)
-        }
-
-        (filesTree.model as DefaultTreeModel).reload()
-
-        // Expand first level in tree mode
-        if (isTreeView) {
-            for (i in 0 until minOf(filesTree.rowCount, 100)) {
-                filesTree.expandRow(i)
-            }
-        }
-    }
-
-    private fun buildTreeNodes(model: AffectedTestsModel) {
-        data class DirEntry(
-            val children: MutableMap<String, DirEntry> = sortedMapOf(),
-            val files: MutableList<String> = mutableListOf(),
-        )
-
-        val top = DirEntry()
-        for (path in model.allFiles.sorted()) {
-            val parts = path.split("/")
-            var current = top
-            for (i in 0 until parts.size - 1) {
-                current = current.children.getOrPut(parts[i]) { DirEntry() }
-            }
-            current.files.add(path)
-        }
-
-        fun allFilesUnder(entry: DirEntry): Set<String> {
-            val result = mutableSetOf<String>()
-            result.addAll(entry.files)
-            for ((_, child) in entry.children) result.addAll(allFilesUnder(child))
-            return result
-        }
-
-        fun addNodes(entry: DirEntry, parent: CheckedTreeNode) {
-            // Directories first (already sorted)
-            for ((name, child) in entry.children) {
-                // Compact middle packages: collapse single-child dirs with no files
-                var collapsed = child
-                var display = name
-                while (collapsed.files.isEmpty() && collapsed.children.size == 1) {
-                    val (cName, cChild) = collapsed.children.entries.first()
-                    display = "$display/$cName"
-                    collapsed = cChild
-                }
-
-                val files = allFilesUnder(collapsed)
-                val dirNode = CheckedTreeNode(FileNodeData.Dir(display, files))
-                addNodes(collapsed, dirNode)
-                parent.add(dirNode)
-            }
-            // Then files
-            for (filePath in entry.files) {
-                val fileName = filePath.substringAfterLast("/")
-                val node = CheckedTreeNode(FileNodeData.FileEntry(filePath, fileName))
-                node.isChecked = filePath in model.checkedFiles
-                parent.add(node)
-            }
-        }
-
-        addNodes(top, filesRoot)
-    }
-
-    private fun buildFlatNodes(model: AffectedTestsModel) {
-        // Sort by test count descending (bootstrap.php at top)
-        val sorted = model.allFiles.sortedByDescending { (model.perFile[it] ?: emptySet()).size }
-        for (path in sorted) {
-            val node = CheckedTreeNode(FileNodeData.FileEntry(path, path))
-            node.isChecked = path in model.checkedFiles
-            filesRoot.add(node)
-        }
-    }
-
-    private fun syncModelFromTree() {
-        val model = affectedModel ?: return
-        model.uncheckAll()
-
-        fun walk(node: CheckedTreeNode) {
-            if (node.userObject is FileNodeData.FileEntry && node.isChecked) {
-                model.setChecked((node.userObject as FileNodeData.FileEntry).path, true)
-            }
-            for (i in 0 until node.childCount) {
-                val child = node.getChildAt(i)
-                if (child is CheckedTreeNode) walk(child)
-            }
-        }
-        walk(filesRoot)
-
-        updateTestsFromModel()
-        filesTree.repaint()
     }
 
     private fun updateTestsFromModel() {
@@ -708,7 +477,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         model.removeTests(testsToRemove)
         updateTestsFromModel()
-        filesTree.repaint()
+        affectedFilesPane.filesTree.repaint()
     }
 
     private fun collectTestNames(node: DefaultMutableTreeNode, into: MutableSet<String>) {
@@ -744,71 +513,18 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         }
     }
 
-    private fun navigateToSourceLine() {
-        if (currentFilePath.isEmpty()) return
-        val projectDir = project.guessProjectDir() ?: return
-        val vf = VfsUtil.findRelativeFile(currentFilePath, projectDir) ?: return
-        val line = if (currentLineNumber > 0) currentLineNumber - 1 else 0
-        FileEditorManager.getInstance(project)
-            .openTextEditor(OpenFileDescriptor(project, vf, line, 0), true)
-    }
-
-    private fun navigateToTest(testName: String) {
-        if (isBehatTest(testName)) {
-            navigateToBehatTest(testName)
-            return
-        }
-
-        val methodName = testName.substringAfterLast("::", testName).substringAfterLast("\\", testName)
-        val className = testName.substringBeforeLast("::", "").substringAfterLast("\\", "")
-
-        if (className.isNotEmpty()) {
-            @Suppress("DEPRECATION")
-            val files = FilenameIndex.getFilesByName(project, "$className.php", GlobalSearchScope.projectScope(project))
-            if (files.isNotEmpty()) {
-                val psiFile = files.first()
-                val vf = psiFile.virtualFile ?: return
-                val document = psiFile.viewProvider.document ?: return
-                val text = document.text
-                val methodPattern = "function $methodName"
-                val offset = text.indexOf(methodPattern)
-                if (offset >= 0) {
-                    FileEditorManager.getInstance(project)
-                        .openTextEditor(OpenFileDescriptor(project, vf, offset), true)
-                } else {
-                    FileEditorManager.getInstance(project)
-                        .openTextEditor(OpenFileDescriptor(project, vf, 0), true)
-                }
-                return
-            }
-        }
-    }
-
-    private fun navigateToBehatTest(testName: String) {
-        val featurePath = testName.substringBeforeLast(":", "")
-        val lineStr = testName.substringAfterLast(":", "")
-        val lineNumber = lineStr.toIntOrNull() ?: 0
-
-        val projectDir = project.guessProjectDir() ?: return
-        val vf = VfsUtil.findRelativeFile(featurePath, projectDir) ?: return
-
-        val line = if (lineNumber > 0) lineNumber - 1 else 0
-        FileEditorManager.getInstance(project)
-            .openTextEditor(OpenFileDescriptor(project, vf, line, 0), true)
-    }
-
     private fun runTest(testName: String, debug: Boolean = false) {
         if (isBehatTest(testName)) {
             runBehatTest(testName, debug)
         } else {
             // For PHPUnit, fall back to navigation for now
-            navigateToTest(testName)
+            CoverageTestNavigator.navigateToTest(project, testName)
         }
     }
 
     private fun runBehatTest(testName: String, debug: Boolean = false) {
         if (!BehatTestRunner.isAvailable()) {
-            navigateToBehatTest(testName)
+            CoverageTestNavigator.navigateToBehatTest(project, testName)
             return
         }
 
@@ -821,10 +537,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         val absolutePath = vf.path
 
         if (lineNumber != null) {
-            val scenarioName = ReadAction.compute<String?, Throwable> {
-                val psiFile = PsiManager.getInstance(project).findFile(vf) as? GherkinFile ?: return@compute null
-                findScenarioAtLine(psiFile, lineNumber)
-            }
+            val scenarioName = CoverageTestNavigator.resolveScenarioName(project, featurePath, lineStr)
             if (scenarioName != null) {
                 BehatTestRunner.runScenario(project, absolutePath, scenarioName, debug)
             } else {
@@ -915,54 +628,12 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         }
     }
 
-    /** Finds the scenario name at a given 1-based line number in a Gherkin file. */
-    private fun findScenarioAtLine(gherkinFile: GherkinFile, lineNumber: Int): String? {
-        val document = gherkinFile.viewProvider.document ?: return null
-        val features = gherkinFile.features
-        for (feature in features) {
-            for (scenario in feature.scenarios) {
-                if (scenario is GherkinStepsHolder) {
-                    val scenarioLine = document.getLineNumber(scenario.textOffset) + 1
-                    if (scenarioLine == lineNumber) {
-                        return scenario.scenarioName
-                    }
-                }
-            }
-        }
-        // Fallback: find the closest scenario at or before the line
-        var closest: GherkinStepsHolder? = null
-        for (feature in features) {
-            for (scenario in feature.scenarios) {
-                if (scenario is GherkinStepsHolder) {
-                    val scenarioLine = document.getLineNumber(scenario.textOffset) + 1
-                    if (scenarioLine <= lineNumber) {
-                        closest = scenario
-                    }
-                }
-            }
-        }
-        return closest?.scenarioName
-    }
-
-    /** Resolves a scenario name from a feature file path and line number string. */
-    private fun resolveScenarioName(featurePath: String, lineStr: String): String? {
-        val lineNumber = lineStr.toIntOrNull() ?: return null
-        val projectDir = project.guessProjectDir() ?: return null
-        val vf = VfsUtil.findRelativeFile(featurePath, projectDir) ?: return null
-        return ReadAction.compute<String?, Throwable> {
-            val psiFile = PsiManager.getInstance(project).findFile(vf) as? GherkinFile ?: return@compute null
-            findScenarioAtLine(psiFile, lineNumber)
-        }
-    }
-
     companion object {
         private const val NORMAL_CARD = "normal"
         private const val AFFECTED_CARD = "affected"
 
         /** Detects whether a test name is a Behat test (feature file path + line). */
-        private val BEHAT_TEST_PATTERN = Regex("""^.+\.feature:\d+$""")
-
-        fun isBehatTest(testName: String): Boolean = BEHAT_TEST_PATTERN.matches(testName)
+        fun isBehatTest(testName: String): Boolean = CoverageTestNavigator.isBehatTest(testName)
 
         fun getInstance(project: Project): CoverageTestsPanel? {
             val toolWindow = ToolWindowManager.getInstance(project)
