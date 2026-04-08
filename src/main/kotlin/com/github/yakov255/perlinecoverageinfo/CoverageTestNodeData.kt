@@ -1,9 +1,11 @@
 package com.github.yakov255.perlinecoverageinfo
 
 internal sealed class TestNodeData(val displayName: String) {
-    class BehatGroup(val featurePath: String) : TestNodeData(featurePath)
+    /** Intermediate directory or namespace node (used in tree view). */
+    class Dir(displayName: String, val count: Int = 0) : TestNodeData(displayName)
+    class BehatGroup(val featurePath: String, displayName: String = featurePath) : TestNodeData(displayName)
     class BehatScenario(val label: String, val originalTestName: String) : TestNodeData(label)
-    class PhpUnitGroup(val className: String) : TestNodeData(className)
+    class PhpUnitGroup(val className: String, displayName: String = className) : TestNodeData(displayName)
     class PhpUnitMethod(val methodName: String, val fullTestName: String) : TestNodeData(methodName)
 }
 

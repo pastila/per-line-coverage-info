@@ -8,6 +8,7 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Separator
+import com.intellij.openapi.actionSystem.ToggleAction
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
@@ -51,6 +52,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     private var currentLineNumber: Int = 0
     private var currentFilePath: String = ""
     @Volatile private var runAllInProgress: Boolean = false
+    private var isTestsTreeView = false
 
     // ── Affected mode ───────────────────────────────────────────────
     private var affectedModel: AffectedTestsModel? = null
@@ -87,9 +89,16 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             ) {
                 val node = value as? DefaultMutableTreeNode
                 when (val data = node?.userObject) {
+                    is TestNodeData.Dir -> {
+                        icon = AllIcons.Nodes.Folder
+                        append(data.displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                        if (data.count > 0) append(" (${data.count})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    }
                     is TestNodeData.BehatGroup -> {
                         icon = BehatIcons.Behat
                         append(data.displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                        val count = node?.childCount ?: 0
+                        if (count > 0) append(" ($count)", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
                     is TestNodeData.BehatScenario -> {
                         icon = BehatIcons.Behat
@@ -98,6 +107,8 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
                     is TestNodeData.PhpUnitGroup -> {
                         icon = AllIcons.Nodes.TestGroup
                         append(data.displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
+                        val count = node?.childCount ?: 0
+                        if (count > 0) append(" ($count)", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                     }
                     is TestNodeData.PhpUnitMethod -> {
                         icon = AllIcons.Nodes.Test
@@ -212,25 +223,6 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
         }
 
-        val runSelectedAction = object : AnAction(
-            "Run Selected",
-            "Run selected Behat tests in a single launch via --paths",
-            AllIcons.Actions.Execute
-        ) {
-            override fun actionPerformed(e: AnActionEvent) {
-                if (runAllInProgress) return
-                val sel = selectedBehatTests()
-                if (sel.isEmpty()) return
-                runBehatBundled(sel, debug = false)
-            }
-            override fun update(e: AnActionEvent) {
-                e.presentation.isEnabled = !runAllInProgress &&
-                    BehatTestRunner.isAvailable() &&
-                    selectedBehatTests().isNotEmpty()
-            }
-            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
-        }
-
         val removeSelectedAction = object : AnAction(
             "Remove Selected", "Remove selected tests from the list", AllIcons.General.Remove
         ) {
@@ -248,6 +240,17 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
         }
 
+        val toggleTestsViewAction = object : ToggleAction(
+            "Tree View", "Toggle between tree and flat test list", AllIcons.Actions.GroupByPackage
+        ) {
+            override fun isSelected(e: AnActionEvent): Boolean = isTestsTreeView
+            override fun setSelected(e: AnActionEvent, state: Boolean) {
+                isTestsTreeView = state
+                buildTree(allTests)
+            }
+            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+        }
+
         // ── Normal mode panel ───────────────────────────────────────
         titleLabel.border = JBUI.Borders.empty(4, 6)
         titleLabel.cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
@@ -259,7 +262,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         val normalToolbar = ActionManager.getInstance().createActionToolbar(
             "CoverageTestsPanelToolbar",
-            DefaultActionGroup(runAllAction, runAllDebugAction, runSelectedAction, Separator.getInstance(), findHeadAction, findWtAction),
+            DefaultActionGroup(toggleTestsViewAction, Separator.getInstance(), runAllAction, runAllDebugAction, Separator.getInstance(), findHeadAction, findWtAction),
             true
         )
         normalToolbar.targetComponent = this
@@ -275,7 +278,9 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             DefaultActionGroup(
                 findHeadAction, findWtAction, refreshAction,
                 Separator.getInstance(),
-                runAllAction, runAllDebugAction, runSelectedAction, removeSelectedAction,
+                toggleTestsViewAction,
+                Separator.getInstance(),
+                runAllAction, runAllDebugAction, removeSelectedAction,
                 Separator.getInstance(),
                 backAction,
             ),
@@ -390,34 +395,45 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         rootNode.removeAllChildren()
         val (behatTests, phpunitTests) = tests.partition { isBehatTest(it) }
 
-        // Group Behat tests by feature file path
-        if (behatTests.isNotEmpty()) {
-            val behatGrouped = behatTests.groupBy { name ->
-                name.substringBeforeLast(":", name)
+        if (isTestsTreeView) {
+            if (behatTests.isNotEmpty()) {
+                val behatGrouped = behatTests.groupBy { it.substringBeforeLast(":", it) }
+                buildBehatHierarchy(behatGrouped, scenarioLabels, rootNode)
             }
-            for ((featurePath, entries) in behatGrouped.toSortedMap()) {
-                val fileNode = DefaultMutableTreeNode(TestNodeData.BehatGroup(featurePath))
-                for (entry in entries) {
-                    val label = scenarioLabels[entry] ?: "line ${entry.substringAfterLast(":", "")}"
-                    fileNode.add(DefaultMutableTreeNode(TestNodeData.BehatScenario(label, entry)))
+            if (phpunitTests.isNotEmpty()) {
+                val grouped = phpunitTests.groupBy { it.substringBeforeLast("::", "") .ifEmpty { "(no class)" } }
+                buildPhpUnitHierarchy(grouped, rootNode)
+            }
+        } else {
+            // Group Behat tests by feature file path
+            if (behatTests.isNotEmpty()) {
+                val behatGrouped = behatTests.groupBy { name ->
+                    name.substringBeforeLast(":", name)
                 }
-                rootNode.add(fileNode)
+                for ((featurePath, entries) in behatGrouped.toSortedMap()) {
+                    val fileNode = DefaultMutableTreeNode(TestNodeData.BehatGroup(featurePath))
+                    for (entry in entries) {
+                        val label = scenarioLabels[entry] ?: "line ${entry.substringAfterLast(":", "")}"
+                        fileNode.add(DefaultMutableTreeNode(TestNodeData.BehatScenario(label, entry)))
+                    }
+                    rootNode.add(fileNode)
+                }
             }
-        }
 
-        // Group PHPUnit tests by class (part before ::)
-        if (phpunitTests.isNotEmpty()) {
-            val grouped = phpunitTests.groupBy { name ->
-                val fqcn = name.substringBeforeLast("::", "")
-                fqcn.ifEmpty { "(no class)" }
-            }
-            for ((className, methods) in grouped.toSortedMap()) {
-                val classNode = DefaultMutableTreeNode(TestNodeData.PhpUnitGroup(className))
-                for (fullName in methods) {
-                    val methodName = fullName.substringAfterLast("::", fullName)
-                    classNode.add(DefaultMutableTreeNode(TestNodeData.PhpUnitMethod(methodName, fullName)))
+            // Group PHPUnit tests by class (part before ::)
+            if (phpunitTests.isNotEmpty()) {
+                val grouped = phpunitTests.groupBy { name ->
+                    val fqcn = name.substringBeforeLast("::", "")
+                    fqcn.ifEmpty { "(no class)" }
                 }
-                rootNode.add(classNode)
+                for ((className, methods) in grouped.toSortedMap()) {
+                    val classNode = DefaultMutableTreeNode(TestNodeData.PhpUnitGroup(className))
+                    for (fullName in methods) {
+                        val methodName = fullName.substringAfterLast("::", fullName)
+                        classNode.add(DefaultMutableTreeNode(TestNodeData.PhpUnitMethod(methodName, fullName)))
+                    }
+                    rootNode.add(classNode)
+                }
             }
         }
 
@@ -425,6 +441,117 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         for (i in 0 until tree.rowCount) {
             tree.expandRow(i)
         }
+    }
+
+    // ── Hierarchical tree builders ──────────────────────────────────
+
+    /**
+     * Builds a directory-tree structure for Behat tests.
+     * Feature file paths are split on "/" into directory nodes, with compact
+     * single-child dirs merged (identical logic to AffectedFilesPane).
+     */
+    private fun buildBehatHierarchy(
+        behatGrouped: Map<String, List<String>>,
+        scenarioLabels: Map<String, String>,
+        parent: DefaultMutableTreeNode,
+    ) {
+        data class DirEntry(
+            val children: MutableMap<String, DirEntry> = sortedMapOf(),
+            val files: MutableList<Pair<String, List<String>>> = mutableListOf(),
+        )
+
+        val top = DirEntry()
+        for ((featurePath, entries) in behatGrouped.toSortedMap()) {
+            val parts = featurePath.split("/")
+            var current = top
+            for (i in 0 until parts.size - 1) {
+                current = current.children.getOrPut(parts[i]) { DirEntry() }
+            }
+            current.files.add(featurePath to entries)
+        }
+
+        fun countScenarios(entry: DirEntry): Int =
+            entry.files.sumOf { it.second.size } + entry.children.values.sumOf { countScenarios(it) }
+
+        fun addNodes(entry: DirEntry, node: DefaultMutableTreeNode) {
+            for ((name, child) in entry.children) {
+                var collapsed = child
+                var display = name
+                while (collapsed.files.isEmpty() && collapsed.children.size == 1) {
+                    val (cName, cChild) = collapsed.children.entries.first()
+                    display = "$display/$cName"
+                    collapsed = cChild
+                }
+                val dirNode = DefaultMutableTreeNode(TestNodeData.Dir(display, countScenarios(collapsed)))
+                addNodes(collapsed, dirNode)
+                node.add(dirNode)
+            }
+            for ((featurePath, entries) in entry.files) {
+                val fileName = featurePath.substringAfterLast("/")
+                val fileNode = DefaultMutableTreeNode(TestNodeData.BehatGroup(featurePath, fileName))
+                for (testName in entries) {
+                    val label = scenarioLabels[testName] ?: "line ${testName.substringAfterLast(":", "")}"
+                    fileNode.add(DefaultMutableTreeNode(TestNodeData.BehatScenario(label, testName)))
+                }
+                node.add(fileNode)
+            }
+        }
+
+        addNodes(top, parent)
+    }
+
+    /**
+     * Builds a namespace-tree structure for PHPUnit tests.
+     * Class names are split on "\" into namespace nodes, with compact
+     * single-child namespaces merged.
+     */
+    private fun buildPhpUnitHierarchy(
+        grouped: Map<String, List<String>>,
+        parent: DefaultMutableTreeNode,
+    ) {
+        data class NsEntry(
+            val children: MutableMap<String, NsEntry> = sortedMapOf(),
+            val classes: MutableList<Pair<String, List<String>>> = mutableListOf(),
+        )
+
+        val top = NsEntry()
+        for ((className, methods) in grouped.toSortedMap()) {
+            val parts = className.split("\\")
+            var current = top
+            for (i in 0 until parts.size - 1) {
+                current = current.children.getOrPut(parts[i]) { NsEntry() }
+            }
+            current.classes.add(className to methods)
+        }
+
+        fun countMethods(entry: NsEntry): Int =
+            entry.classes.sumOf { it.second.size } + entry.children.values.sumOf { countMethods(it) }
+
+        fun addNodes(entry: NsEntry, node: DefaultMutableTreeNode) {
+            for ((name, child) in entry.children) {
+                var collapsed = child
+                var display = name
+                while (collapsed.classes.isEmpty() && collapsed.children.size == 1) {
+                    val (cName, cChild) = collapsed.children.entries.first()
+                    display = "$display\\$cName"
+                    collapsed = cChild
+                }
+                val nsNode = DefaultMutableTreeNode(TestNodeData.Dir(display, countMethods(collapsed)))
+                addNodes(collapsed, nsNode)
+                node.add(nsNode)
+            }
+            for ((fullClassName, methods) in entry.classes) {
+                val simpleName = fullClassName.substringAfterLast("\\", fullClassName)
+                val classNode = DefaultMutableTreeNode(TestNodeData.PhpUnitGroup(fullClassName, simpleName))
+                for (fullName in methods) {
+                    val methodName = fullName.substringAfterLast("::", fullName)
+                    classNode.add(DefaultMutableTreeNode(TestNodeData.PhpUnitMethod(methodName, fullName)))
+                }
+                node.add(classNode)
+            }
+        }
+
+        addNodes(top, parent)
     }
 
     // ── Affected mode ───────────────────────────────────────────────
@@ -609,30 +736,6 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         return map
     }
 
-    /** Collects Behat tests reachable from the current tree selection (recursing into groups). */
-    private fun selectedBehatTests(): List<String> {
-        val paths = tree.selectionPaths ?: return emptyList()
-        val collected = linkedSetOf<String>()
-        for (p in paths) {
-            val node = p.lastPathComponent as? DefaultMutableTreeNode ?: continue
-            collectBehatLeaves(node, collected)
-        }
-        return collected.toList()
-    }
-
-    private fun collectBehatLeaves(node: DefaultMutableTreeNode, into: MutableSet<String>) {
-        when (val data = node.userObject) {
-            is TestNodeData.BehatScenario -> into.add(data.originalTestName)
-            is TestNodeData.BehatGroup -> into.add(data.featurePath)
-            else -> {
-                for (i in 0 until node.childCount) {
-                    val child = node.getChildAt(i) as? DefaultMutableTreeNode ?: continue
-                    collectBehatLeaves(child, into)
-                }
-            }
-        }
-    }
-
     private fun canRunTest(testName: String): Boolean {
         return if (isBehatTest(testName)) {
             BehatTestRunner.isAvailable()
@@ -658,6 +761,9 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         fun showTestsInPanel(project: Project, lineNumber: Int, filePath: String, tests: List<String>) {
             val toolWindow = ToolWindowManager.getInstance(project)
                 .getToolWindow("Coverage Tests") ?: return
+            // Switch to the Tests tab if another tab (Log, Artifacts) is currently active
+            toolWindow.contentManager.getContent(0)
+                ?.let { toolWindow.contentManager.setSelectedContent(it) }
             toolWindow.show {
                 val panel = getInstance(project) ?: return@show
                 panel.showTests(lineNumber, filePath, tests)

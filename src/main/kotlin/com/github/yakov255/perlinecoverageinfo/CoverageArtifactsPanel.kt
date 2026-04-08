@@ -13,18 +13,16 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
 import com.intellij.icons.AllIcons
 import java.awt.BorderLayout
-import java.awt.Component
-import java.awt.Cursor
 import java.awt.Dimension
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import java.text.SimpleDateFormat
 import java.util.Date
-import javax.swing.JLabel
 import javax.swing.JPanel
 import javax.swing.JTable
 import javax.swing.table.AbstractTableModel
-import javax.swing.table.DefaultTableCellRenderer
 
 /**
  * Tool-window tab panel that lists all locally cached coverage artifacts and
@@ -71,38 +69,29 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         table.intercellSpacing = Dimension(0, 0)
         table.tableHeader.reorderingAllowed = false
 
-        // Pipeline column: render as a clickable hyperlink.
-        table.columnModel.getColumn(PIPELINE_COL).cellRenderer = object : DefaultTableCellRenderer() {
-            override fun getTableCellRendererComponent(
-                t: JTable, value: Any?, isSelected: Boolean, hasFocus: Boolean, row: Int, col: Int,
-            ): Component {
-                val label = super.getTableCellRendererComponent(t, value, isSelected, hasFocus, row, col) as JLabel
-                label.text = "<html><a href='#'>${value ?: ""}</a></html>"
-                return label
-            }
-        }
-
-        // Mouse adapter handles both click (open browser) and hover (hand cursor).
+        // Mouse adapter handles right-click context menus on commit and pipeline columns.
         val mouseAdapter = object : MouseAdapter() {
-            override fun mouseClicked(e: MouseEvent) {
+            override fun mousePressed(e: MouseEvent) {
+                if (e.isPopupTrigger) handleContextMenu(e)
+            }
+
+            override fun mouseReleased(e: MouseEvent) {
+                if (e.isPopupTrigger) handleContextMenu(e)
+            }
+
+            private fun handleContextMenu(e: MouseEvent) {
                 val col = table.columnAtPoint(e.point)
                 val row = table.rowAtPoint(e.point)
-                if (col == PIPELINE_COL && row >= 0) {
-                    val entry = tableModel.getEntry(row) ?: return
-                    openPipelineInBrowser(entry)
+                if (row < 0) return
+                table.setRowSelectionInterval(row, row)
+                val entry = tableModel.getEntry(row) ?: return
+                when (col) {
+                    COMMIT_COL -> showCommitContextMenu(entry, e)
+                    PIPELINE_COL -> showPipelineContextMenu(entry, e)
                 }
-            }
-
-            override fun mouseMoved(e: MouseEvent) {
-                val col = table.columnAtPoint(e.point)
-                table.cursor = if (col == PIPELINE_COL)
-                    Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
-                else
-                    Cursor.getDefaultCursor()
             }
         }
         table.addMouseListener(mouseAdapter)
-        table.addMouseMotionListener(mouseAdapter)
 
         // Preferred column widths.
         table.columnModel.getColumn(DATE_COL).preferredWidth = 140
@@ -113,14 +102,31 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         table.columnModel.getColumn(COVERAGE_COL).preferredWidth = 90
     }
 
-    private fun openPipelineInBrowser(entry: ArtifactInfo) {
+    private fun openPipelineUrl(entry: ArtifactInfo): String? {
         val settings = CoverageApiSettings.getInstance()
         if (settings.gitlabProjectName.isBlank()) {
-            log.warn("Artifacts panel: GitLab project name not configured, cannot open pipeline link")
-            return
+            log.warn("Artifacts panel: GitLab project name not configured, cannot build pipeline URL")
+            return null
         }
-        val url = "${settings.gitlabBaseUrl}/${settings.gitlabProjectName}/-/pipelines/${entry.pipelineId}"
-        BrowserUtil.browse(url)
+        return "${settings.gitlabBaseUrl}/${settings.gitlabProjectName}/-/pipelines/${entry.pipelineId}"
+    }
+
+    private fun showPipelineContextMenu(entry: ArtifactInfo, e: MouseEvent) {
+        val group = DefaultActionGroup()
+        group.add(OpenInBrowserAction(entry))
+        val popup = ActionManager.getInstance().createActionPopupMenu(ActionPlaces.UNKNOWN, group)
+        popup.component.show(e.component, e.x, e.y)
+    }
+
+    private inner class OpenInBrowserAction(private val entry: ArtifactInfo) :
+        AnAction("Open in Browser", "Open this pipeline in the browser", AllIcons.Ide.External_link_arrow) {
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val url = openPipelineUrl(entry) ?: return
+            BrowserUtil.browse(url)
+        }
     }
 
     private inner class RefreshCoverageAction :
@@ -136,6 +142,24 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
                 return
             }
             loadService.loadFromGitLab(showErrors = true, onComplete = { refreshData() })
+        }
+    }
+
+    private fun showCommitContextMenu(entry: ArtifactInfo, e: MouseEvent) {
+        val group = DefaultActionGroup()
+        group.add(CopyHashAction(entry.commitHash))
+        val popup = ActionManager.getInstance().createActionPopupMenu(ActionPlaces.UNKNOWN, group)
+        popup.component.show(e.component, e.x, e.y)
+    }
+
+    private inner class CopyHashAction(private val hash: String) :
+        AnAction("Copy Hash", "Copy full commit hash to clipboard", AllIcons.Actions.Copy) {
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+        override fun actionPerformed(e: AnActionEvent) {
+            val selection = StringSelection(hash)
+            Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
         }
     }
 
