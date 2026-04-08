@@ -8,8 +8,8 @@ import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
-import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VfsUtil
+import java.io.File
+import java.nio.file.Paths
 
 object CoverageHighlighter {
 
@@ -82,10 +82,13 @@ object CoverageHighlighter {
     private fun findCoverageForFile(absolutePath: String, project: Project): Map<Int, List<String>>? {
         val dataService = CoverageDataService.getInstance(project)
         val basePath = project.basePath ?: return null
-        val baseVf = LocalFileSystem.getInstance().findFileByPath(basePath) ?: return null
-        val fileVf = LocalFileSystem.getInstance().findFileByPath(absolutePath) ?: return null
-        val relativePath = VfsUtil.getRelativePath(fileVf, baseVf) ?: return null
-
+        val relativePath = try {
+            Paths.get(basePath).relativize(Paths.get(absolutePath))
+                .toString()
+                .replace(File.separatorChar, '/')
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
         return CoveragePathResolver.resolve(dataService, listOf(absolutePath, relativePath))
     }
 }

@@ -3,8 +3,8 @@ package com.github.yakov255.perlinecoverageinfo
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VfsUtil
+import java.io.File
+import java.nio.file.Paths
 
 /**
  * Project-level service that caches old file content (from the coverage commit)
@@ -77,9 +77,13 @@ class LineMappingService(private val project: Project) {
 
     fun toRelativePath(absolutePath: String): String? {
         val basePath = project.basePath ?: return null
-        val baseVf = LocalFileSystem.getInstance().findFileByPath(basePath) ?: return null
-        val fileVf = LocalFileSystem.getInstance().findFileByPath(absolutePath) ?: return null
-        return VfsUtil.getRelativePath(fileVf, baseVf)
+        return try {
+            Paths.get(basePath).relativize(Paths.get(absolutePath))
+                .toString()
+                .replace(File.separatorChar, '/')
+        } catch (_: IllegalArgumentException) {
+            null
+        }
     }
 
     /**
