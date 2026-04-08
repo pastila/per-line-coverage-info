@@ -40,6 +40,7 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 | `LoadLocalCoverageAction.kt` | Tools menu: **Load Coverage from File**. Loads a local `.covt` (or `.covt.gz`) directly, bypassing GitLab. |
 | `ClearCoverageAction.kt` | Tools menu: clears highlighters + in-memory data. |
 | `CoverageBranchListener.kt` | `BranchChangeListener` — auto-triggers `loadOfflineFirst()` after a VCS branch change (silent on errors). |
+| `CoverageStartupActivity.kt` | `ProjectActivity` — auto-triggers `loadOfflineFirst()` once after the IDE has fully started (silent on errors; skips if settings are not configured). |
 
 ### Parsing & on-disk format
 | File | Purpose |
@@ -97,7 +98,7 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 
 ## End-to-end Flow (GitLab path)
 
-1. User invokes **Tools → Load Coverage from GitLab** (or a branch change fires `CoverageBranchListener`).
+1. User invokes **Tools → Load Coverage from GitLab** (or a branch change fires `CoverageBranchListener`, or the IDE starts and `CoverageStartupActivity` fires).
 2. `CoverageLoadService.loadOfflineFirst()`:
    - Walks last 200 HEAD commits, asks `CoverageCacheService` if any are cached on disk.
    - If yes → open `Cov4Reader`, mark `isStale = true`, apply highlights, notify "Showing cached coverage".

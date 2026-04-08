@@ -38,6 +38,8 @@
                            displayType="BALLOON"
                            bundle="messages.CoverageBundle"
                            key="notification.group.coverage"/>
+        <projectActivity
+            implementation="com.github.yakov255.perlinecoverageinfo.CoverageStartupActivity"/>
     </extensions>
 
     <projectListeners>
