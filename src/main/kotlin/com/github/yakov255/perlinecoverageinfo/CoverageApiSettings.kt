@@ -11,10 +11,10 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> {
 
     data class State(
-        var gitlabDomain: String = "gitlab.com",
+        var gitlabDomain: String = "raketa.dev",
         var bearerToken: String = "",
-        var gitlabProjectId: Long = 0,
-        var gitlabProjectName: String = "",
+        var gitlabProjectId: Long = 335,
+        var gitlabProjectName: String = "raketa/raketa",
         var coverageBranch: String = "behat-run-necessary-tests",
     )
 
