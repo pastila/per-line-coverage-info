@@ -45,10 +45,16 @@ class CoverageLogPanel(project: Project) : JPanel(BorderLayout()), Disposable {
         add(consoleView.component, BorderLayout.CENTER)
 
         // Backfill + live subscription, atomic so no entries are lost or duplicated.
+        // Both backfill and live entries go through invokeLater so ConsoleView is
+        // fully laid out before we print — printing into a not-yet-shown ConsoleView
+        // can silently discard output (startup logs in particular are at risk because
+        // the panel may be constructed while the component tree is still being built).
         val backfill = CoverageLogService.getInstance().subscribe(this) { entry ->
             ApplicationManager.getApplication().invokeLater { renderEntry(entry) }
         }
-        for (entry in backfill) renderEntry(entry)
+        ApplicationManager.getApplication().invokeLater {
+            for (entry in backfill) renderEntry(entry)
+        }
     }
 
     private fun renderEntry(entry: CoverageLogService.LogEntry) {

@@ -47,17 +47,24 @@ class CoverageLoadService(private val project: Project) {
      * If no cache is found, falls through to normal GitLab loading.
      */
     fun loadOfflineFirst() {
+        log.warn("[OFFLINE-FIRST] loadOfflineFirst() started")
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
 
         // Try to find cached coverage from git history
         val gitRoot = findGitRoot()
+        log.warn("[OFFLINE-FIRST] gitRoot=${gitRoot?.absolutePath ?: "null (not found)"}")
         if (gitRoot != null) {
             val commits = getRecentCommits(gitRoot, 200)
+            log.warn("[OFFLINE-FIRST] recentCommits count=${commits.size}, head=${commits.firstOrNull()?.take(8) ?: "none"}")
             if (commits.isNotEmpty()) {
+                val cachedCommits = cache.cachedCommitHashes()
+                log.warn("[OFFLINE-FIRST] cachedCommitHashes count=${cachedCommits.size}")
                 val cachedCommit = cache.findCachedCommit(commits)
+                log.warn("[OFFLINE-FIRST] findCachedCommit result=${cachedCommit?.take(8) ?: "null"}")
                 if (cachedCommit != null) {
                     val reader = cache.get(cachedCommit)
+                    log.warn("[OFFLINE-FIRST] cache.get(${ cachedCommit.take(8)}) reader=${if (reader != null) "OK" else "null"}")
                     if (reader != null) {
                         log.info("Coverage: offline-first hit — showing cached coverage from commit ${cachedCommit.take(8)}")
                         dataService.setCoverageContext(cachedCommit, gitRoot, stale = true)
@@ -84,6 +91,7 @@ class CoverageLoadService(private val project: Project) {
         }
 
         // No cache found — go straight to GitLab
+        log.warn("[OFFLINE-FIRST] No cached commit found, falling through to loadFromGitLab()")
         loadFromGitLab(showErrors = false)
     }
 
@@ -93,8 +101,10 @@ class CoverageLoadService(private val project: Project) {
      * @param onComplete Called on the EDT when the task finishes (success or failure), so callers can refresh UI.
      */
     fun loadFromGitLab(showErrors: Boolean = true, onComplete: (() -> Unit)? = null) {
+        log.warn("[GITLAB-LOAD] loadFromGitLab(showErrors=$showErrors) called")
         val validationError = validateSettings()
         if (validationError != null) {
+            log.warn("[GITLAB-LOAD] Validation failed: $validationError")
             if (showErrors) {
                 Messages.showErrorDialog(project, validationError, "Configuration Error")
             } else {
@@ -104,8 +114,10 @@ class CoverageLoadService(private val project: Project) {
             return
         }
 
+        log.warn("[GITLAB-LOAD] Validation passed, launching background task")
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Coverage from GitLab", true) {
             override fun run(indicator: ProgressIndicator) {
+                log.warn("[GITLAB-LOAD] Background task started")
                 try {
                     // Run cache cleanup in the background
                     CoverageCacheService.getInstance(project).cleanup()
@@ -114,13 +126,16 @@ class CoverageLoadService(private val project: Project) {
                     indicator.fraction = 0.0
 
                     val settings = CoverageApiSettings.getInstance()
+                    log.warn("[GITLAB-LOAD] Resolving pipeline for project=${settings.gitlabProjectId}, branch=${settings.coverageBranch}")
                     val gitLabClient = GitLabApiClient(settings.gitlabBaseUrl, settings.bearerToken)
                     val resolver = CoverageResolver(gitLabClient, project)
                     val resolved = resolver.resolve()
+                    log.warn("[GITLAB-LOAD] Resolved pipeline: commitHash=${resolved.commitHash.take(8)}, pipelineId=${resolved.pipelineId}, fallback=${resolved.fallback}")
 
                     // Check disk cache by commit hash
                     val cache = CoverageCacheService.getInstance(project)
                     val reader = cache.get(resolved.commitHash)
+                    log.warn("[GITLAB-LOAD] Cache lookup for ${resolved.commitHash.take(8)}: ${if (reader != null) "HIT" else "MISS"}")
                     if (reader != null) {
                         log.info("Coverage: loaded from COV4 cache (commit ${resolved.commitHash})")
                         val dataService = CoverageDataService.getInstance(project)
@@ -134,6 +149,7 @@ class CoverageLoadService(private val project: Project) {
                         return
                     }
 
+                    log.warn("[GITLAB-LOAD] Cache miss — downloading artifacts for pipeline ${resolved.pipelineId}")
                     val result = downloadArtifacts(indicator, gitLabClient, resolved)
 
                     // Write COV4 to cache, then drop the in-memory merged map and use a
@@ -150,7 +166,7 @@ class CoverageLoadService(private val project: Project) {
                         applyCoverage(result)
                     }
                 } catch (ex: CoverageApiException) {
-                    log.warn("Coverage error", ex)
+                    log.warn("[GITLAB-LOAD] CoverageApiException: kind=${ex.kind}, message=${ex.userMessage}", ex)
                     if (showErrors) {
                         val title = errorTitle(ex.kind)
                         ApplicationManager.getApplication().invokeLater {
@@ -158,7 +174,7 @@ class CoverageLoadService(private val project: Project) {
                         }
                     }
                 } catch (ex: Exception) {
-                    log.warn("Unexpected coverage error", ex)
+                    log.warn("[GITLAB-LOAD] Unexpected exception: ${ex.javaClass.simpleName}: ${ex.message}", ex)
                     if (showErrors) {
                         ApplicationManager.getApplication().invokeLater {
                             Messages.showErrorDialog(
