@@ -19,6 +19,7 @@ class CoverageApiSettingsConfigurable : Configurable {
 
     private val log = CoverageLog.get(CoverageApiSettingsConfigurable::class.java)
 
+    private val enabledCheckBox = JCheckBox("Enable coverage plugin for this project")
     private val gitlabDomainField = JBTextField()
     private val bearerTokenField = JBTextField()
     private val coverageBranchField = JBTextField()
@@ -52,6 +53,8 @@ class CoverageApiSettingsConfigurable : Configurable {
         }
 
         return FormBuilder.createFormBuilder()
+            .addComponent(enabledCheckBox)
+            .addSeparator()
             .addLabeledComponent("GitLab Domain:", gitlabDomainField)
             .addLabeledComponent("Access Token:", bearerTokenField)
             .addComponentToRightColumn(tokenLink)
@@ -167,7 +170,8 @@ class CoverageApiSettingsConfigurable : Configurable {
 
     override fun isModified(): Boolean {
         val settings = CoverageApiSettings.getInstance()
-        return gitlabDomainField.text != settings.gitlabDomain ||
+        return enabledCheckBox.isSelected != settings.enabled ||
+               gitlabDomainField.text != settings.gitlabDomain ||
                bearerTokenField.text != settings.bearerToken ||
                selectedProjectId != settings.gitlabProjectId ||
                selectedProjectName != settings.gitlabProjectName ||
@@ -176,6 +180,7 @@ class CoverageApiSettingsConfigurable : Configurable {
 
     override fun apply() {
         val settings = CoverageApiSettings.getInstance()
+        settings.enabled = enabledCheckBox.isSelected
         settings.gitlabDomain = gitlabDomainField.text
         settings.bearerToken = bearerTokenField.text
         settings.gitlabProjectId = selectedProjectId
@@ -185,6 +190,7 @@ class CoverageApiSettingsConfigurable : Configurable {
 
     override fun reset() {
         val settings = CoverageApiSettings.getInstance()
+        enabledCheckBox.isSelected = settings.enabled
         gitlabDomainField.text = settings.gitlabDomain
         bearerTokenField.text = settings.bearerToken
         selectedProjectId = settings.gitlabProjectId

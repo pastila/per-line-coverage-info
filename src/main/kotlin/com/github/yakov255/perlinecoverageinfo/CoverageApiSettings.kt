@@ -16,6 +16,13 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
         var gitlabProjectId: Long = 335,
         var gitlabProjectName: String = "raketa/raketa",
         var coverageBranch: String = "behat-run-necessary-tests",
+        /** Whether the plugin is enabled for this IDE installation. */
+        var enabled: Boolean = true,
+        /**
+         * Tracks whether the one-time automatic git-remote check has been performed.
+         * Once true, the auto-check never runs again so the user's manual choice is preserved.
+         */
+        var remoteUrlAutoChecked: Boolean = false,
     )
 
     private var state = State()
@@ -45,6 +52,14 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
     var coverageBranch: String
         get() = state.coverageBranch
         set(value) { state.coverageBranch = value }
+
+    var enabled: Boolean
+        get() = state.enabled
+        set(value) { state.enabled = value }
+
+    var remoteUrlAutoChecked: Boolean
+        get() = state.remoteUrlAutoChecked
+        set(value) { state.remoteUrlAutoChecked = value }
 
     val gitlabBaseUrl: String
         get() = "https://${state.gitlabDomain.trimEnd('/')}"

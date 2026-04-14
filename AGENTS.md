@@ -22,8 +22,8 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 ### Settings & configuration
 | File | Purpose |
 |------|---------|
-| `CoverageApiSettings.kt` | Persistent application-level settings: `gitlabDomain`, `bearerToken` (PRIVATE-TOKEN), `gitlabProjectId`, `gitlabProjectName`, `coverageBranch` (default `behat-run-necessary-tests`). Derives `gitlabBaseUrl`. |
-| `CoverageApiSettingsConfigurable.kt` | Settings UI under **Settings → Tools → GitLab Coverage**. |
+| `CoverageApiSettings.kt` | Persistent application-level settings: `gitlabDomain`, `bearerToken` (PRIVATE-TOKEN), `gitlabProjectId`, `gitlabProjectName`, `coverageBranch` (default `behat-run-necessary-tests`), `enabled` (master on/off switch), `remoteUrlAutoChecked` (one-time auto-check sentinel). Derives `gitlabBaseUrl`. |
+| `CoverageApiSettingsConfigurable.kt` | Settings UI under **Settings → Tools → GitLab Coverage**. Contains an **Enable coverage plugin** checkbox at the top that maps to `CoverageApiSettings.enabled`. |
 
 ### GitLab integration
 | File | Purpose |
@@ -35,12 +35,12 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 ### Loading pipeline
 | File | Purpose |
 |------|---------|
-| `CoverageLoadService.kt` | Project service orchestrating the whole flow. `loadOfflineFirst()` walks recent HEAD commits, opens the first cached `.cov4` (marks stale), shows highlights immediately, then refreshes from GitLab in the background. `loadFromGitLab()` runs resolver → checks cache → `downloadArtifacts()` → writes `.cov4` → **reopens it as a `Cov4Reader` and drops the merged map** so steady-state memory stays bounded. All three load paths (cache hit, offline-first, fresh download) converge on the same reader-backed state. All heavy work runs under a `Task.Backgroundable` progress indicator. |
+| `CoverageLoadService.kt` | Project service orchestrating the whole flow. `loadOfflineFirst()` walks recent HEAD commits, opens the first cached `.cov4` (marks stale), shows highlights immediately, then refreshes from GitLab in the background. `loadFromGitLab()` runs resolver → checks cache → `downloadArtifacts()` → writes `.cov4` → **reopens it as a `Cov4Reader` and drops the merged map** so steady-state memory stays bounded. All three load paths (cache hit, offline-first, fresh download) converge on the same reader-backed state. All heavy work runs under a `Task.Backgroundable` progress indicator. `validateSettings()` returns early (skips all loads silently) when `CoverageApiSettings.enabled` is false. `performRemoteUrlAutoCheck()` runs once on first startup: reads `git remote get-url origin` and auto-disables the plugin if the remote does not match `git@gitlab.raketa.online:raketa/raketa.git`; sets `remoteUrlAutoChecked = true` afterwards so it never fires again. |
 | `LoadCoverageAction.kt` | **Load Coverage from GitLab** (available via Find Action). Validates settings, then delegates to `CoverageLoadService`. Implements `DumbAware` so it works during indexing. Not in any menu — the Artifacts panel is the primary UI. |
 | `LoadLocalCoverageAction.kt` | **Load Coverage from File** (available via Find Action). Loads a local `.covt` (or `.covt.gz`) directly, bypassing GitLab. Implements `DumbAware`. Not in any menu — the Artifacts panel toolbar provides this. |
 | `ClearCoverageAction.kt` | **Clear Coverage Data** (available via Find Action). Clears highlighters + in-memory data. Implements `DumbAware`. Not in any menu — the Artifacts panel toolbar provides this. |
 | `CoverageHeadTracker.kt` | `GitRepositoryChangeListener` (registered via `git-integration.xml`) — monitors `repository.currentRevision` and auto-triggers `loadOfflineFirst()` whenever HEAD changes (branch switch, pull, commit, rebase, reset, etc.). Debounces rapid changes with a 2-second `Alarm`. Replaces the old `BranchChangeListener` which only fired on branch switch. |
-| `CoverageStartupActivity.kt` | `ProjectActivity` — auto-triggers `loadOfflineFirst()` once after the IDE has fully started (silent on errors; skips if settings are not configured). Implements `DumbAware` so it runs immediately without waiting for indexing. |
+| `CoverageStartupActivity.kt` | `ProjectActivity` — calls `CoverageLoadService.performRemoteUrlAutoCheck()` first (one-time git-remote validation), then auto-triggers `loadOfflineFirst()` once after the IDE has fully started (silent on errors; skips if settings are not configured or plugin is disabled). Implements `DumbAware` so it runs immediately without waiting for indexing. |
 
 ### Parsing & on-disk format
 | File | Purpose |
@@ -100,11 +100,14 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 
 ## End-to-end Flow (GitLab path)
 
-1. User clicks **Fetch Coverage** in the Artifacts panel toolbar (or uses Find Action → "Load Coverage from GitLab"), or HEAD changes and `CoverageHeadTracker` fires, or the IDE starts and `CoverageStartupActivity` fires.
-2. `CoverageLoadService.loadOfflineFirst()`:
+1. IDE starts → `CoverageStartupActivity.execute()`:
+   - Calls `CoverageLoadService.performRemoteUrlAutoCheck()` (runs only once per IDE installation, guarded by `remoteUrlAutoChecked`). If the project's `origin` remote is not `git@gitlab.raketa.online:raketa/raketa.git`, sets `enabled = false` silently and marks the check as done.
+   - Calls `validateSettings()`. If `enabled = false` or settings are missing, returns — no further action.
+2. User clicks **Fetch Coverage** in the Artifacts panel toolbar (or uses Find Action → "Load Coverage from GitLab"), or HEAD changes and `CoverageHeadTracker` fires.
+3. `CoverageLoadService.loadOfflineFirst()`:
    - Walks last 200 HEAD commits, asks `CoverageCacheService` if any are cached on disk.
    - If yes → open `Cov4Reader`, mark `isStale = true`, apply highlights, notify "Showing cached coverage".
-3. `loadFromGitLab(showErrors = false)` runs in the background under a progress task:
+4. `loadFromGitLab(showErrors = false)` runs in the background under a progress task:
    - `CoverageCacheService.cleanup()` prunes entries older than 7 days.
    - `CoverageResolver.resolve()` → `ResolvedPipeline(commitHash, pipelineId, gitRoot, fallback?)`.
    - If `cache.get(commitHash) != null` → reuse cached COV4 reader, skip download (`applyCoverageFromReader`).
@@ -115,7 +118,7 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
    - `Cov4Writer.write()` stores the merged result as `<commit>.cov4`; index updated.
    - `cache.get(commitHash)` reopens the file we just wrote; the merged in-memory map is dropped and `applyCoverageFromReader()` installs the reader. If the reopen fails (I/O error, disk full), falls back to `applyCoverage()` with the in-memory map.
    - The shared `notifyRefreshedFromStale()` helper fires a "Coverage updated" notification if the previous data was stale and the commit hash changed.
-4. `CoverageHighlighter.applyToOpenEditors()` runs on the EDT. For each editor it resolves the file's coverage through `LineMappingService` (which diffs cached old content vs live document) and installs per-line gutter renderers.
+5. `CoverageHighlighter.applyToOpenEditors()` runs on the EDT. For each editor it resolves the file's coverage through `LineMappingService` (which diffs cached old content vs live document) and installs per-line gutter renderers.
 
 ## Local `.covt` Path
 
@@ -142,3 +145,5 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 - **Cache key**: commit hash, not pipeline ID.
 - **Error surfacing**: throw `CoverageApiException` with a `CoverageErrorKind`; `CoverageLoadService.errorTitle` maps to user-visible dialog titles. Silent-mode callers (auto-trigger) only log.
 - **Notifications**: use the `Coverage Notifications` group registered in `plugin.xml` (balloon type).
+- **Enabled flag**: `CoverageApiSettings.enabled` is the master switch. `validateSettings()` returns early when it is false, so all load paths (startup, HEAD tracker, manual actions) are blocked. The user can re-enable via **Settings → Tools → GitLab Coverage**.
+- **Remote URL guard**: `CoverageLoadService.REQUIRED_REMOTE_URL = "git@gitlab.raketa.online:raketa/raketa.git"`. On first startup `performRemoteUrlAutoCheck()` auto-disables the plugin for any repo whose `origin` remote doesn't match. The check is one-shot (`remoteUrlAutoChecked` flag) so the user's manual re-enable is never overwritten.
