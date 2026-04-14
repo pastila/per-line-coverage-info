@@ -10,11 +10,21 @@ import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.runners.ExecutionEnvironmentBuilder
 import com.intellij.execution.runners.ProgramRunner
 import com.intellij.openapi.project.Project
+import com.jetbrains.php.behat.BehatFrameworkType
 import com.jetbrains.php.behat.run.BehatRunConfiguration
 import com.jetbrains.php.behat.run.BehatRunConfigurationType
+import com.jetbrains.php.config.interpreters.PhpInterpretersManagerImpl
+import com.jetbrains.php.config.interpreters.PhpSdkDependentConfiguration
+import com.jetbrains.php.run.remote.PhpRemoteInterpreterManager
+import com.jetbrains.php.testFramework.PhpTestFrameworkConfiguration
+import com.jetbrains.php.testFramework.PhpTestFrameworkSettingsManager
 import com.jetbrains.php.testFramework.run.PhpTestRunnerSettings
+import java.io.File
+import java.nio.file.Paths
 
 object BehatTestRunner {
+
+    private val log = CoverageLog.get(BehatTestRunner::class.java)
 
     fun runScenario(project: Project, featureFilePath: String, scenarioName: String, debug: Boolean = false) {
         val settings = createScenarioConfig(project, featureFilePath, scenarioName) ?: return
@@ -64,6 +74,10 @@ object BehatTestRunner {
      * list of 1-based scenario line numbers to run; an empty list means "run the
      * entire file".
      *
+     * Paths are converted to be relative to the Behat working directory (derived from
+     * the run configuration's config file location) so that Behat receives paths like
+     * `src/Features/foo.feature:10,20` rather than absolute filesystem paths.
+     *
      * Example produced CLI options (as a single string passed via test runner options):
      *   --paths features/a.feature:10,20 --paths features/b.feature
      */
@@ -92,12 +106,159 @@ object BehatTestRunner {
         // default `behat.yml` and a custom config file location are honored.
         runnerSettings.scope = PhpTestRunnerSettings.Scope.ConfigurationFile
 
-        val pathsArgs = pathsByFile.entries.joinToString(" ") { (file, lines) ->
+        val workingDir = resolveBehatWorkingDir(project, runnerSettings)
+        val relativePaths = relativizePaths(pathsByFile, workingDir)
+        val pathsArgs = relativePaths.entries.joinToString(" ") { (file, lines) ->
             buildPathsArg(file, lines)
         }
         val existing = runnerSettings.testRunnerOptions.orEmpty()
         runnerSettings.testRunnerOptions = if (existing.isBlank()) pathsArgs else "$existing $pathsArgs"
         return settings
+    }
+
+    /**
+     * Determines the Behat working directory, replicating the logic from
+     * [BehatRunConfiguration.getWorkingDirectory] for [PhpTestRunnerSettings.Scope.ConfigurationFile].
+     *
+     * Tries multiple strategies to find the Behat configuration file path,
+     * handles remote interpreter path mappings (Docker/SSH), and derives
+     * the working dir from the **local** config file path.
+     *
+     * If the config file is inside a `config/` subdirectory, the working directory is
+     * one level above `config/`; otherwise it is the directory containing the config
+     * file. Falls back to [Project.getBasePath] when no config file is set.
+     */
+    private fun resolveBehatWorkingDir(project: Project, runnerSettings: PhpTestRunnerSettings): String {
+        val configFilePath = resolveBehatLocalConfigFilePath(project, runnerSettings)
+        if (configFilePath.isNotBlank()) {
+            return deriveWorkingDirFromConfig(configFilePath, project)
+        }
+        log.warn("resolveBehatWorkingDir: no configFilePath found, fallback to basePath")
+        return project.basePath ?: ""
+    }
+
+    /**
+     * Resolves the Behat config file path as a **local** filesystem path.
+     *
+     * For remote interpreters (Docker, SSH) the framework config stores container-side
+     * paths (e.g. `/web/core/behat.yml`). We convert them to local paths using the
+     * interpreter's path mappings.
+     */
+    private fun resolveBehatLocalConfigFilePath(project: Project, runnerSettings: PhpTestRunnerSettings): String {
+        // Step 1: if "Use alternative configuration file" is checked, use that (it's always local)
+        if (runnerSettings.isUseAlternativeConfigurationFile) {
+            val altPath = runnerSettings.configurationFilePath.orEmpty()
+            if (altPath.isNotBlank()) return altPath
+        }
+
+        // Step 2: find the Behat framework config from Test Frameworks settings
+        val frameworkConfig = findBehatFrameworkConfig(project) ?: return ""
+
+        val rawPath = frameworkConfig.configurationFilePath.orEmpty()
+        if (rawPath.isBlank()) return ""
+
+        // Step 3: if the config is local, use as-is
+        if (frameworkConfig.isLocal) return rawPath
+
+        // Step 4: remote config — convert path using interpreter's path mappings
+        val localPath = convertRemoteToLocal(project, frameworkConfig, rawPath)
+        if (localPath.isNotBlank()) return localPath
+
+        // Step 5: heuristic fallback — match remote path suffix under project root
+        val basePath = project.basePath
+        if (basePath != null) {
+            val heuristic = matchRemotePathToLocal(rawPath, basePath)
+            if (heuristic.isNotBlank()) return heuristic
+        }
+
+        log.warn("resolveBehatLocalConfigFilePath: could not resolve remote path '$rawPath' to local")
+        return ""
+    }
+
+    /**
+     * Finds the first Behat framework config that has a configuration file path set.
+     */
+    private fun findBehatFrameworkConfig(project: Project): PhpTestFrameworkConfiguration? {
+        try {
+            val behatType = BehatFrameworkType.getInstance()
+            val configs = PhpTestFrameworkSettingsManager.getInstance(project).getConfigurations(behatType)
+            configs?.forEach { cfg ->
+                if (cfg.isUseConfigurationFile && !cfg.configurationFilePath.isNullOrBlank()) {
+                    return cfg
+                }
+            }
+        } catch (e: Exception) {
+            log.warn("findBehatFrameworkConfig: failed: ${e.message}")
+        }
+        return null
+    }
+
+    /**
+     * Converts a remote (Docker/SSH) path to a local path using the interpreter's
+     * path mappings configured in PhpStorm.
+     */
+    private fun convertRemoteToLocal(
+        project: Project,
+        frameworkConfig: PhpTestFrameworkConfiguration,
+        remotePath: String
+    ): String {
+        try {
+            val interpreterId = (frameworkConfig as? PhpSdkDependentConfiguration)?.interpreterId
+            if (interpreterId.isNullOrBlank()) return ""
+
+            val sdkData = PhpInterpretersManagerImpl.getInstance(project)
+                .findInterpreterDataById(interpreterId) ?: return ""
+
+            val remoteManager = PhpRemoteInterpreterManager.getInstance() ?: return ""
+            val pathMappings = remoteManager.createPathMappings(project, sdkData)
+            val localPath = pathMappings.convertToLocal(remotePath)
+            return if (localPath != remotePath) localPath else ""
+        } catch (e: Exception) {
+            log.warn("convertRemoteToLocal: failed: ${e.message}")
+            return ""
+        }
+    }
+
+    /**
+     * Heuristic fallback: tries to match a remote path to a local file by
+     * progressively shorter suffixes. For example, `/web/core/behat.yml` is
+     * tried as `web/core/behat.yml`, then `core/behat.yml` under [basePath].
+     */
+    private fun matchRemotePathToLocal(remotePath: String, basePath: String): String {
+        val parts = remotePath.split("/").filter { it.isNotEmpty() }
+        for (i in 1 until parts.size) {
+            val suffix = parts.subList(i, parts.size).joinToString("/")
+            val candidate = File(basePath, suffix)
+            if (candidate.isFile) return candidate.absolutePath
+        }
+        return ""
+    }
+
+    private fun deriveWorkingDirFromConfig(configFilePath: String, project: Project): String {
+        val configDir = File(configFilePath).parent ?: return project.basePath ?: ""
+        if (File(configDir).name == "config") {
+            val parentDir = File(configDir).parent
+            if (!parentDir.isNullOrBlank()) return parentDir
+        }
+        return configDir
+    }
+
+    /**
+     * Converts absolute paths in [pathsByFile] to paths relative to [workingDir].
+     * If a path cannot be relativized (e.g. on a different root), it is kept as-is.
+     */
+    private fun relativizePaths(
+        pathsByFile: Map<String, List<Int>>,
+        workingDir: String,
+    ): Map<String, List<Int>> {
+        val base = Paths.get(workingDir)
+        return pathsByFile.mapKeys { (absPath, _) ->
+            try {
+                base.relativize(Paths.get(absPath)).toString()
+            } catch (_: IllegalArgumentException) {
+                absPath
+            }
+        }
     }
 
     private fun buildPathsArg(file: String, lines: List<Int>): String {
