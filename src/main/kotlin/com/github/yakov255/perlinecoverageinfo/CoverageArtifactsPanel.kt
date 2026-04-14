@@ -7,31 +7,42 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.EditorFactory
+import com.intellij.openapi.fileChooser.FileChooser
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.table.JBTable
 import com.intellij.icons.AllIcons
+import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.CardLayout
+import java.awt.Cursor
 import java.awt.Dimension
+import java.awt.GridBagConstraints
+import java.awt.GridBagLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.zip.GZIPInputStream
+import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.JTable
 import javax.swing.table.AbstractTableModel
 
 /**
  * Tool-window tab panel that lists all locally cached coverage artifacts and
- * provides a button to check / download fresh coverage for the current commit.
+ * provides buttons to fetch fresh coverage, load from a local file, or clear data.
  *
- * Artifact metadata (date, pipeline link, size, file count, coverage %) is
- * read from [CoverageCacheService.listArtifacts] and refreshed whenever the
- * user clicks "Refresh Coverage" or when a load completes via the callback
- * passed to [CoverageLoadService.loadFromGitLab].
+ * Shows an empty-state panel when no artifacts are cached, guiding the user
+ * through initial setup.
  */
 class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout()) {
 
@@ -40,18 +51,36 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
     private val tableModel = ArtifactsTableModel()
     private val table = JBTable(tableModel)
 
+    private val cardLayout = CardLayout()
+    private val cardPanel = JPanel(cardLayout)
+
+    companion object {
+        private const val CARD_TABLE = "table"
+        private const val CARD_EMPTY = "empty"
+
+        private const val DATE_COL = 0
+        private const val COMMIT_COL = 1
+        private const val PIPELINE_COL = 2
+        private const val SIZE_COL = 3
+        private const val FILES_COL = 4
+        private const val COVERAGE_COL = 5
+    }
+
     init {
         setupTable()
 
         val toolbar = ActionManager.getInstance().createActionToolbar(
             ActionPlaces.TOOLWINDOW_CONTENT,
-            DefaultActionGroup(RefreshCoverageAction()),
+            DefaultActionGroup(FetchCoverageAction(), LoadFromFileAction(), ClearCoverageAction()),
             /* horizontal = */ true,
         )
         toolbar.targetComponent = table
 
+        cardPanel.add(JBScrollPane(table), CARD_TABLE)
+        cardPanel.add(createEmptyStatePanel(), CARD_EMPTY)
+
         add(toolbar.component, BorderLayout.NORTH)
-        add(JBScrollPane(table), BorderLayout.CENTER)
+        add(cardPanel, BorderLayout.CENTER)
 
         refreshData()
     }
@@ -61,6 +90,123 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         val entries = CoverageCacheService.getInstance(project).listArtifacts()
         log.info("Artifacts panel: loaded ${entries.size} cached artifact(s)")
         tableModel.setEntries(entries, dateFormat)
+
+        if (entries.isEmpty()) {
+            cardLayout.show(cardPanel, CARD_EMPTY)
+        } else {
+            cardLayout.show(cardPanel, CARD_TABLE)
+        }
+    }
+
+    private fun createEmptyStatePanel(): JPanel {
+        val panel = JPanel(GridBagLayout())
+        val gbc = GridBagConstraints().apply {
+            gridx = 0
+            gridy = 0
+            anchor = GridBagConstraints.CENTER
+            insets = JBUI.insets(4)
+        }
+
+        val heading = JBLabel("No coverage artifacts yet").apply {
+            font = font.deriveFont(font.size2D + 4f)
+        }
+        panel.add(heading, gbc)
+
+        gbc.gridy++
+        gbc.insets = JBUI.insets(12, 4, 4, 4)
+        val fetchButton = JButton("Fetch Coverage").apply {
+            addActionListener { doFetchCoverage() }
+        }
+        panel.add(fetchButton, gbc)
+
+        gbc.gridy++
+        gbc.insets = JBUI.insets(8, 4, 4, 4)
+        val loadFileLink = JBLabel("<html><a href=''>or load from a local file…</a></html>").apply {
+            cursor = Cursor.getPredefinedCursor(Cursor.HAND_CURSOR)
+            addMouseListener(object : MouseAdapter() {
+                override fun mouseClicked(e: MouseEvent) {
+                    doLoadFromFile()
+                }
+            })
+        }
+        panel.add(loadFileLink, gbc)
+
+        return panel
+    }
+
+    private fun doFetchCoverage() {
+        val loadService = CoverageLoadService.getInstance(project)
+        val error = loadService.validateSettings()
+        if (error != null) {
+            Messages.showErrorDialog(project, error, "Configuration Error")
+            return
+        }
+        loadService.loadFromGitLab(showErrors = true, onComplete = { refreshData() })
+    }
+
+    private fun doLoadFromFile() {
+        val descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor()
+            .withTitle("Select Coverage File")
+            .withDescription("Choose a .covt or .covt.gz binary coverage file")
+            .withFileFilter { vf ->
+                vf.name.endsWith(".covt") || vf.name.endsWith(".covt.gz")
+            }
+
+        val virtualFile = FileChooser.chooseFile(descriptor, project, null) ?: return
+        val file = File(virtualFile.path)
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val bytes = if (file.name.endsWith(".covt.gz")) {
+                    GZIPInputStream(file.inputStream()).use { it.readBytes() }
+                } else {
+                    file.readBytes()
+                }
+
+                val coverage = BinaryCoverageParser.parseCovtBytes(bytes)
+                log.info("Coverage: parsed ${coverage.size} files from local file ${file.name}")
+
+                val gitRoot = findGitRoot(file.parentFile)
+                val dataService = CoverageDataService.getInstance(project)
+                if (gitRoot != null) {
+                    dataService.setCoverageContext("local", gitRoot)
+                }
+                dataService.setCoverageAll(coverage)
+
+                ApplicationManager.getApplication().invokeLater {
+                    CoverageHighlighter.applyToOpenEditors(project)
+                    refreshData()
+                }
+            } catch (ex: Exception) {
+                log.warn("Failed to load local coverage file", ex)
+                ApplicationManager.getApplication().invokeLater {
+                    Messages.showErrorDialog(
+                        project,
+                        "Failed to parse coverage file:\n${ex.message}",
+                        "Coverage Error"
+                    )
+                }
+            }
+        }
+    }
+
+    private fun doClearCoverage() {
+        CoverageDataService.getInstance(project).clear()
+        for (editor in EditorFactory.getInstance().allEditors) {
+            if (editor.project == project) {
+                CoverageHighlighter.clearCoverageHighlighters(editor)
+            }
+        }
+        refreshData()
+    }
+
+    private fun findGitRoot(dir: File?): File? {
+        var current = dir
+        while (current != null) {
+            if (File(current, ".git").exists()) return current
+            current = current.parentFile
+        }
+        return null
     }
 
     private fun setupTable() {
@@ -129,19 +275,33 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         }
     }
 
-    private inner class RefreshCoverageAction :
-        AnAction("Refresh Coverage", "Check and download new coverage for the current commit", AllIcons.Actions.Refresh) {
+    private inner class FetchCoverageAction :
+        AnAction("Fetch Coverage", "Download new coverage from GitLab for the current commit", AllIcons.Actions.Refresh) {
 
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
 
         override fun actionPerformed(e: AnActionEvent) {
-            val loadService = CoverageLoadService.getInstance(project)
-            val error = loadService.validateSettings()
-            if (error != null) {
-                Messages.showErrorDialog(project, error, "Configuration Error")
-                return
-            }
-            loadService.loadFromGitLab(showErrors = true, onComplete = { refreshData() })
+            doFetchCoverage()
+        }
+    }
+
+    private inner class LoadFromFileAction :
+        AnAction("Load from File", "Load coverage from a local .covt or .covt.gz file", AllIcons.Actions.MenuOpen) {
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+        override fun actionPerformed(e: AnActionEvent) {
+            doLoadFromFile()
+        }
+    }
+
+    private inner class ClearCoverageAction :
+        AnAction("Clear Coverage", "Remove coverage data and annotations from all editors", AllIcons.Actions.GC) {
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+        override fun actionPerformed(e: AnActionEvent) {
+            doClearCoverage()
         }
     }
 
@@ -161,15 +321,6 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
             val selection = StringSelection(hash)
             Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
         }
-    }
-
-    companion object {
-        private const val DATE_COL = 0
-        private const val COMMIT_COL = 1
-        private const val PIPELINE_COL = 2
-        private const val SIZE_COL = 3
-        private const val FILES_COL = 4
-        private const val COVERAGE_COL = 5
     }
 }
 

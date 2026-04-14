@@ -18,17 +18,17 @@ class CoverageTestsToolWindowFactory : ToolWindowFactory {
         }
         contentManager.addContent(testsContent)
 
+        val artifactsPanel = CoverageArtifactsPanel(project)
+        val artifactsContent = contentFactory.createContent(artifactsPanel, "Artifacts", false).apply {
+            isCloseable = false
+        }
+        contentManager.addContent(artifactsContent)
+
         val logPanel = CoverageLogPanel(project)
         val logContent = contentFactory.createContent(logPanel, "Log", false).apply {
             isCloseable = false
         }
         Disposer.register(logContent, logPanel)
         contentManager.addContent(logContent)
-
-        val artifactsPanel = CoverageArtifactsPanel(project)
-        val artifactsContent = contentFactory.createContent(artifactsPanel, "Artifacts", false).apply {
-            isCloseable = false
-        }
-        contentManager.addContent(artifactsContent)
     }
 }
