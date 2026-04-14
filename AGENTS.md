@@ -24,6 +24,14 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 |------|---------|
 | `CoverageApiSettings.kt` | Persistent application-level settings: `gitlabDomain`, `bearerToken` (PRIVATE-TOKEN), `gitlabProjectId`, `gitlabProjectName`, `coverageBranch` (default `behat-run-necessary-tests`), `enabled` (master on/off switch), `remoteUrlAutoChecked` (one-time auto-check sentinel). Derives `gitlabBaseUrl`. |
 | `CoverageApiSettingsConfigurable.kt` | Settings UI under **Settings → Tools → GitLab Coverage**. Contains an **Enable coverage plugin** checkbox at the top that maps to `CoverageApiSettings.enabled`. |
+| `CoverageMcpSettings.kt` | Project-level `PersistentStateComponent` (`coverageMcpSettings.xml`): `mcpPort` (default 17178), `mcpEnabled` (default true). |
+| `CoverageMcpSettingsConfigurable.kt` | Settings UI under **Settings → Tools → GitLab Coverage → MCP Server**. Enable checkbox, port field, live status label, read-only `mcp.json` snippet text area (updates as port changes), and "Copy to Clipboard" button. |
+
+### MCP server (LLM integration)
+| File | Purpose |
+|------|---------|
+| `McpHandler.kt` | Pure JSON-RPC 2.0 dispatcher — no HTTP dependency. Handles `initialize` (returns capabilities + protocol version `2025-03-26`), `notifications/initialized` (no-op), `tools/list` (single tool descriptor), `tools/call` (dispatches `get_coverage_for_file`), and `ping`. Takes a JSON string, returns a JSON string. Constructor accepts `Project?` (nullable for unit tests). Uses `CoveragePathResolver` for path lookup and `CoverageDataService` for data access — same resolution logic as `CoverageHighlighter`. Tool output is human-readable text: header with commit hash + covered/uncovered counts, then each coverable line with status and test names. |
+| `McpServer.kt` | Project-level `Disposable` service wrapping JDK's `com.sun.net.httpserver.HttpServer`. Binds to `127.0.0.1:<mcpPort>` (localhost only, no auth). Exposes a single `POST /mcp` endpoint accepting `Content-Type: application/json` (Streamable HTTP transport). Lifecycle: auto-starts on project open if `mcpEnabled`, stops on project close / dispose. `restart(port, enabled)` called by the settings configurable on apply. Uses a 2-thread daemon pool. `BindException` is caught and logged without crashing. |
 
 ### GitLab integration
 | File | Purpose |
@@ -124,11 +132,44 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 
 `LoadLocalCoverageAction` (also accessible via the **Load from File** button in the Artifacts panel) lets the user pick a `.covt` file (or `.covt.gz`), parses it with `BinaryCoverageParser.parseCovtBytes`, feeds the result into `CoverageDataService.setCoverageAll()`. Useful for offline development and debugging without GitLab.
 
+## MCP Server (LLM integration)
+
+An embedded MCP (Model Context Protocol) server lets Claude CLI, Copilot CLI, and other MCP-compatible tools query per-line coverage data from the running IDE.
+
+- **Transport**: Streamable HTTP (2025-03-26 spec) — `POST /mcp`, `Content-Type: application/json`.
+- **Binding**: `127.0.0.1` only (localhost), default port `17178`. No authentication required.
+- **Zero new dependencies**: hand-rolled JSON-RPC 2.0 using `kotlinx.serialization` + JDK `com.sun.net.httpserver`.
+- **One server per project**: starts automatically on project open if enabled; stops on project close.
+
+### Tool: `get_coverage_for_file`
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file_path` | string | yes | Absolute or project-relative path to the PHP file |
+
+Returns human-readable text listing each coverable line with its status (covered/uncovered) and the names of tests that execute it. Header shows the coverage commit hash and covered/uncovered counts.
+
+### Configuration
+
+Add to `mcp.json`, `.claude.json`, or Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "coverage": {
+      "url": "http://localhost:17178/mcp"
+    }
+  }
+}
+```
+
+Settings are at **Settings → Tools → GitLab Coverage → MCP Server** — enable/disable checkbox, port, live status, and a copyable config snippet.
+
 ## Build & Run
 
 ```bash
 ./gradlew compileKotlin   # compile
-./gradlew test            # unit tests (BinaryCoverageParserTest, Cov4WriterReaderTest, GitLabModelsTest, AffectedTestsModelTest, ChangedLinesAnalyzerTest, CoverageLogServiceTest)
+./gradlew test            # unit tests (BinaryCoverageParserTest, Cov4WriterReaderTest, GitLabModelsTest, AffectedTestsModelTest, ChangedLinesAnalyzerTest, CoverageLogServiceTest, McpHandlerTest)
 ./gradlew buildPlugin     # distributable zip
 ./gradlew runIde          # sandbox IDE with the plugin
 ```
