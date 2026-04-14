@@ -1,5 +1,6 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.util.Alarm
 import git4idea.repo.GitRepository
@@ -13,10 +14,10 @@ import git4idea.repo.GitRepositoryChangeListener
  * Uses a 2-second debounce to avoid redundant reloads during rapid changes
  * (e.g. interactive rebase touching many commits).
  */
-class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeListener {
+class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeListener, Disposable {
 
     private val log = CoverageLog.get(CoverageHeadTracker::class.java)
-    private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD)
+    private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
 
     @Volatile
     private var lastKnownRevision: String? = null
@@ -39,6 +40,10 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
                 }
             }
         }, DEBOUNCE_MS)
+    }
+
+    override fun dispose() {
+        alarm.cancelAllRequests()
     }
 
     companion object {
