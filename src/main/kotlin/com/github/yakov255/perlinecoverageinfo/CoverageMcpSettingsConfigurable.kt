@@ -3,9 +3,11 @@ package com.github.yakov255.perlinecoverageinfo
 import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.project.Project
 import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
+import com.intellij.util.ui.UIUtil
 import java.awt.BorderLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -13,60 +15,93 @@ import javax.swing.*
 
 /**
  * Project-level settings UI for the MCP server.
- * Accessible at Settings → Tools → Coverage MCP Server.
+ * Accessible at Settings → Tools → GitLab Coverage → MCP Server.
  */
 class CoverageMcpSettingsConfigurable(private val project: Project) : Configurable {
 
-    private val enabledCheckbox = JBCheckBox("Enable MCP server (for Claude / Copilot CLI)")
+    private val enabledCheckbox = JBCheckBox("Enable MCP server")
     private val portField = JBTextField(6)
     private val statusLabel = JLabel()
+    private val snippetArea = JTextArea().apply {
+        isEditable = false
+        lineWrap = false
+        font = UIUtil.getLabelFont().deriveFont(UIUtil.getLabelFont().size2D - 1f)
+        border = JBUI.Borders.empty(6)
+    }
 
-    override fun getDisplayName(): String = "Coverage MCP Server"
+    override fun getDisplayName(): String = "MCP Server"
 
     override fun createComponent(): JComponent {
         updateStatusLabel()
-
-        val configSnippet = JButton("Copy config snippet").apply {
-            toolTipText = "Copies the MCP server configuration JSON to the clipboard"
-            addActionListener { copyConfigSnippet() }
-        }
+        updateSnippet()
 
         val portPanel = JPanel(BorderLayout(JBUI.scale(8), 0)).apply {
-            add(JLabel("Port:"), BorderLayout.WEST)
             add(portField, BorderLayout.CENTER)
         }
 
         val statusPanel = JPanel(BorderLayout(JBUI.scale(8), 0)).apply {
-            add(JLabel("Status:"), BorderLayout.WEST)
             add(statusLabel, BorderLayout.CENTER)
         }
 
+        val copyButton = JButton("Copy to Clipboard").apply {
+            addActionListener { copySnippetToClipboard() }
+        }
+
+        val snippetLabel = JBLabel("Add to your mcp.json or .claude.json:")
+        snippetLabel.componentStyle = UIUtil.ComponentStyle.SMALL
+        snippetLabel.fontColor = UIUtil.FontColor.BRIGHTER
+
+        val snippetPanel = JPanel(BorderLayout(0, JBUI.scale(4))).apply {
+            add(snippetLabel, BorderLayout.NORTH)
+            add(JScrollPane(snippetArea).apply {
+                preferredSize = java.awt.Dimension(0, JBUI.scale(120))
+            }, BorderLayout.CENTER)
+            add(copyButton, BorderLayout.SOUTH)
+        }
+
+        enabledCheckbox.addChangeListener { updateSnippet() }
+        portField.document.addDocumentListener(object : javax.swing.event.DocumentListener {
+            override fun insertUpdate(e: javax.swing.event.DocumentEvent?) = updateSnippet()
+            override fun removeUpdate(e: javax.swing.event.DocumentEvent?) = updateSnippet()
+            override fun changedUpdate(e: javax.swing.event.DocumentEvent?) = updateSnippet()
+        })
+
         return FormBuilder.createFormBuilder()
             .addComponent(enabledCheckbox)
-            .addLabeledComponent("", portPanel)
-            .addLabeledComponent("", statusPanel)
-            .addLabeledComponent("", configSnippet)
+            .addLabeledComponent("Port:", portPanel)
+            .addLabeledComponent("Status:", statusPanel)
+            .addSeparator()
+            .addComponent(snippetPanel)
             .addSeparator()
             .addComponent(createHelpPanel())
             .addComponentFillVertically(JPanel(), 0)
             .panel
     }
 
+    private fun buildSnippet(): String {
+        val port = portField.text.trim().toIntOrNull() ?: CoverageMcpSettings.getInstance(project).mcpPort
+        return """{
+  "mcpServers": {
+    "coverage": {
+      "url": "http://localhost:$port/mcp"
+    }
+  }
+}"""
+    }
+
+    private fun updateSnippet() {
+        snippetArea.text = buildSnippet()
+        snippetArea.caretPosition = 0
+    }
+
     private fun createHelpPanel(): JComponent {
         val text = """
             <html>
-            <body style="font-family: sans-serif; font-size: 11px; padding: 6px;">
+            <body style="font-family: sans-serif; font-size: 11px;">
             <b>How to use with Claude CLI / Copilot CLI:</b><br><br>
-            1. Make sure the MCP server is enabled and coverage is loaded in the IDE.<br>
-            2. Add the config snippet to your Claude Desktop config or <code>.claude.json</code>:<br>
-            <pre style="background: #f5f5f5; padding: 8px; margin-top: 4px;">
-{
-  "mcpServers": {
-    "coverage": {
-      "url": "http://localhost:PORT/mcp"
-    }
-  }
-}</pre>
+            1. Enable the MCP server and load coverage in the IDE.<br>
+            2. Copy the snippet above into your <code>mcp.json</code>, <code>.claude.json</code>,
+               or Claude Desktop config.<br>
             3. The LLM can then call <code>get_coverage_for_file</code> to see per-line coverage.<br>
             </body></html>
         """.trimIndent()
@@ -82,17 +117,9 @@ class CoverageMcpSettingsConfigurable(private val project: Project) : Configurab
         }
     }
 
-    private fun copyConfigSnippet() {
-        val port = portField.text.trim().toIntOrNull() ?: CoverageMcpSettings.getInstance(project).mcpPort
-        val snippet = """{
-  "mcpServers": {
-    "coverage": {
-      "url": "http://localhost:$port/mcp"
-    }
-  }
-}"""
+    private fun copySnippetToClipboard() {
         val clipboard = Toolkit.getDefaultToolkit().systemClipboard
-        clipboard.setContents(StringSelection(snippet), null)
+        clipboard.setContents(StringSelection(buildSnippet()), null)
     }
 
     override fun isModified(): Boolean {
@@ -116,5 +143,6 @@ class CoverageMcpSettingsConfigurable(private val project: Project) : Configurab
         enabledCheckbox.isSelected = settings.mcpEnabled
         portField.text = settings.mcpPort.toString()
         updateStatusLabel()
+        updateSnippet()
     }
 }

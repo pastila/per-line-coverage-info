@@ -33,10 +33,10 @@
             id="coverage.api.settings"
             displayName="GitLab Coverage"/>
         <projectConfigurable
-            parentId="tools"
+            parentId="coverage.api.settings"
             instance="com.github.yakov255.perlinecoverageinfo.CoverageMcpSettingsConfigurable"
             id="coverage.mcp.settings"
-            displayName="Coverage MCP Server"/>
+            displayName="MCP Server"/>
         <editorFactoryListener
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageEditorListener"/>
         <toolWindow id="Coverage Tests"
