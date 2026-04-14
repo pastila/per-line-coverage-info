@@ -23,11 +23,20 @@
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageCacheService"/>
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.AffectedTestsService"/>
+        <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageMcpSettings"/>
+        <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.McpServer"/>
         <applicationConfigurable
             parentId="tools"
             instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"
             id="coverage.api.settings"
             displayName="GitLab Coverage"/>
+        <projectConfigurable
+            parentId="tools"
+            instance="com.github.yakov255.perlinecoverageinfo.CoverageMcpSettingsConfigurable"
+            id="coverage.mcp.settings"
+            displayName="Coverage MCP Server"/>
         <editorFactoryListener
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageEditorListener"/>
         <toolWindow id="Coverage Tests"
