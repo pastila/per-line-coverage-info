@@ -65,7 +65,7 @@ object BehatTestRunner {
      * entire file".
      *
      * Example produced CLI options (as a single string passed via test runner options):
-     *   --paths=features/a.feature:10,20 --paths=features/b.feature
+     *   --paths features/a.feature:10,20 --paths features/b.feature
      */
     private fun createMultiPathsConfig(
         project: Project,
@@ -104,7 +104,7 @@ object BehatTestRunner {
         val suffix = if (lines.isEmpty()) "" else ":${lines.joinToString(",")}"
         // Quote the whole value when the path contains whitespace so the
         // ParametersList tokenizer keeps it as a single argument.
-        return if (file.any { it.isWhitespace() }) "--paths=\"$file$suffix\"" else "--paths=$file$suffix"
+        return if (file.any { it.isWhitespace() }) "--paths \"$file$suffix\"" else "--paths $file$suffix"
     }
 
     /**

@@ -699,7 +699,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     /**
      * Launches a single Behat process for [tests], using the custom `--paths` option
      * to bundle multiple feature files / scenarios. Lines under the same feature file
-     * are grouped together (`--paths=foo.feature:10,20`); a test without a `:line`
+     * are grouped together (`--paths foo.feature:10,20`); a test without a `:line`
      * suffix is treated as "run the entire file".
      */
     private fun runBehatBundled(tests: List<String>, debug: Boolean) {
