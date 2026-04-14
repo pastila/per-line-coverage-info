@@ -8,6 +8,7 @@
     <depends>com.jetbrains.php</depends>
     <depends>gherkin</depends>
     <depends optional="true" config-file="behat-integration.xml">com.jetbrains.php.behat</depends>
+    <depends optional="true" config-file="git-integration.xml">Git4Idea</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <errorHandler
@@ -41,11 +42,6 @@
         <postStartupActivity
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageStartupActivity"/>
     </extensions>
-
-    <projectListeners>
-        <listener class="com.github.yakov255.perlinecoverageinfo.CoverageBranchListener"
-                  topic="com.intellij.openapi.vcs.BranchChangeListener"/>
-    </projectListeners>
 
     <actions>
         <action id="LoadCoverageFromGitLab" class="com.github.yakov255.perlinecoverageinfo.LoadCoverageAction"

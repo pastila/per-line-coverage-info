@@ -16,7 +16,7 @@ import com.intellij.openapi.ui.Messages
  * Supports offline-first: shows cached (possibly stale) coverage immediately,
  * then fetches fresh coverage in the background.
  *
- * Used by LoadCoverageAction (manual) and CoverageBranchListener (automatic).
+ * Used by LoadCoverageAction (manual) and CoverageHeadTracker (automatic).
  */
 @Service(Service.Level.PROJECT)
 class CoverageLoadService(private val project: Project) {

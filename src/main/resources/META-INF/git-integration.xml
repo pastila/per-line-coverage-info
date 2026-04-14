@@ -1,0 +1,7 @@
+<idea-plugin>
+    <!-- Extensions registered only when Git4Idea plugin is available -->
+    <projectListeners>
+        <listener class="com.github.yakov255.perlinecoverageinfo.CoverageHeadTracker"
+                  topic="git4idea.repo.GitRepositoryChangeListener"/>
+    </projectListeners>
+</idea-plugin>
