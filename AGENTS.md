@@ -5,7 +5,7 @@
 An IntelliJ/PhpStorm plugin that displays per-line PHP code coverage inline in the editor. Coverage is collected by CI (Behat with a custom PHP extension that emits `.covt` files), downloaded from GitLab pipeline artifacts, cached locally in a random-access binary format, and rendered via gutter icons + line backgrounds. Each covered line exposes the list of tests that execute it, and individual tests can be re-run from the gutter popup.
 
 - **Plugin ID**: `com.github.yakov255.perlinecoverageinfo`
-- **Platform**: PhpStorm 2024.2.5+, depends on `com.jetbrains.php`, `gherkin`, optional `com.jetbrains.php.behat`
+- **Platform**: PhpStorm 2024.2.5+, depends on `com.jetbrains.php`, `gherkin`, optional `com.jetbrains.php.behat`, optional `Git4Idea`
 - **Language**: Kotlin, JVM 21
 - **Build**: Gradle with IntelliJ Platform Gradle Plugin
 - **Serialization**: kotlinx-serialization-json
@@ -14,7 +14,7 @@ An IntelliJ/PhpStorm plugin that displays per-line PHP code coverage inline in t
 
 Plugin source: `src/main/kotlin/com/github/yakov255/perlinecoverageinfo/`
 Tests: `src/test/kotlin/com/github/yakov255/perlinecoverageinfo/`
-Plugin manifest: `src/main/resources/META-INF/plugin.xml` (+ `behat-integration.xml` for optional Behat deps)
+Plugin manifest: `src/main/resources/META-INF/plugin.xml` (+ `behat-integration.xml` for optional Behat deps, `git-integration.xml` for optional Git4Idea deps)
 Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extension that produces `.covt`), `behat-decompiled/`, `php-sample-code/`, `coverage_storage_format_v4.md` (on-disk COV4 spec).
 
 ## Source Files
@@ -36,11 +36,11 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 | File | Purpose |
 |------|---------|
 | `CoverageLoadService.kt` | Project service orchestrating the whole flow. `loadOfflineFirst()` walks recent HEAD commits, opens the first cached `.cov4` (marks stale), shows highlights immediately, then refreshes from GitLab in the background. `loadFromGitLab()` runs resolver → checks cache → `downloadArtifacts()` → writes `.cov4` → **reopens it as a `Cov4Reader` and drops the merged map** so steady-state memory stays bounded. All three load paths (cache hit, offline-first, fresh download) converge on the same reader-backed state. All heavy work runs under a `Task.Backgroundable` progress indicator. |
-| `LoadCoverageAction.kt` | Tools menu: **Load Coverage from GitLab**. Validates settings, then delegates to `CoverageLoadService`. |
-| `LoadLocalCoverageAction.kt` | Tools menu: **Load Coverage from File**. Loads a local `.covt` (or `.covt.gz`) directly, bypassing GitLab. |
-| `ClearCoverageAction.kt` | Tools menu: clears highlighters + in-memory data. |
-| `CoverageBranchListener.kt` | `BranchChangeListener` — auto-triggers `loadOfflineFirst()` after a VCS branch change (silent on errors). |
-| `CoverageStartupActivity.kt` | `ProjectActivity` — auto-triggers `loadOfflineFirst()` once after the IDE has fully started (silent on errors; skips if settings are not configured). |
+| `LoadCoverageAction.kt` | **Load Coverage from GitLab** (available via Find Action). Validates settings, then delegates to `CoverageLoadService`. Implements `DumbAware` so it works during indexing. Not in any menu — the Artifacts panel is the primary UI. |
+| `LoadLocalCoverageAction.kt` | **Load Coverage from File** (available via Find Action). Loads a local `.covt` (or `.covt.gz`) directly, bypassing GitLab. Implements `DumbAware`. Not in any menu — the Artifacts panel toolbar provides this. |
+| `ClearCoverageAction.kt` | **Clear Coverage Data** (available via Find Action). Clears highlighters + in-memory data. Implements `DumbAware`. Not in any menu — the Artifacts panel toolbar provides this. |
+| `CoverageHeadTracker.kt` | `GitRepositoryChangeListener` (registered via `git-integration.xml`) — monitors `repository.currentRevision` and auto-triggers `loadOfflineFirst()` whenever HEAD changes (branch switch, pull, commit, rebase, reset, etc.). Debounces rapid changes with a 2-second `Alarm`. Replaces the old `BranchChangeListener` which only fired on branch switch. |
+| `CoverageStartupActivity.kt` | `ProjectActivity` — auto-triggers `loadOfflineFirst()` once after the IDE has fully started (silent on errors; skips if settings are not configured). Implements `DumbAware` so it runs immediately without waiting for indexing. |
 
 ### Parsing & on-disk format
 | File | Purpose |
@@ -64,16 +64,16 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 | `CoverageGutterRenderer.kt` | `LineMarkerRenderer` drawing the gutter strip + click popup listing the covering tests. Uses `BehatTestRunner` to re-run a selected test. |
 | `CoverageIcons.kt` | Icon constants (green/red). |
 | `CoverageEditorListener.kt` | `EditorFactoryListener` — applies highlights on editor open, installs a debounced `DocumentListener` (300ms) that re-applies highlights after edits so the line mapping refreshes. |
-| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Editor gutter popup actions to toggle coverage display **project-wide**. They flip `CoverageGutterVisibilityService` and either `clearAllEditors` or `applyToOpenEditors`. The actions are mutually exclusive in the popup (only the relevant one is visible) and require coverage data to exist. |
+| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Editor gutter popup actions to toggle coverage display **project-wide**. They flip `CoverageGutterVisibilityService` and either `clearAllEditors` or `applyToOpenEditors`. The actions are mutually exclusive in the popup (only the relevant one is visible) and require coverage data to exist. All action classes implement `DumbAware` so they work during indexing. |
 | `CoverageGutterVisibilityService.kt` | Project-level `PersistentStateComponent` (`coverageGutterVisibility.xml`) holding a single `visible: Boolean` flag. Persists across IDE restarts. `CoverageHighlighter.applyToEditor` early-returns (and clears) when `visible == false`, so newly opened editors and document-change re-highlights also respect the toggle. |
 
 ### Tests tool window
 | File | Purpose |
 |------|---------|
-| `CoverageTestsToolWindowFactory.kt` | Registers the **Coverage Tests** bottom tool window with three tabs: **Tests** (`CoverageTestsPanel`), **Artifacts** (`CoverageArtifactsPanel`), and **Log** (`CoverageLogPanel`). All contents are non-closable. |
+| `CoverageTestsToolWindowFactory.kt` | Registers the **Coverage Tests** bottom tool window with three tabs: **Tests** (`CoverageTestsPanel`), **Artifacts** (`CoverageArtifactsPanel`), and **Log** (`CoverageLogPanel`). Tab order: Tests → Artifacts → Log. All contents are non-closable. |
 | `CoverageTestNodeData.kt` | Sealed class hierarchy for test-tree node payloads: `Dir(displayName, count)` — intermediate directory/namespace node with recursive test count; `BehatGroup(featurePath, displayName)` — feature file node; `BehatScenario(label, originalTestName)` — leaf scenario; `PhpUnitGroup(className, displayName)` — class node; `PhpUnitMethod(methodName, fullTestName)` — leaf method. Also declares `FileNodeData` sealed class used by `AffectedFilesPane`. |
 | `CoverageTestsPanel.kt` | Dual-mode UI. **Normal mode** (per-line): lists tests covering the clicked line, groups by feature file / PHPUnit class. Supports **flat/tree toggle** (`isTestsTreeView`): flat = group by feature file path label; tree = parse the path into a compact directory hierarchy (Behat) or namespace hierarchy (PHPUnit `\`-separated), identical compaction logic to `AffectedFilesPane`. In tree mode each `Dir`, `BehatGroup`, and `PhpUnitGroup` node shows the test count in gray parentheses (e.g. `features/checkout (12)`); counts on `Dir` nodes are the recursive total under that subtree. Toggle button in the toolbar rebuilds the tree immediately. **Affected mode** (per-change): activated by Find HEAD / Find Working Tree toolbar buttons; shows a `OnePixelSplitter` with a `CheckboxTree` of affected files on the left and the test tree on the right. Files pane supports its own tree/flat toggle, expand/collapse all, check/uncheck all, per-node Δ (unique contribution). Both modes share the same test tree and the same flat/tree toggle. Toolbar: Find HEAD, Find Working Tree, Refresh, Tree View toggle, Run All, Run All With Debug, Remove Selected, Back. F5 = Refresh. Switches back to normal mode via Back. Run All bundles every scenario into a **single** Behat launch via `BehatTestRunner.runMultiplePathsWithCallback` (no more sequential per-test launches). `buildPathsByFile` groups tree test names (`feature:line`) into the `Map<String, List<Int>>` shape the runner expects; whole-file entries override per-line entries for the same file. |
-| `CoverageArtifactsPanel.kt` | Artifacts tab. Lists all locally cached coverage artifacts (from `CoverageCacheService.listArtifacts()`) in a table with columns: Date, Commit, Pipeline, Size, Files, Coverage %. The Pipeline column renders as a clickable hyperlink that opens the GitLab pipeline in a browser. Right-clicking the Commit column shows a context menu with **Copy Hash** (copies the full commit hash to the clipboard). Toolbar has a **Refresh Coverage** button that triggers `CoverageLoadService.loadFromGitLab()` and reloads the table on completion. |
+| `CoverageArtifactsPanel.kt` | Artifacts tab — **primary UI for managing coverage**. Lists all locally cached coverage artifacts (from `CoverageCacheService.listArtifacts()`) in a table with columns: Date, Commit, Pipeline, Size, Files, Coverage %. The Pipeline column renders as a clickable hyperlink that opens the GitLab pipeline in a browser. Right-clicking the Commit column shows a context menu with **Copy Hash** (copies the full commit hash to the clipboard). Toolbar has three buttons: **Fetch Coverage** (triggers `CoverageLoadService.loadFromGitLab()`), **Load from File** (opens file chooser for local `.covt`/`.covt.gz`), and **Clear Coverage** (clears data + highlighters). When no artifacts are cached, shows an **empty state** panel with a "Fetch Coverage" button and a "load from a local file…" link. `refreshData()` switches between empty state and table via `CardLayout`. |
 | `CoverageLogPanel.kt` | Log tab. Wraps an IntelliJ `ConsoleView` (scrollback / search / copy for free) and subscribes to `CoverageLogService` via the atomic `subscribe(parent, listener)` so the backfill and live stream are gap-free and dupe-free. Maps `CoverageLogService.Level` → `ConsoleViewContentType.LOG_*_OUTPUT` for level-colored output. Toolbar exposes Clear (wipes both buffer and console) and Scroll-to-End. |
 
 ### Affected-tests analysis
@@ -100,7 +100,7 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 
 ## End-to-end Flow (GitLab path)
 
-1. User invokes **Tools → Load Coverage from GitLab** (or a branch change fires `CoverageBranchListener`, or the IDE starts and `CoverageStartupActivity` fires).
+1. User clicks **Fetch Coverage** in the Artifacts panel toolbar (or uses Find Action → "Load Coverage from GitLab"), or HEAD changes and `CoverageHeadTracker` fires, or the IDE starts and `CoverageStartupActivity` fires.
 2. `CoverageLoadService.loadOfflineFirst()`:
    - Walks last 200 HEAD commits, asks `CoverageCacheService` if any are cached on disk.
    - If yes → open `Cov4Reader`, mark `isStale = true`, apply highlights, notify "Showing cached coverage".
@@ -119,7 +119,7 @@ Related artifacts in repo root: `php-behat-coverage-extension/` (the PHP extensi
 
 ## Local `.covt` Path
 
-`LoadLocalCoverageAction` lets the user pick a `.covt` file (or `.covt.gz`), parses it with `BinaryCoverageParser.parseCovtBytes`, feeds the result into `CoverageDataService.setCoverageAll()`. Useful for offline development and debugging without GitLab.
+`LoadLocalCoverageAction` (also accessible via the **Load from File** button in the Artifacts panel) lets the user pick a `.covt` file (or `.covt.gz`), parses it with `BinaryCoverageParser.parseCovtBytes`, feeds the result into `CoverageDataService.setCoverageAll()`. Useful for offline development and debugging without GitLab.
 
 ## Build & Run
 
