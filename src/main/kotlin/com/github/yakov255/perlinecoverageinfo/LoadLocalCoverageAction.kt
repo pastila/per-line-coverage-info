@@ -6,6 +6,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.project.DumbAware
 import java.io.File
 import java.util.zip.GZIPInputStream
 
@@ -13,7 +14,7 @@ import java.util.zip.GZIPInputStream
  * Action to load coverage from a local .covt or .covt.gz file.
  * Useful for locally generated coverage data (no GitLab needed).
  */
-class LoadLocalCoverageAction : AnAction() {
+class LoadLocalCoverageAction : AnAction(), DumbAware {
 
     private val log = CoverageLog.get(LoadLocalCoverageAction::class.java)
 
