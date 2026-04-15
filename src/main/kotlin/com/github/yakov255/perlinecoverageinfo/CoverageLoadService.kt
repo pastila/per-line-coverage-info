@@ -147,10 +147,11 @@ class CoverageLoadService(private val project: Project) {
 
     /**
      * Loads coverage from GitLab in a background task with progress indicator.
-     * @param showErrors If true, shows error dialogs on failure. If false (auto-trigger), logs errors silently.
+     * @param showErrors If true, shows error dialogs on failure. If false, errors are only logged and [onError] is called.
      * @param onComplete Called on the EDT when the task finishes (success or failure), so callers can refresh UI.
+     * @param onError Called on the EDT with a short friendly message when the load fails. Ignored when [showErrors]=true.
      */
-    fun loadFromGitLab(showErrors: Boolean = true, onComplete: (() -> Unit)? = null) {
+    fun loadFromGitLab(showErrors: Boolean = true, onComplete: (() -> Unit)? = null, onError: ((String) -> Unit)? = null) {
         val validationError = validateSettings()
         if (validationError != null) {
             if (showErrors) {
@@ -210,15 +211,19 @@ class CoverageLoadService(private val project: Project) {
                         applyCoverage(result)
                     }
                 } catch (ex: CoverageApiException) {
-                    log.warn("Coverage: GitLab load failed (${ex.kind}): ${ex.userMessage}", ex)
+                    // CoverageApiException is a structured, expected error — log message only, no stack trace.
+                    log.warn("Coverage: GitLab load failed (${ex.kind}): ${ex.userMessage}")
+                    val friendly = friendlyApiError(ex)
                     if (showErrors) {
                         val title = errorTitle(ex.kind)
                         ApplicationManager.getApplication().invokeLater {
                             Messages.showErrorDialog(project, ex.userMessage, title)
                         }
                     }
+                    onError?.let { ApplicationManager.getApplication().invokeLater { it(friendly) } }
                 } catch (ex: Exception) {
                     log.warn("Coverage: unexpected error during GitLab load: ${ex.message}", ex)
+                    val friendly = "Unexpected error: ${ex.message}"
                     if (showErrors) {
                         ApplicationManager.getApplication().invokeLater {
                             Messages.showErrorDialog(
@@ -228,6 +233,7 @@ class CoverageLoadService(private val project: Project) {
                             )
                         }
                     }
+                    onError?.let { ApplicationManager.getApplication().invokeLater { it(friendly) } }
                 } finally {
                     onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
                 }
@@ -451,6 +457,20 @@ class CoverageLoadService(private val project: Project) {
             CoverageErrorKind.GIT -> "Git Error"
             CoverageErrorKind.NO_DATA -> "No Coverage Data"
             CoverageErrorKind.PROJECT_SETUP -> "Configuration Error"
+        }
+
+        fun friendlyApiError(ex: CoverageApiException): String = when {
+            ex.kind == CoverageErrorKind.GITLAB_API && ex.details["httpStatus"] == "401" ->
+                "GitLab token expired or invalid. Update it in Settings → Tools → GitLab Coverage."
+            ex.kind == CoverageErrorKind.GITLAB_API && ex.details["httpStatus"] == "403" ->
+                "Access denied. Check your GitLab token permissions."
+            ex.kind == CoverageErrorKind.GITLAB_API && ex.details["httpStatus"] == "404" ->
+                "Pipeline or artifacts not found on GitLab."
+            ex.kind == CoverageErrorKind.NETWORK ->
+                "Cannot connect to GitLab. Check your network connection."
+            ex.kind == CoverageErrorKind.NO_DATA ->
+                "No coverage artifacts found for this commit."
+            else -> ex.userMessage
         }
     }
 }

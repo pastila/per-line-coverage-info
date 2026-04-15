@@ -20,6 +20,7 @@ import com.intellij.icons.AllIcons
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.CardLayout
+import java.awt.Color
 import java.awt.Cursor
 import java.awt.Dimension
 import java.awt.GridBagConstraints
@@ -35,6 +36,7 @@ import java.util.zip.GZIPInputStream
 import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.JTable
+import javax.swing.SwingConstants
 import javax.swing.table.AbstractTableModel
 
 /**
@@ -53,6 +55,13 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
 
     private val cardLayout = CardLayout()
     private val cardPanel = JPanel(cardLayout)
+
+    /** Shown at the bottom when the last fetch attempt produced an error. */
+    private val statusLabel = JBLabel("", AllIcons.General.Warning, SwingConstants.LEFT).apply {
+        border = JBUI.Borders.empty(4, 8)
+        foreground = Color(0xC97B00)
+        isVisible = false
+    }
 
     companion object {
         private const val CARD_TABLE = "table"
@@ -81,6 +90,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
 
         add(toolbar.component, BorderLayout.NORTH)
         add(cardPanel, BorderLayout.CENTER)
+        add(statusLabel, BorderLayout.SOUTH)
 
         refreshData()
     }
@@ -134,6 +144,12 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         return panel
     }
 
+    /** Shows or hides the inline status label at the bottom of the panel. */
+    private fun showStatus(message: String?) {
+        statusLabel.text = message ?: ""
+        statusLabel.isVisible = message != null
+    }
+
     private fun doFetchCoverage() {
         val loadService = CoverageLoadService.getInstance(project)
         val error = loadService.validateSettings()
@@ -141,7 +157,12 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
             Messages.showErrorDialog(project, error, "Configuration Error")
             return
         }
-        loadService.loadFromGitLab(showErrors = true, onComplete = { refreshData() })
+        showStatus(null)
+        loadService.loadFromGitLab(
+            showErrors = false,
+            onComplete = { refreshData() },
+            onError = { msg -> showStatus(msg) },
+        )
     }
 
     private fun doLoadFromFile() {
@@ -175,6 +196,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
 
                 ApplicationManager.getApplication().invokeLater {
                     CoverageHighlighter.applyToOpenEditors(project)
+                    showStatus(null)
                     refreshData()
                 }
             } catch (ex: Exception) {
