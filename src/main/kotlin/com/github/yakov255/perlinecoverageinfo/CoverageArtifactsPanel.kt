@@ -71,7 +71,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
 
         val toolbar = ActionManager.getInstance().createActionToolbar(
             ActionPlaces.TOOLWINDOW_CONTENT,
-            DefaultActionGroup(FetchCoverageAction(), LoadFromFileAction(), ClearCoverageAction()),
+            DefaultActionGroup(FetchCoverageAction(), LoadFromFileAction(), DeleteArtifactAction()),
             /* horizontal = */ true,
         )
         toolbar.targetComponent = table
@@ -200,6 +200,29 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         refreshData()
     }
 
+    private fun doDeleteArtifact() {
+        val row = table.selectedRow
+        if (row < 0) return
+        val entry = tableModel.getEntry(row) ?: return
+
+        val confirmed = Messages.showYesNoDialog(
+            project,
+            "Delete cached coverage artifact for commit ${entry.commitHash.take(8)} (#${entry.pipelineId})?",
+            "Delete Artifact",
+            Messages.getQuestionIcon(),
+        )
+        if (confirmed != Messages.YES) return
+
+        val isActive = CoverageDataService.getInstance(project).coverageCommitHash == entry.commitHash
+        val deleted = CoverageCacheService.getInstance(project).deleteArtifact(entry.commitHash)
+
+        if (deleted && isActive) {
+            doClearCoverage()
+        } else {
+            refreshData()
+        }
+    }
+
     private fun findGitRoot(dir: File?): File? {
         var current = dir
         while (current != null) {
@@ -302,6 +325,20 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
 
         override fun actionPerformed(e: AnActionEvent) {
             doClearCoverage()
+        }
+    }
+
+    private inner class DeleteArtifactAction :
+        AnAction("Delete Artifact", "Delete the selected cached artifact from disk", AllIcons.General.Remove) {
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = table.selectedRow >= 0
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            doDeleteArtifact()
         }
     }
 

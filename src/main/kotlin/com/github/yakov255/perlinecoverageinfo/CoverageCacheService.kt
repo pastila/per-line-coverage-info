@@ -113,6 +113,29 @@ class CoverageCacheService(private val project: Project) {
     }
 
     /**
+     * Deletes the cached artifact for [commitHash] — both the .cov4 file and its index entry.
+     * Returns true if the file was deleted (or was already absent), false on I/O error.
+     */
+    fun deleteArtifact(commitHash: String): Boolean {
+        val dir = cacheDir()
+        val cov4File = File(dir, "${commitHash}.cov4")
+
+        if (cov4File.exists() && !cov4File.delete()) {
+            log.warn("Coverage cache: failed to delete ${cov4File.absolutePath}")
+            return false
+        }
+
+        val index = readIndex() ?: CacheIndex(entries = emptyList())
+        val updated = index.entries.filter { it.commitHash != commitHash }
+        if (updated.size != index.entries.size) {
+            writeIndex(CacheIndex(entries = updated))
+        }
+
+        log.info("Coverage cache: deleted artifact for commit $commitHash")
+        return true
+    }
+
+    /**
      * Returns metadata for all locally cached artifacts, sorted newest-first.
      * Entries whose .cov4 file is missing from disk are excluded.
      */
