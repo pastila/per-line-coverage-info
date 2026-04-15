@@ -318,16 +318,6 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         }
     }
 
-    private inner class ClearCoverageAction :
-        AnAction("Clear Coverage", "Remove coverage data and annotations from all editors", AllIcons.Actions.GC) {
-
-        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
-
-        override fun actionPerformed(e: AnActionEvent) {
-            doClearCoverage()
-        }
-    }
-
     private inner class DeleteArtifactAction :
         AnAction("Delete Artifact", "Delete the selected cached artifact from disk", AllIcons.General.Remove) {
 

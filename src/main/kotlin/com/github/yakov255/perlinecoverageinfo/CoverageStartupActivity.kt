@@ -14,7 +14,6 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
     private val log = CoverageLog.get(CoverageStartupActivity::class.java)
 
     override suspend fun execute(project: Project) {
-        log.warn("[STARTUP] CoverageStartupActivity.execute() called, project=${project.name}")
         try {
             val loadService = CoverageLoadService.getInstance(project)
 
@@ -23,18 +22,13 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
 
             val settingsError = loadService.validateSettings()
             if (settingsError != null) {
-                log.warn("[STARTUP] Settings not configured, skipping auto-load: $settingsError")
+                log.info("Coverage auto-load skipped: $settingsError")
                 return
             }
 
-            val settings = CoverageApiSettings.getInstance()
-            log.warn("[STARTUP] Settings OK — domain=${settings.gitlabDomain}, projectId=${settings.gitlabProjectId}, projectName=${settings.gitlabProjectName}, branch=${settings.coverageBranch}, tokenBlank=${settings.bearerToken.isBlank()}")
-
-            log.warn("[STARTUP] Calling loadOfflineFirst()")
             loadService.loadOfflineFirst()
-            log.warn("[STARTUP] loadOfflineFirst() returned (background tasks may still be running)")
         } catch (ex: Exception) {
-            log.warn("[STARTUP] Unexpected exception in CoverageStartupActivity", ex)
+            log.warn("Coverage: unexpected error in startup activity", ex)
         }
     }
 }
