@@ -21,8 +21,10 @@ import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
 import java.awt.CardLayout
 import java.awt.Color
+import java.awt.Component
 import java.awt.Cursor
 import java.awt.Dimension
+import java.awt.Font
 import java.awt.GridBagConstraints
 import java.awt.GridBagLayout
 import java.awt.Toolkit
@@ -38,6 +40,7 @@ import javax.swing.JPanel
 import javax.swing.JTable
 import javax.swing.SwingConstants
 import javax.swing.table.AbstractTableModel
+import javax.swing.table.DefaultTableCellRenderer
 
 /**
  * Tool-window tab panel that lists all locally cached coverage artifacts and
@@ -80,7 +83,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
 
         val toolbar = ActionManager.getInstance().createActionToolbar(
             ActionPlaces.TOOLWINDOW_CONTENT,
-            DefaultActionGroup(FetchCoverageAction(), LoadFromFileAction(), DeleteArtifactAction()),
+            DefaultActionGroup(FetchCoverageAction(), LoadSelectedArtifactAction(), LoadFromFileAction(), DeleteArtifactAction()),
             /* horizontal = */ true,
         )
         toolbar.targetComponent = table
@@ -100,6 +103,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         val entries = CoverageCacheService.getInstance(project).listArtifacts()
         log.info("Artifacts panel: loaded ${entries.size} cached artifact(s)")
         tableModel.setEntries(entries, dateFormat)
+        table.repaint()
 
         if (entries.isEmpty()) {
             cardLayout.show(cardPanel, CARD_EMPTY)
@@ -163,6 +167,13 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
             onComplete = { refreshData() },
             onError = { msg -> showStatus(msg) },
         )
+    }
+
+    private fun doLoadFromCache() {
+        val row = table.selectedRow
+        if (row < 0) return
+        val entry = tableModel.getEntry(row) ?: return
+        CoverageLoadService.getInstance(project).loadFromCache(entry.commitHash) { refreshData() }
     }
 
     private fun doLoadFromFile() {
@@ -260,7 +271,13 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         table.intercellSpacing = Dimension(0, 0)
         table.tableHeader.reorderingAllowed = false
 
-        // Mouse adapter handles right-click context menus on commit and pipeline columns.
+        // Apply bold-font renderer to all columns to highlight the active artifact row.
+        val activeRenderer = ActiveRowCellRenderer()
+        for (i in 0 until table.columnCount) {
+            table.columnModel.getColumn(i).cellRenderer = activeRenderer
+        }
+
+        // Mouse adapter handles right-click context menus on any row.
         val mouseAdapter = object : MouseAdapter() {
             override fun mousePressed(e: MouseEvent) {
                 if (e.isPopupTrigger) handleContextMenu(e)
@@ -271,15 +288,11 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
             }
 
             private fun handleContextMenu(e: MouseEvent) {
-                val col = table.columnAtPoint(e.point)
                 val row = table.rowAtPoint(e.point)
                 if (row < 0) return
                 table.setRowSelectionInterval(row, row)
                 val entry = tableModel.getEntry(row) ?: return
-                when (col) {
-                    COMMIT_COL -> showCommitContextMenu(entry, e)
-                    PIPELINE_COL -> showPipelineContextMenu(entry, e)
-                }
+                showRowContextMenu(entry, e)
             }
         }
         table.addMouseListener(mouseAdapter)
@@ -302,9 +315,16 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         return "${settings.gitlabBaseUrl}/${settings.gitlabProjectName}/-/pipelines/${entry.pipelineId}"
     }
 
-    private fun showPipelineContextMenu(entry: ArtifactInfo, e: MouseEvent) {
+    /** Single unified context menu for any row — always includes Load and Copy Hash. */
+    private fun showRowContextMenu(entry: ArtifactInfo, e: MouseEvent) {
         val group = DefaultActionGroup()
-        group.add(OpenInBrowserAction(entry))
+        group.add(LoadThisCoverageAction(entry))
+        group.addSeparator()
+        group.add(CopyHashAction(entry.commitHash))
+        val pipelineUrl = openPipelineUrl(entry)
+        if (pipelineUrl != null) {
+            group.add(OpenInBrowserAction(entry))
+        }
         val popup = ActionManager.getInstance().createActionPopupMenu(ActionPlaces.UNKNOWN, group)
         popup.component.show(e.component, e.x, e.y)
     }
@@ -320,6 +340,16 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         }
     }
 
+    private inner class LoadThisCoverageAction(private val entry: ArtifactInfo) :
+        AnAction("Load This Coverage", "Show coverage from commit ${entry.commitHash.take(8)}", AllIcons.Actions.Show) {
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+        override fun actionPerformed(e: AnActionEvent) {
+            CoverageLoadService.getInstance(project).loadFromCache(entry.commitHash) { refreshData() }
+        }
+    }
+
     private inner class FetchCoverageAction :
         AnAction("Fetch Coverage", "Download new coverage from GitLab for the current commit", AllIcons.Actions.Refresh) {
 
@@ -327,6 +357,20 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
 
         override fun actionPerformed(e: AnActionEvent) {
             doFetchCoverage()
+        }
+    }
+
+    private inner class LoadSelectedArtifactAction :
+        AnAction("Load Selected", "Show coverage from the selected cached artifact", AllIcons.Actions.Show) {
+
+        override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = table.selectedRow >= 0
+        }
+
+        override fun actionPerformed(e: AnActionEvent) {
+            doLoadFromCache()
         }
     }
 
@@ -354,13 +398,6 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         }
     }
 
-    private fun showCommitContextMenu(entry: ArtifactInfo, e: MouseEvent) {
-        val group = DefaultActionGroup()
-        group.add(CopyHashAction(entry.commitHash))
-        val popup = ActionManager.getInstance().createActionPopupMenu(ActionPlaces.UNKNOWN, group)
-        popup.component.show(e.component, e.x, e.y)
-    }
-
     private inner class CopyHashAction(private val hash: String) :
         AnAction("Copy Hash", "Copy full commit hash to clipboard", AllIcons.Actions.Copy) {
 
@@ -369,6 +406,31 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         override fun actionPerformed(e: AnActionEvent) {
             val selection = StringSelection(hash)
             Toolkit.getDefaultToolkit().systemClipboard.setContents(selection, selection)
+        }
+    }
+
+    /**
+     * Cell renderer that renders the active artifact's row in bold font.
+     * The active artifact is identified by matching [CoverageDataService.coverageCommitHash].
+     */
+    private inner class ActiveRowCellRenderer : DefaultTableCellRenderer() {
+        override fun getTableCellRendererComponent(
+            table: JTable,
+            value: Any?,
+            isSelected: Boolean,
+            hasFocus: Boolean,
+            row: Int,
+            column: Int,
+        ): Component {
+            val c = super.getTableCellRendererComponent(table, value, isSelected, hasFocus, row, column)
+            val entry = tableModel.getEntry(row)
+            val activeHash = CoverageDataService.getInstance(project).coverageCommitHash
+            c.font = if (entry != null && entry.commitHash == activeHash) {
+                c.font.deriveFont(Font.BOLD)
+            } else {
+                c.font.deriveFont(Font.PLAIN)
+            }
+            return c
         }
     }
 }

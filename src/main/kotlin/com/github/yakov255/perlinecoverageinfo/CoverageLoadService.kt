@@ -425,6 +425,41 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
+     * Loads coverage from a locally cached .cov4 file for the given commit hash.
+     * Used when the user explicitly selects an artifact from the Artifacts panel.
+     *
+     * Runs I/O on a pooled thread, then applies highlights on the EDT.
+     * [onComplete] is invoked on the EDT when done (whether successful or not).
+     */
+    fun loadFromCache(commitHash: String, onComplete: (() -> Unit)? = null) {
+        val cache = CoverageCacheService.getInstance(project)
+        val dataService = CoverageDataService.getInstance(project)
+        val gitRoot = findGitRoot()
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val reader = cache.get(commitHash)
+            if (reader == null) {
+                log.warn("Coverage: loadFromCache — no .cov4 found for commit $commitHash")
+                onComplete?.let { ApplicationManager.getApplication().invokeLater(it) }
+                return@executeOnPooledThread
+            }
+
+            if (gitRoot != null) {
+                dataService.setCoverageContext(commitHash, gitRoot, stale = false)
+            } else {
+                log.warn("Coverage: loadFromCache — could not determine git root; coverage context not updated")
+            }
+            dataService.setCov4Reader(reader)
+            log.info("Coverage: loaded from cache for commit ${commitHash.take(8)} (${reader.allFilePaths.size} files)")
+
+            ApplicationManager.getApplication().invokeLater {
+                CoverageHighlighter.applyToOpenEditors(project)
+                onComplete?.invoke()
+            }
+        }
+    }
+
+    /**
      * Finds the git root for the project base directory.
      */
     private fun findGitRoot(): java.io.File? {
