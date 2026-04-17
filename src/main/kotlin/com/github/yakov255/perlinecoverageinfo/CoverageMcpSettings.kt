@@ -13,7 +13,7 @@ class CoverageMcpSettings : PersistentStateComponent<CoverageMcpSettings.State> 
 
     data class State(
         var mcpPort: Int = 17178,
-        var mcpEnabled: Boolean = true,
+        var mcpEnabled: Boolean = false,
     )
 
     private var state = State()
