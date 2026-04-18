@@ -78,6 +78,20 @@ class CoverageCacheService(private val project: Project) {
     }
 
     /**
+     * Updates the last-used timestamp for an existing cache entry.
+     * Called whenever an artifact is activated so the Artifacts panel can show
+     * when each artifact was last viewed.
+     */
+    fun updateLastUsed(commitHash: String) {
+        val index = readIndex() ?: return
+        if (index.entries.none { it.commitHash == commitHash }) return
+        val updated = index.entries.map { entry ->
+            if (entry.commitHash == commitHash) entry.copy(lastUsedMs = System.currentTimeMillis()) else entry
+        }
+        writeIndex(CacheIndex(entries = updated))
+    }
+
+    /**
      * Writes merged coverage data to a .cov4 cache file.
      * Computes and persists coverage statistics (file count, line counts) into the cache index.
      */
@@ -97,14 +111,16 @@ class CoverageCacheService(private val project: Project) {
         val totalLines = coverage.values.sumOf { it.size }
         val coveredLines = coverage.values.sumOf { lineMap -> lineMap.values.count { it.isNotEmpty() } }
 
+        val now = System.currentTimeMillis()
         val index = readIndex() ?: CacheIndex(entries = emptyList())
         val newEntry = CacheEntry(
             commitHash = commitHash,
             pipelineId = pipelineId,
-            timestampMs = System.currentTimeMillis(),
+            timestampMs = now,
             totalFiles = totalFiles,
             totalLines = totalLines,
             coveredLines = coveredLines,
+            lastUsedMs = now,
         )
         val updated = index.entries.filter { it.commitHash != commitHash } + newEntry
         writeIndex(CacheIndex(entries = updated))
@@ -155,6 +171,7 @@ class CoverageCacheService(private val project: Project) {
                     totalFiles = entry.totalFiles,
                     totalLines = entry.totalLines,
                     coveredLines = entry.coveredLines,
+                    lastUsedMs = entry.lastUsedMs,
                 )
             }
     }
@@ -269,6 +286,7 @@ private data class CacheEntry(
     val totalFiles: Int = 0,
     val totalLines: Int = 0,
     val coveredLines: Int = 0,
+    val lastUsedMs: Long? = null,
 )
 
 /**
@@ -283,6 +301,7 @@ data class ArtifactInfo(
     val totalFiles: Int,
     val totalLines: Int,
     val coveredLines: Int,
+    val lastUsedMs: Long? = null,
 ) {
     /** Percentage of tracked lines covered by at least one test, or null for legacy entries. */
     val coveragePercent: Float?

@@ -91,6 +91,7 @@ class CoverageLoadService(private val project: Project) {
                         if (!alreadyLoaded) {
                             dataService.setCoverageContext(cachedCommit, gitRoot, stale = true)
                             dataService.setCov4Reader(reader)
+                            cache.updateLastUsed(cachedCommit)
                             ApplicationManager.getApplication().invokeLater {
                                 CoverageHighlighter.applyToOpenEditors(project)
                                 NotificationGroupManager.getInstance()
@@ -122,6 +123,7 @@ class CoverageLoadService(private val project: Project) {
                 if (!alreadyLoaded) {
                     dataService.setCoverageContext(latestArtifact.commitHash, gitRoot, stale = true)
                     dataService.setCov4Reader(reader)
+                    cache.updateLastUsed(latestArtifact.commitHash)
                     ApplicationManager.getApplication().invokeLater {
                         CoverageHighlighter.applyToOpenEditors(project)
                         NotificationGroupManager.getInstance()
@@ -183,6 +185,7 @@ class CoverageLoadService(private val project: Project) {
                     val reader = cache.get(resolved.commitHash)
                     if (reader != null) {
                         log.info("Coverage: loaded from COV4 cache (commit ${resolved.commitHash})")
+                        cache.updateLastUsed(resolved.commitHash)
                         val dataService = CoverageDataService.getInstance(project)
                         dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
                         dataService.setCov4Reader(reader)
@@ -449,6 +452,7 @@ class CoverageLoadService(private val project: Project) {
             } else {
                 log.warn("Coverage: loadFromCache — could not determine git root; coverage context not updated")
             }
+            cache.updateLastUsed(commitHash)
             dataService.setCov4Reader(reader)
             log.info("Coverage: loaded from cache for commit ${commitHash.take(8)} (${reader.allFilePaths.size} files)")
 

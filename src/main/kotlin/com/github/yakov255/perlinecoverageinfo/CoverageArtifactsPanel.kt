@@ -76,6 +76,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         private const val SIZE_COL = 3
         private const val FILES_COL = 4
         private const val COVERAGE_COL = 5
+        private const val LAST_USED_COL = 6
     }
 
     init {
@@ -298,12 +299,13 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         table.addMouseListener(mouseAdapter)
 
         // Preferred column widths.
-        table.columnModel.getColumn(DATE_COL).preferredWidth = 140
+        table.columnModel.getColumn(DATE_COL).preferredWidth = 130
         table.columnModel.getColumn(COMMIT_COL).preferredWidth = 80
-        table.columnModel.getColumn(PIPELINE_COL).preferredWidth = 80
+        table.columnModel.getColumn(PIPELINE_COL).preferredWidth = 75
         table.columnModel.getColumn(SIZE_COL).preferredWidth = 75
         table.columnModel.getColumn(FILES_COL).preferredWidth = 55
-        table.columnModel.getColumn(COVERAGE_COL).preferredWidth = 90
+        table.columnModel.getColumn(COVERAGE_COL).preferredWidth = 80
+        table.columnModel.getColumn(LAST_USED_COL).preferredWidth = 130
     }
 
     private fun openPipelineUrl(entry: ArtifactInfo): String? {
@@ -444,6 +446,7 @@ private class ArtifactsTableModel : AbstractTableModel() {
         val size: String,
         val files: String,
         val coverage: String,
+        val lastUsed: String,
         val entry: ArtifactInfo,
     )
 
@@ -458,6 +461,7 @@ private class ArtifactsTableModel : AbstractTableModel() {
                 size = "%.2f MB".format(entry.fileSizeBytes / 1_000_000.0),
                 files = if (entry.totalFiles > 0) entry.totalFiles.toString() else "—",
                 coverage = entry.coveragePercent?.let { "%.1f%%".format(it) } ?: "—",
+                lastUsed = entry.lastUsedMs?.let { dateFormat.format(Date(it)) } ?: "—",
                 entry = entry,
             )
         }
@@ -467,7 +471,7 @@ private class ArtifactsTableModel : AbstractTableModel() {
     fun getEntry(row: Int): ArtifactInfo? = rows.getOrNull(row)?.entry
 
     override fun getRowCount(): Int = rows.size
-    override fun getColumnCount(): Int = 6
+    override fun getColumnCount(): Int = 7
 
     override fun getValueAt(row: Int, col: Int): Any {
         val r = rows[row]
@@ -478,17 +482,19 @@ private class ArtifactsTableModel : AbstractTableModel() {
             3 -> r.size
             4 -> r.files
             5 -> r.coverage
+            6 -> r.lastUsed
             else -> ""
         }
     }
 
     override fun getColumnName(col: Int): String = when (col) {
-        0 -> "Date"
-        1 -> "Commit"
+        0 -> "Скачан"
+        1 -> "Коммит"
         2 -> "Pipeline"
-        3 -> "Size"
-        4 -> "Files"
-        5 -> "Coverage"
+        3 -> "Размер"
+        4 -> "Файлы"
+        5 -> "Покрытие"
+        6 -> "Последнее использование"
         else -> ""
     }
 
