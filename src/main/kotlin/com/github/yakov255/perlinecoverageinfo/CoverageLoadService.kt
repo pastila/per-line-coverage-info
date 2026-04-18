@@ -76,6 +76,31 @@ class CoverageLoadService(private val project: Project) {
         log.info("Coverage: offline-first load started")
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
+        val selectionService = CoverageUserSelectionService.getInstance(project)
+
+        // If the user explicitly pinned a specific artifact, honour that choice.
+        val pinned = selectionService.pinnedCommitHash
+        if (pinned != null) {
+            val reader = cache.get(pinned)
+            if (reader != null) {
+                val alreadyLoaded = dataService.coverageCommitHash == pinned && dataService.hasData()
+                log.info("Coverage: offline-first pinned — commit ${pinned.take(8)}, alreadyLoaded=$alreadyLoaded")
+                if (!alreadyLoaded) {
+                    val root = findGitRoot()
+                    if (root != null) dataService.setCoverageContext(pinned, root, stale = false)
+                    dataService.setCov4Reader(reader)
+                    cache.updateLastUsed(pinned)
+                    ApplicationManager.getApplication().invokeLater {
+                        CoverageHighlighter.applyToOpenEditors(project)
+                    }
+                }
+                // Don't auto-refresh from GitLab — user chose this artifact deliberately.
+                return
+            }
+            // Pinned artifact was deleted or expired — clear the pin and fall through.
+            log.info("Coverage: pinned commit ${pinned.take(8)} not found in cache, clearing pin")
+            selectionService.pinnedCommitHash = null
+        }
 
         // Try to find cached coverage matching a recent HEAD commit
         val gitRoot = findGitRoot()
@@ -168,6 +193,10 @@ class CoverageLoadService(private val project: Project) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Coverage from GitLab", true) {
             override fun run(indicator: ProgressIndicator) {
                 try {
+                    // User triggered a GitLab fetch — clear any manually pinned artifact
+                    // so auto-resolution takes over from now on.
+                    CoverageUserSelectionService.getInstance(project).pinnedCommitHash = null
+
                     // Run cache cleanup in the background
                     CoverageCacheService.getInstance(project).cleanup()
 
@@ -438,6 +467,9 @@ class CoverageLoadService(private val project: Project) {
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
         val gitRoot = findGitRoot()
+
+        // Persist the user's explicit choice so it survives IDE restarts.
+        CoverageUserSelectionService.getInstance(project).pinnedCommitHash = commitHash
 
         ApplicationManager.getApplication().executeOnPooledThread {
             val reader = cache.get(commitHash)
