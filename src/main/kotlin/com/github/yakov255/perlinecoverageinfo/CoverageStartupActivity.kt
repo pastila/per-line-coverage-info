@@ -17,9 +17,6 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
         try {
             val loadService = CoverageLoadService.getInstance(project)
 
-            // One-time: auto-disable plugin if the git remote doesn't match the required repo.
-            loadService.performRemoteUrlAutoCheck()
-
             val settingsError = loadService.validateSettings()
             if (settingsError != null) {
                 log.info("Coverage auto-load skipped: $settingsError")

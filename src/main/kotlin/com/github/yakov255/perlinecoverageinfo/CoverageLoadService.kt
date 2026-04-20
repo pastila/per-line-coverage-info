@@ -42,31 +42,6 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
-     * Runs once on first startup: checks whether the project's 'origin' remote URL matches
-     * [REQUIRED_REMOTE_URL]. If it does not match, disables the plugin automatically so it
-     * stays out of the way for unrelated repos. The user can re-enable it manually via
-     * Settings > Tools > GitLab Coverage.
-     *
-     * After the check, [CoverageApiSettings.remoteUrlAutoChecked] is set to true so this
-     * method becomes a no-op for all subsequent IDE launches.
-     */
-    fun performRemoteUrlAutoCheck() {
-        val settings = CoverageApiSettings.getInstance()
-        if (settings.remoteUrlAutoChecked) return
-
-        val basePath = project.basePath
-        if (basePath != null) {
-            val projectDir = java.io.File(basePath)
-            val remoteUrl = CoverageResolver.runGitCommand(projectDir, "remote", "get-url", "origin")?.trim()
-            if (remoteUrl != null && remoteUrl != REQUIRED_REMOTE_URL) {
-                log.info("Coverage: remote '$remoteUrl' does not match required '$REQUIRED_REMOTE_URL' — disabling plugin automatically")
-                settings.enabled = false
-            }
-        }
-        settings.remoteUrlAutoChecked = true
-    }
-
-    /**
      * Offline-first coverage loading:
      * 1. Walks git history to find any cached .cov4 file
      * 2. Shows cached coverage immediately (marked as stale)
@@ -595,8 +570,6 @@ class CoverageLoadService(private val project: Project) {
     }
 
     companion object {
-        const val REQUIRED_REMOTE_URL = "git@gitlab.raketa.online:raketa/raketa.git"
-
         fun getInstance(project: Project): CoverageLoadService = project.service()
 
         fun errorTitle(kind: CoverageErrorKind): String = when (kind) {
