@@ -34,7 +34,6 @@ import java.awt.event.MouseEvent
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
-import java.util.zip.GZIPInputStream
 import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.JTable
@@ -188,39 +187,9 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         val virtualFile = FileChooser.chooseFile(descriptor, project, null) ?: return
         val file = File(virtualFile.path)
 
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                val bytes = if (file.name.endsWith(".covt.gz")) {
-                    GZIPInputStream(file.inputStream()).use { it.readBytes() }
-                } else {
-                    file.readBytes()
-                }
-
-                val coverage = BinaryCoverageParser.parseCovtBytes(bytes)
-                log.info("Coverage: parsed ${coverage.size} files from local file ${file.name}")
-
-                val gitRoot = findGitRoot(file.parentFile)
-                val dataService = CoverageDataService.getInstance(project)
-                if (gitRoot != null) {
-                    dataService.setCoverageContext("local", gitRoot)
-                }
-                dataService.setCoverageAll(coverage)
-
-                ApplicationManager.getApplication().invokeLater {
-                    CoverageHighlighter.applyToOpenEditors(project)
-                    showStatus(null)
-                    refreshData()
-                }
-            } catch (ex: Exception) {
-                log.warn("Failed to load local coverage file", ex)
-                ApplicationManager.getApplication().invokeLater {
-                    Messages.showErrorDialog(
-                        project,
-                        "Failed to parse coverage file:\n${ex.message}",
-                        "Coverage Error"
-                    )
-                }
-            }
+        CoverageLoadService.getInstance(project).loadFromLocalFile(file) {
+            showStatus(null)
+            refreshData()
         }
     }
 
@@ -255,15 +224,6 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         } else {
             refreshData()
         }
-    }
-
-    private fun findGitRoot(dir: File?): File? {
-        var current = dir
-        while (current != null) {
-            if (File(current, ".git").exists()) return current
-            current = current.parentFile
-        }
-        return null
     }
 
     private fun setupTable() {
@@ -457,7 +417,7 @@ private class ArtifactsTableModel : AbstractTableModel() {
             Row(
                 date = dateFormat.format(Date(entry.timestampMs)),
                 commit = entry.commitHash.take(8),
-                pipeline = "#${entry.pipelineId}",
+                pipeline = if (entry.pipelineId == 0L) "local" else "#${entry.pipelineId}",
                 size = "%.2f MB".format(entry.fileSizeBytes / 1_000_000.0),
                 files = if (entry.totalFiles > 0) entry.totalFiles.toString() else "—",
                 coverage = entry.coveragePercent?.let { "%.1f%%".format(it) } ?: "—",

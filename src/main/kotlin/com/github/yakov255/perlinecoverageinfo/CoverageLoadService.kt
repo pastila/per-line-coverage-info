@@ -10,6 +10,9 @@ import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
+import java.io.File
+import java.security.MessageDigest
+import java.util.zip.GZIPInputStream
 
 /**
  * Project-level service that orchestrates loading coverage data from GitLab.
@@ -457,6 +460,72 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
+     * Loads coverage from a local .covt or .covt.gz file, writes it to the disk cache,
+     * and activates it in the same reader-backed way as other load paths.
+     *
+     * A stable "commit hash" is derived from the SHA-1 of the file bytes so that loading
+     * the same file twice reuses the existing cache entry.  [pipelineId] is stored as 0
+     * to indicate the artifact came from a local file rather than a CI pipeline.
+     *
+     * [onComplete] is called on the EDT when done (success or failure), so callers can
+     * refresh any UI that depends on the artifact list.
+     */
+    fun loadFromLocalFile(file: File, onComplete: (() -> Unit)? = null) {
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Local Coverage File", false) {
+            override fun run(indicator: ProgressIndicator) {
+                try {
+                    indicator.text = "Reading ${file.name}…"
+                    val bytes = if (file.name.endsWith(".covt.gz")) {
+                        GZIPInputStream(file.inputStream()).use { it.readBytes() }
+                    } else {
+                        file.readBytes()
+                    }
+
+                    indicator.text = "Parsing coverage data…"
+                    val coverage = BinaryCoverageParser.parseCovtBytes(bytes)
+                    log.info("Coverage: parsed ${coverage.size} files from local file ${file.name}")
+
+                    // Derive a stable key from file content so the same file → same cache entry.
+                    val sha1 = MessageDigest.getInstance("SHA-1").digest(bytes)
+                    val hash = sha1.joinToString("") { "%02x".format(it) }
+
+                    val cache = CoverageCacheService.getInstance(project)
+                    cache.writeCov4(hash, pipelineId = 0L, coverage)
+
+                    val gitRoot = findGitRootFromFile(file.parentFile) ?: findGitRoot()
+                    val dataService = CoverageDataService.getInstance(project)
+
+                    val reader = cache.get(hash)
+                    if (reader != null) {
+                        if (gitRoot != null) dataService.setCoverageContext(hash, gitRoot, stale = false)
+                        dataService.setCov4Reader(reader)
+                        cache.updateLastUsed(hash)
+                    } else {
+                        log.warn("Coverage: failed to reopen freshly-written .cov4 for local file, falling back to in-memory map")
+                        if (gitRoot != null) dataService.setCoverageContext(hash, gitRoot, stale = false)
+                        dataService.setCoverageAll(coverage)
+                    }
+
+                    ApplicationManager.getApplication().invokeLater {
+                        CoverageHighlighter.applyToOpenEditors(project)
+                        onComplete?.invoke()
+                    }
+                } catch (ex: Exception) {
+                    log.warn("Coverage: failed to load local file ${file.name}", ex)
+                    ApplicationManager.getApplication().invokeLater {
+                        Messages.showErrorDialog(
+                            project,
+                            "Failed to parse coverage file:\n${ex.message}",
+                            "Coverage Error",
+                        )
+                        onComplete?.invoke()
+                    }
+                }
+            }
+        })
+    }
+
+    /**
      * Loads coverage from a locally cached .cov4 file for the given commit hash.
      * Used when the user explicitly selects an artifact from the Artifacts panel.
      *
@@ -498,18 +567,28 @@ class CoverageLoadService(private val project: Project) {
     /**
      * Finds the git root for the project base directory.
      */
-    private fun findGitRoot(): java.io.File? {
+    private fun findGitRoot(): File? {
         val basePath = project.basePath ?: return null
-        val projectDir = java.io.File(basePath)
+        val projectDir = File(basePath)
         val gitRootPath = CoverageResolver.runGitCommand(projectDir, "rev-parse", "--show-toplevel")
             ?: return null
-        return java.io.File(gitRootPath)
+        return File(gitRootPath)
+    }
+
+    /** Walks up from [dir] to find the nearest `.git` directory. */
+    private fun findGitRootFromFile(dir: File?): File? {
+        var current = dir
+        while (current != null) {
+            if (File(current, ".git").exists()) return current
+            current = current.parentFile
+        }
+        return null
     }
 
     /**
      * Returns the last [count] commit hashes from the current HEAD.
      */
-    private fun getRecentCommits(gitRoot: java.io.File, count: Int): List<String> {
+    private fun getRecentCommits(gitRoot: File, count: Int): List<String> {
         val output = CoverageResolver.runGitCommand(gitRoot, "log", "--format=%H", "-n", count.toString())
             ?: return emptyList()
         return output.lines().filter { it.isNotBlank() }
