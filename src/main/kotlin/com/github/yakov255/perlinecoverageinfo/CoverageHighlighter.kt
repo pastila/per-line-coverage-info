@@ -81,14 +81,14 @@ object CoverageHighlighter {
 
     private fun findCoverageForFile(absolutePath: String, project: Project): Map<Int, List<String>>? {
         val dataService = CoverageDataService.getInstance(project)
-        val basePath = project.basePath ?: return null
-        val relativePath = try {
-            Paths.get(basePath).relativize(Paths.get(absolutePath))
+        val gitRoot = dataService.gitRoot ?: return null
+        val gitRelativePath = try {
+            Paths.get(gitRoot.path).relativize(Paths.get(absolutePath))
                 .toString()
                 .replace(File.separatorChar, '/')
         } catch (_: IllegalArgumentException) {
             return null
         }
-        return CoveragePathResolver.resolve(dataService, listOf(absolutePath, relativePath))
+        return CoveragePathResolver.resolve(dataService, listOf(gitRelativePath))
     }
 }

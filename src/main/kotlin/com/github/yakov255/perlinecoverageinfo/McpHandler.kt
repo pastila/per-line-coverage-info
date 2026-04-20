@@ -144,11 +144,21 @@ class McpHandler(private val project: Project?) {
                 "Load coverage first (Fetch from GitLab or load a local .covt file)."
         }
 
-        val candidates = mutableListOf(filePath)
-        // Also try project-relative path resolved to absolute
-        project?.basePath?.let { basePath ->
-            candidates.add("$basePath/$filePath")
+        val candidates = mutableListOf<String>()
+        project.basePath?.let { basePath ->
+            val absoluteFile = java.io.File(basePath, filePath)
+            // Primary: git-relative path (canonical format in .covt — relative to git root).
+            // When the project is opened in a sub-directory of the repo this produces the correct key.
+            dataService.gitRoot?.let { gitRoot ->
+                try {
+                    candidates.add(
+                        absoluteFile.relativeTo(gitRoot).path
+                            .replace(java.io.File.separatorChar, '/')
+                    )
+                } catch (_: IllegalArgumentException) { }
+            }
         }
+        candidates.add(filePath)
 
         val coverageLines = CoveragePathResolver.resolve(dataService, candidates)
             ?: return "No coverage found for file: $filePath\n" +

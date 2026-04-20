@@ -411,7 +411,8 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
                     name.substringBeforeLast(":", name)
                 }
                 for ((featurePath, entries) in behatGrouped.toSortedMap()) {
-                    val fileNode = DefaultMutableTreeNode(TestNodeData.BehatGroup(featurePath))
+                    val displayPath = CoverageTestNavigator.toProjectRelativeFeaturePath(featurePath, project)
+                    val fileNode = DefaultMutableTreeNode(TestNodeData.BehatGroup(featurePath, displayPath))
                     for (entry in entries) {
                         val label = scenarioLabels[entry] ?: "line ${entry.substringAfterLast(":", "")}"
                         fileNode.add(DefaultMutableTreeNode(TestNodeData.BehatScenario(label, entry)))
@@ -462,7 +463,8 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         val top = DirEntry()
         for ((featurePath, entries) in behatGrouped.toSortedMap()) {
-            val parts = featurePath.split("/")
+            val displayPath = CoverageTestNavigator.toProjectRelativeFeaturePath(featurePath, project)
+            val parts = displayPath.split("/")
             var current = top
             for (i in 0 until parts.size - 1) {
                 current = current.children.getOrPut(parts[i]) { DirEntry() }
@@ -668,7 +670,8 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             return
         }
 
-        val featurePath = testName.substringBeforeLast(":", "")
+        val rawFeaturePath = testName.substringBeforeLast(":", "")
+        val featurePath = CoverageTestNavigator.toProjectRelativeFeaturePath(rawFeaturePath, project)
         val lineStr = testName.substringAfterLast(":", "")
         val lineNumber = lineStr.toIntOrNull()
 
@@ -677,7 +680,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         val absolutePath = vf.path
 
         if (lineNumber != null) {
-            val scenarioName = CoverageTestNavigator.resolveScenarioName(project, featurePath, lineStr)
+            val scenarioName = CoverageTestNavigator.resolveScenarioName(project, rawFeaturePath, lineStr)
             if (scenarioName != null) {
                 BehatTestRunner.runScenario(project, absolutePath, scenarioName, debug)
             } else {
@@ -720,7 +723,8 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         val wholeFile = mutableSetOf<String>()
         for (test in tests) {
             if (!isBehatTest(test)) continue
-            val featurePath = test.substringBeforeLast(":", test)
+            val rawFeaturePath = test.substringBeforeLast(":", test)
+            val featurePath = CoverageTestNavigator.toProjectRelativeFeaturePath(rawFeaturePath, project)
             val lineStr = test.substringAfterLast(":", "")
             val lineNumber = lineStr.toIntOrNull()
             val vf = VfsUtil.findRelativeFile(featurePath, projectDir) ?: continue

@@ -16,6 +16,29 @@ internal object CoverageTestNavigator {
 
     private val BEHAT_TEST_PATTERN = Regex("""^.+\.feature:\d+$""")
 
+    /**
+     * Converts a git-root-relative feature path to a project-relative path.
+     *
+     * In monorepo setups the project may be opened at a sub-directory of the git
+     * root (e.g. project = `/repo/api/hotels`, git root = `/repo`). Coverage data
+     * stores paths like `api/hotels/features/Foo.feature`, but `VfsUtil.findRelativeFile`
+     * expects paths relative to the project directory, i.e. `features/Foo.feature`.
+     * This function strips the leading `api/hotels/` prefix when present.
+     *
+     * Idempotent: if the path does not start with the computed prefix (or the
+     * project is already at the git root), the original path is returned unchanged.
+     */
+    fun toProjectRelativeFeaturePath(rawPath: String, project: Project): String {
+        val dataService = CoverageDataService.getInstance(project)
+        val gitRoot = dataService.gitRoot ?: return rawPath
+        val basePath = project.basePath ?: return rawPath
+        val gitRootNorm = gitRoot.path.trimEnd('/')
+        val basePathNorm = basePath.trimEnd('/')
+        if (!basePathNorm.startsWith("$gitRootNorm/")) return rawPath
+        val prefix = basePathNorm.removePrefix("$gitRootNorm/") + "/"
+        return if (rawPath.startsWith(prefix)) rawPath.removePrefix(prefix) else rawPath
+    }
+
     fun isBehatTest(testName: String): Boolean = BEHAT_TEST_PATTERN.matches(testName)
 
     fun navigateToSourceLine(project: Project, filePath: String, lineNumber: Int) {
@@ -58,7 +81,8 @@ internal object CoverageTestNavigator {
     }
 
     fun navigateToBehatTest(project: Project, testName: String) {
-        val featurePath = testName.substringBeforeLast(":", "")
+        val rawFeaturePath = testName.substringBeforeLast(":", "")
+        val featurePath = toProjectRelativeFeaturePath(rawFeaturePath, project)
         val lineStr = testName.substringAfterLast(":", "")
         val lineNumber = lineStr.toIntOrNull() ?: 0
 
@@ -73,8 +97,9 @@ internal object CoverageTestNavigator {
     /** Resolves a scenario name from a feature file path and line number string. */
     fun resolveScenarioName(project: Project, featurePath: String, lineStr: String): String? {
         val lineNumber = lineStr.toIntOrNull() ?: return null
+        val relPath = toProjectRelativeFeaturePath(featurePath, project)
         val projectDir = project.guessProjectDir() ?: return null
-        val vf = VfsUtil.findRelativeFile(featurePath, projectDir) ?: return null
+        val vf = VfsUtil.findRelativeFile(relPath, projectDir) ?: return null
         return ReadAction.compute<String?, Throwable> {
             val psiFile = PsiManager.getInstance(project).findFile(vf) as? GherkinFile ?: return@compute null
             findScenarioAtLine(psiFile, lineNumber)

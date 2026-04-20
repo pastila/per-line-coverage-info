@@ -43,7 +43,7 @@ class LineMappingService(private val project: Project) {
         val dataService = CoverageDataService.getInstance(project)
         val relativePath = toRelativePath(absolutePath) ?: return null
 
-        val rawCoverage = findRawCoverage(absolutePath, relativePath, dataService) ?: return null
+        val rawCoverage = findRawCoverage(relativePath, dataService) ?: return null
 
         val oldContent = getOrFetchOldContent(relativePath) ?: return rawCoverage
 
@@ -88,7 +88,7 @@ class LineMappingService(private val project: Project) {
 
     /**
      * Resolves the git-relative path for a file.
-     * Coverage data uses paths relative to the project root, but git needs paths relative to the git root.
+     * Coverage data stores paths relative to the git root, so this is the canonical lookup key.
      */
     private fun toGitRelativePath(relativePath: String): String? {
         val dataService = CoverageDataService.getInstance(project)
@@ -96,7 +96,7 @@ class LineMappingService(private val project: Project) {
         val basePath = project.basePath ?: return null
         val projectDir = java.io.File(basePath)
         val absoluteFile = java.io.File(projectDir, relativePath)
-        return absoluteFile.relativeTo(gitRoot).path
+        return absoluteFile.relativeTo(gitRoot).path.replace(File.separatorChar, '/')
     }
 
     private fun getOrFetchOldContent(relativePath: String): String? {
@@ -116,18 +116,13 @@ class LineMappingService(private val project: Project) {
     }
 
     private fun findRawCoverage(
-        absolutePath: String,
         relativePath: String,
         dataService: CoverageDataService
     ): Map<Int, List<String>>? {
-        return dataService.getCoverage(absolutePath)
-            ?: dataService.getCoverage(relativePath)
-            ?: dataService.getCoverage("/$relativePath")
-            ?: dataService.allFiles().firstNotNullOfOrNull { storedPath ->
-                if (storedPath.endsWith(relativePath) || relativePath.endsWith(storedPath.trimStart('/'))) {
-                    dataService.getCoverage(storedPath)
-                } else null
-            }
+        // Coverage data stores git-root-relative paths (e.g. "api/hotels/src/Foo.php"),
+        // so that is the only key we need to look up.
+        val gitRelativePath = toGitRelativePath(relativePath) ?: return null
+        return dataService.getCoverage(gitRelativePath)
     }
 
     companion object {
