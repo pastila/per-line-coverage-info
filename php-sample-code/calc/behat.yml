@@ -14,7 +14,7 @@ default:
             'calc/src': ~ # Относительно рабочей директории при запуске behat
       reports:
         perLine:
-          target: ./coverage.covt
+          target: ./calc/coverage.covt
           pathToCoverageRoot: /app
         text:
           showOnlySummary: true

@@ -4,6 +4,5 @@ vendor
 venv
 .phpunit.cache
 coverage.xml
-coverage.covt
 coverage.cobertura.xml
 coverage.clover.xml
