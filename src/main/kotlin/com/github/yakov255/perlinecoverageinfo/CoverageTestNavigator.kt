@@ -100,7 +100,8 @@ internal object CoverageTestNavigator {
         val relPath = toProjectRelativeFeaturePath(featurePath, project)
         val projectDir = project.guessProjectDir() ?: return null
         val vf = VfsUtil.findRelativeFile(relPath, projectDir) ?: return null
-        return ReadAction.compute<String?, Throwable> {
+        @Suppress("DEPRECATION")
+        return ReadAction.compute<String?, RuntimeException> {
             val psiFile = PsiManager.getInstance(project).findFile(vf) as? GherkinFile ?: return@compute null
             findScenarioAtLine(psiFile, lineNumber)
         }

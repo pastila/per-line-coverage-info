@@ -5,8 +5,8 @@ import com.intellij.execution.ProgramRunnerUtil
 import com.intellij.execution.RunManager
 import com.intellij.execution.executors.DefaultDebugExecutor
 import com.intellij.execution.executors.DefaultRunExecutor
-import com.intellij.execution.process.ProcessAdapter
 import com.intellij.execution.process.ProcessEvent
+import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.runners.ExecutionEnvironmentBuilder
 import com.intellij.execution.runners.ProgramRunner
 import com.intellij.openapi.project.Project
@@ -345,10 +345,14 @@ object BehatTestRunner {
                     onFinished(-1)
                     return@Callback
                 }
-                handler.addProcessListener(object : ProcessAdapter() {
+                handler.addProcessListener(object : ProcessListener {
                     override fun processTerminated(event: ProcessEvent) {
                         onFinished(event.exitCode)
                     }
+
+                    override fun startNotified(event: ProcessEvent) = Unit
+                    override fun onTextAvailable(event: ProcessEvent, outputType: com.intellij.openapi.util.Key<*>) = Unit
+                    override fun processWillTerminate(event: ProcessEvent, willBeDestroyed: Boolean) = Unit
                 })
             }
             val env = ExecutionEnvironmentBuilder.create(executor, settings).build(callback)

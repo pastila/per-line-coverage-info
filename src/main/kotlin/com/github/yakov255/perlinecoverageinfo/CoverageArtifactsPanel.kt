@@ -10,7 +10,7 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.fileChooser.FileChooser
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
+import com.intellij.openapi.fileChooser.FileChooserDescriptor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.components.JBLabel
@@ -177,7 +177,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
     }
 
     private fun doLoadFromFile() {
-        val descriptor = FileChooserDescriptorFactory.createSingleFileDescriptor()
+        val descriptor = FileChooserDescriptor(true, false, false, false, false, false)
             .withTitle("Select Coverage File")
             .withDescription("Choose a .covt or .covt.gz binary coverage file")
             .withFileFilter { vf ->
