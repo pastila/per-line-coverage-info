@@ -33,6 +33,10 @@ class CoverageResolver(
                 kind = CoverageErrorKind.GIT,
             )
         val gitRoot = File(gitRootPath)
+
+        // Prefer the latest successful pipeline on the current branch, if any.
+        tryResolveFromCurrentBranch(gitRoot)?.let { return it }
+
         val (commitHash, pipelineId) = findCoveragePipeline(gitRoot)
         return ResolvedPipeline(
             commitHash = commitHash,
@@ -40,6 +44,44 @@ class CoverageResolver(
             gitRoot = gitRoot,
             fallback = fallbackReason != null,
             fallbackReason = fallbackReason,
+        )
+    }
+
+    /**
+     * If the currently checked-out local branch has at least one successful pipeline on GitLab,
+     * return that pipeline directly (latest by updated_at). Otherwise return null and let the
+     * caller fall back to coverage-branch resolution.
+     */
+    private fun tryResolveFromCurrentBranch(gitRoot: File): ResolvedPipeline? {
+        val currentBranch = runGitCommand(gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
+        if (currentBranch.isNullOrBlank() || currentBranch == "HEAD") {
+            log.info("Coverage: current branch unknown or detached HEAD, skipping current-branch resolve")
+            return null
+        }
+        val coverageBranch = getCoverageBranch()
+        if (currentBranch == coverageBranch) {
+            log.info("Coverage: current branch == coverage branch ($coverageBranch), using coverage-branch resolution")
+            return null
+        }
+        val projectId = CoverageApiSettings.getInstance().gitlabProjectId
+        val pipelines = try {
+            gitLabClient.listPipelines(projectId, currentBranch, status = "success")
+        } catch (e: Exception) {
+            log.warn("Coverage: failed to list pipelines for current branch '$currentBranch', falling back to coverage branch: ${e.message}")
+            return null
+        }
+        if (pipelines.isEmpty()) {
+            log.info("Coverage: no successful pipelines on current branch '$currentBranch', falling back to coverage branch '$coverageBranch'")
+            return null
+        }
+        val latest = pipelines.first()
+        log.info("Coverage: using latest pipeline ${latest.id} (commit ${latest.sha}) on current branch '$currentBranch'")
+        return ResolvedPipeline(
+            commitHash = latest.sha,
+            pipelineId = latest.id,
+            gitRoot = gitRoot,
+            fallback = false,
+            fallbackReason = null,
         )
     }
 
