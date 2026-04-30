@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>per-line-coverage-info — Custom Plugin Repository</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; color: #222; }
+    code, pre { background: #f4f4f4; padding: 0.15rem 0.35rem; border-radius: 4px; }
+    pre { padding: 0.75rem 1rem; overflow-x: auto; }
+    h1 { margin-bottom: 0.25rem; }
+    .small { color: #666; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <h1>per-line-coverage-info</h1>
+  <p class="small">Custom plugin repository for receiving updates straight from GitHub, bypassing JetBrains Marketplace.</p>
+
+  <h2>Add the repository to your IDE</h2>
+  <ol>
+    <li>Open <strong>Settings → Plugins</strong>.</li>
+    <li>Click the <strong>⚙ (gear)</strong> icon → <strong>Manage Plugin Repositories…</strong></li>
+    <li>Click <strong>+</strong> and paste:
+      <pre>https://yakov255.github.io/per-line-coverage-info/updatePlugins.xml</pre>
+    </li>
+    <li>Click <strong>OK</strong>. The IDE will now check this repo together with Marketplace and offer updates the usual way.</li>
+  </ol>
+
+  <h2>Manual update manifest</h2>
+  <p>The current manifest lives at <a href="updatePlugins.xml">updatePlugins.xml</a>. It is regenerated automatically on every GitHub release.</p>
+</body>
+</html>

@@ -20,12 +20,18 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
             val settingsError = loadService.validateSettings()
             if (settingsError != null) {
                 log.info("Coverage auto-load skipped: $settingsError")
-                return
+            } else {
+                loadService.loadOfflineFirst()
             }
-
-            loadService.loadOfflineFirst()
         } catch (ex: Exception) {
             log.warn("Coverage: unexpected error in startup activity", ex)
+        }
+
+        try {
+            val result = GitHubUpdateCheckService.getInstance().checkForUpdate()
+            GitHubUpdateNotifier.notifyIfUpdateAvailable(project, result)
+        } catch (ex: Exception) {
+            log.warn("GitHub update check: unexpected error", ex)
         }
     }
 }
