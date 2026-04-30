@@ -24,10 +24,16 @@ import javax.swing.JPanel
  */
 class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
 
+    enum class TestFilter { BOTH, MASTER_ONLY, FEATURE_ONLY }
+
     private val titleLabel = JBLabel("No line selected")
     private val testTree = TestTreeView(project)
     private var currentLineNumber: Int = 0
     private var currentFilePath: String = ""
+    private var currentPrimary: List<String> = emptyList()
+    private var currentBaseline: List<String> = emptyList()
+    private var currentHasBaseline: Boolean = false
+    private var currentFilter: TestFilter = TestFilter.BOTH
 
     init {
         val toggleViewAction = object : ToggleAction(
@@ -64,9 +70,19 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
             override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
         }
 
+        val filterBoth = filterAction("Both", "Show tests from master and from this branch", TestFilter.BOTH)
+        val filterMaster = filterAction("Master Only", "Show only tests that exist on master", TestFilter.MASTER_ONLY)
+        val filterFeature = filterAction("New on This Branch", "Show only tests added on the current branch", TestFilter.FEATURE_ONLY)
+
         val toolbar = ActionManager.getInstance().createActionToolbar(
             "CoveringLinePanelToolbar",
-            DefaultActionGroup(toggleViewAction, Separator.getInstance(), runAllAction, runAllDebugAction),
+            DefaultActionGroup(
+                toggleViewAction,
+                Separator.getInstance(),
+                runAllAction, runAllDebugAction,
+                Separator.getInstance(),
+                filterBoth, filterMaster, filterFeature,
+            ),
             true
         )
         toolbar.targetComponent = this
@@ -89,21 +105,62 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
         testTree.setEmptyMessage("No tests covering this line")
     }
 
-    fun showTests(lineNumber: Int, filePath: String, tests: List<String>) {
+    fun showTests(
+        lineNumber: Int,
+        filePath: String,
+        primaryTests: List<String>,
+        baselineTests: List<String> = emptyList(),
+        hasBaseline: Boolean = false,
+    ) {
         currentLineNumber = lineNumber
         currentFilePath = filePath
+        currentPrimary = primaryTests
+        currentBaseline = baselineTests
+        currentHasBaseline = hasBaseline
+        if (!hasBaseline && currentFilter != TestFilter.BOTH) {
+            currentFilter = TestFilter.BOTH
+        }
+        refreshDisplay()
+    }
 
-        val fileName = filePath.substringAfterLast("/")
+    private fun refreshDisplay() {
+        val displayed = computeDisplayedTests()
+        val featureOnlyCount = if (currentHasBaseline) {
+            CoverageDiff.featureOnly(currentPrimary, currentBaseline).size
+        } else 0
+
+        val fileName = currentFilePath.substringAfterLast("/")
         val dataService = CoverageDataService.getInstance(project)
         val commitInfo = buildCommitInfo(dataService)
+        val newSuffix = if (featureOnlyCount > 0) " <span style='color:#5078d8'>[+$featureOnlyCount new]</span>" else ""
 
-        titleLabel.text = if (tests.isEmpty()) {
-            "<html><a style='text-decoration:underline'>$fileName:$lineNumber</a> — not covered$commitInfo</html>"
+        titleLabel.text = if (currentPrimary.isEmpty()) {
+            "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — not covered$commitInfo</html>"
         } else {
-            "<html><a style='text-decoration:underline'>$fileName:$lineNumber</a> — ${tests.size} test(s)$commitInfo</html>"
+            "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — ${displayed.size} test(s)$newSuffix$commitInfo</html>"
         }
 
-        testTree.setTests(tests)
+        testTree.setTests(displayed)
+    }
+
+    private fun computeDisplayedTests(): List<String> =
+        computeDisplayed(currentPrimary, currentBaseline, currentHasBaseline, currentFilter)
+
+    private fun filterAction(text: String, description: String, filter: TestFilter): ToggleAction {
+        return object : ToggleAction(text, description, null) {
+            override fun isSelected(e: AnActionEvent): Boolean = currentFilter == filter
+            override fun setSelected(e: AnActionEvent, state: Boolean) {
+                if (state && currentFilter != filter) {
+                    currentFilter = filter
+                    refreshDisplay()
+                }
+            }
+            override fun update(e: AnActionEvent) {
+                super.update(e)
+                e.presentation.isVisible = currentHasBaseline
+            }
+            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+        }
     }
 
     private fun buildCommitInfo(dataService: CoverageDataService): String {
@@ -116,6 +173,26 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
     companion object {
         const val TAB_TITLE = "Covering Line"
 
+        /**
+         * Pure helper exposed for tests. Computes which test names should be shown given a filter.
+         * MASTER_ONLY shows tests that exist on **both** sides (i.e. the line is still covered on
+         * master); FEATURE_ONLY shows tests that exist only on the current branch.
+         */
+        @JvmStatic
+        internal fun computeDisplayed(
+            primary: List<String>,
+            baseline: List<String>,
+            hasBaseline: Boolean,
+            filter: TestFilter,
+        ): List<String> {
+            if (!hasBaseline) return primary
+            return when (filter) {
+                TestFilter.BOTH -> CoverageDiff.union(primary, baseline)
+                TestFilter.MASTER_ONLY -> primary.filter { it in baseline }
+                TestFilter.FEATURE_ONLY -> CoverageDiff.featureOnly(primary, baseline)
+            }
+        }
+
         fun getInstance(project: Project): CoveringLinePanel? {
             val toolWindow = ToolWindowManager.getInstance(project)
                 .getToolWindow("Coverage Tests") ?: return null
@@ -123,14 +200,21 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
             return content.component as? CoveringLinePanel
         }
 
-        fun showTestsInPanel(project: Project, lineNumber: Int, filePath: String, tests: List<String>) {
+        fun showTestsInPanel(
+            project: Project,
+            lineNumber: Int,
+            filePath: String,
+            tests: List<String>,
+            baselineTests: List<String> = emptyList(),
+            hasBaseline: Boolean = false,
+        ) {
             val toolWindow = ToolWindowManager.getInstance(project)
                 .getToolWindow("Coverage Tests") ?: return
             val content = toolWindow.contentManager.findContent(TAB_TITLE) ?: return
             toolWindow.contentManager.setSelectedContent(content)
             toolWindow.show {
                 val panel = content.component as? CoveringLinePanel ?: return@show
-                panel.showTests(lineNumber, filePath, tests)
+                panel.showTests(lineNumber, filePath, tests, baselineTests, hasBaseline)
             }
         }
     }

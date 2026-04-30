@@ -39,7 +39,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 |------|---------|
 | `GitLabApiClient.kt` | HTTP client: pipelines, jobs, artifact download, merge-base, project list |
 | `GitLabModels.kt` | `@Serializable` data classes for GitLab REST responses |
-| `CoverageResolver.kt` | Picks the best pipeline for current HEAD via three-tier merge-base resolution |
+| `CoverageResolver.kt` | Picks the best pipeline for current HEAD via three-tier merge-base resolution; `resolveDual()` returns `DualResolved(primary, baseline?)` for dual-coverage mode |
 
 ### Loading pipeline
 | File | Purpose |
@@ -62,15 +62,16 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### In-memory model
 | File | Purpose |
 |------|---------|
-| `CoverageDataService.kt` | Holds active coverage: in-memory map or `Cov4Reader`; tracks commit hash, git root, stale flag |
-| `LineMappingService.kt` | Maps old coverage line numbers to current document lines via `git show` + `ComparisonManager` diff; LRU cache of file contents |
+| `CoverageDataService.kt` | Holds active coverage: primary `Cov4Reader` + optional baseline `Cov4Reader`; tracks commit hashes, git root, stale flag |
+| `LineMappingService.kt` | Maps old coverage line numbers to current document lines via `git show` + `ComparisonManager` diff; supports both primary and baseline commits; LRU cache of file contents |
 | `CoverageLineMapper.kt` | Pure functions: diff old/new content, build old→new line map |
+| `CoverageDiff.kt` | Pure helpers: `featureOnly(primary, baseline)` (set-diff by test name) and `union(primary, baseline)` (distinct, primary first) |
 
 ### Rendering
 | File | Purpose |
 |------|---------|
-| `CoverageHighlighter.kt` | Applies line-background highlighters and gutter renderers to open editors |
-| `CoverageGutterRenderer.kt` | Gutter strip + click popup with test list and run button |
+| `CoverageHighlighter.kt` | Applies line-background highlighters and gutter renderers; classifies each line as `COVERED` (green) / `UNCOVERED` (red) / `FEATURE_ONLY` (blue) when baseline is present |
+| `CoverageGutterRenderer.kt` | Gutter strip coloured by `CoverageCategory`; tooltip shows count of feature-only tests; click opens "Covering Line" panel |
 | `CoverageEditorListener.kt` | Applies highlights on editor open; re-applies on document change (debounced 300 ms) |
 | `CoverageGutterVisibilityService.kt` | Persists gutter visible/hidden toggle across restarts |
 | `CoverageUserSelectionService.kt` | Persists pinned commit hash (user-selected artifact survives IDE restart) |
@@ -83,7 +84,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageTestsToolWindowFactory.kt` | Registers "Coverage Tests" bottom tool window (Covering Line / Affected by Changes / Artifacts / Log tabs) |
 | `CoverageTestNodeData.kt` | Sealed node-payload hierarchy for test tree: Dir, BehatGroup, BehatScenario, PhpUnitGroup, PhpUnitMethod |
 | `TestTreeView.kt` | Shared test-tree widget: tree+model+renderer, double-click navigate, popup (Run / Debug / Go to), flat-vs-tree toggle, Behat/PhpUnit hierarchy builders, Run-All-bundled |
-| `CoveringLinePanel.kt` | "Covering Line" tab: per-line view — tests covering the line clicked in the editor gutter; toolbar: toggleView, Run All, Run All Debug |
+| `CoveringLinePanel.kt` | "Covering Line" tab: per-line view — tests covering the line clicked in the editor gutter; toolbar: toggleView, Run All, Run All Debug, **Both / Master Only / New on This Branch** filter (visible only in dual-coverage mode) |
 | `AffectedTestsPanel.kt` | "Affected by Changes" tab: `AffectedFilesPane` + `TestTreeView` in splitter; toolbar: Find HEAD, Find Working Tree, Refresh, toggleView, Run All, Run All Debug, Remove Selected; F5 = Refresh |
 | `CoverageArtifactsPanel.kt` | Artifacts tab: table of cached COV4 files with Fetch / Load / Delete toolbar |
 | `CoverageLogPanel.kt` | Log tab: `ConsoleView` + `CoverageLogService` subscription |
@@ -94,7 +95,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `ChangedLinesAnalyzer.kt` | `git diff -U0` parser → changed old-side line numbers; modes: COMMITTED / WORKING_TREE |
 | `AffectedTestsService.kt` | Looks up changed lines in coverage data → `AffectedTests` result |
 | `AffectedTestsModel.kt` | Pure data model for affected-files view: checked files, removed tests, delta computation |
-| `CoveragePathResolver.kt` | Resolves git-root-relative path in coverage map (direct + leading-`/` variant) |
+| `CoveragePathResolver.kt` | Resolves git-root-relative path in coverage map (direct + leading-`/` variant); also `resolveBaseline()` for baseline reader |
 | `ToggleAffectedFilesViewAction.kt` | Toolbar toggle: tree ↔ flat list in the files pane |
 
 ### Behat runner
@@ -111,9 +112,34 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageLog.kt` | Logger wrapper — writes to `idea.log` **and** `CoverageLogService` |
 | `CoverageLogService.kt` | Ring buffer (2000 entries) with thread-safe subscribe/backfill |
 
+## Dual-coverage mode
+
+When the current branch has its own pipeline **and** the coverage branch (master) has a different commit, the plugin loads both simultaneously:
+
+- **Primary** = current-branch pipeline (feature or coverage-branch fallback).
+- **Baseline** = coverage-branch (master) pipeline. `null` when commits are equal (single-coverage mode) or when resolution fails.
+
+`CoverageLoadService.loadFromGitLab()` calls `CoverageResolver.resolveDual()`, writes two `.cov4` files to the disk cache, and attaches two `Cov4Reader`s to `CoverageDataService`.
+
+**Gutter colours** (set by `CoverageHighlighter.categorizeLine`):
+| Colour | Meaning |
+|--------|---------|
+| 🟢 Green | Line covered; all tests also exist on master |
+| 🔵 Blue | Line covered; at least one test is new on this branch (`FEATURE_ONLY`) |
+| 🔴 Red | Line not covered by any test |
+
+**Test filter** (bottom "Covering Line" panel, visible only in dual mode):
+| Filter | Shows |
+|--------|-------|
+| Both | Union of primary + baseline tests |
+| Master Only | Tests that appear in both (still on master) |
+| New on This Branch | Tests only in primary (feature-only diff) |
+
+`CoverageDiff` provides the set-diff / union helpers used by both the highlighter and the panel.
+
 ## Flow
 
-On startup or HEAD change: `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve → download → write COV4 → swap reader). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService`.
+On startup or HEAD change: `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
 
 ## MCP
 
@@ -141,4 +167,4 @@ Tool: `get_coverage_for_file` — returns covered/uncovered lines with test name
 - **Threading**: network/parsing in `Task.Backgroundable`; UI updates via `invokeLater`.
 - **Errors**: throw `CoverageApiException(CoverageErrorKind.*)`. Auto-triggered callers only log (silent mode).
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
-- **Remote URL guard**: first startup auto-disables plugin if `origin` ≠ `git@gitlab.raketa.online:raketa/raketa.git` (one-shot, guarded by `remoteUrlAutoChecked`).
+- **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.

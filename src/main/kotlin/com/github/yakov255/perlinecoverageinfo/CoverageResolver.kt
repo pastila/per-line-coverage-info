@@ -11,6 +11,20 @@ data class ResolvedPipeline(
     val fallbackReason: String? = null,
 )
 
+/**
+ * Pair of pipelines used by dual-coverage mode:
+ * - [primary] = the pipeline the user is actively working on (current branch if available, otherwise coverage branch).
+ * - [baseline] = the coverage-branch (master) pipeline used to highlight feature-only tests.
+ *
+ * [baseline] is null when:
+ *   - [primary] already came from the coverage branch (single-coverage mode), OR
+ *   - resolving the coverage branch failed (network/no pipelines).
+ */
+data class DualResolved(
+    val primary: ResolvedPipeline,
+    val baseline: ResolvedPipeline?,
+)
+
 class CoverageResolver(
     private val gitLabClient: GitLabApiClient,
     private val project: Project,
@@ -19,6 +33,50 @@ class CoverageResolver(
     private val log = CoverageLog.get(CoverageResolver::class.java)
 
     fun resolve(): ResolvedPipeline {
+        val gitRoot = resolveGitRoot()
+
+        // Prefer the latest successful pipeline on the current branch, if any.
+        tryResolveFromCurrentBranch(gitRoot)?.let { return it }
+
+        return resolveCoverageBranchPipeline(gitRoot)
+    }
+
+    /**
+     * Resolves a pair of pipelines for dual-coverage mode:
+     * - primary = current-branch pipeline (or coverage-branch if no current-branch pipeline).
+     * - baseline = coverage-branch pipeline. Null when equal to primary or when resolution fails.
+     */
+    fun resolveDual(): DualResolved {
+        val gitRoot = resolveGitRoot()
+
+        val current = tryResolveFromCurrentBranch(gitRoot)
+        val coverage: ResolvedPipeline? = try {
+            // Use a fresh resolver-state for baseline so its fallbackReason doesn't leak into primary.
+            resolveCoverageBranchPipeline(gitRoot)
+        } catch (e: CoverageApiException) {
+            log.warn("Coverage: baseline (coverage-branch) resolution failed: ${e.userMessage}")
+            null
+        } catch (e: Exception) {
+            log.warn("Coverage: baseline (coverage-branch) resolution failed: ${e.message}")
+            null
+        }
+
+        val primary = current ?: coverage
+            ?: throw CoverageApiException(
+                "Could not resolve any coverage pipeline.",
+                kind = CoverageErrorKind.NO_DATA,
+            )
+
+        val baseline = when {
+            coverage == null -> null
+            primary.commitHash == coverage.commitHash -> null
+            else -> coverage
+        }
+
+        return DualResolved(primary = primary, baseline = baseline)
+    }
+
+    private fun resolveGitRoot(): File {
         val basePath = project.basePath
             ?: throw CoverageApiException(
                 "Could not determine project base path",
@@ -32,11 +90,13 @@ class CoverageResolver(
                 details = mapOf("projectDir" to basePath),
                 kind = CoverageErrorKind.GIT,
             )
-        val gitRoot = File(gitRootPath)
+        return File(gitRootPath)
+    }
 
-        // Prefer the latest successful pipeline on the current branch, if any.
-        tryResolveFromCurrentBranch(gitRoot)?.let { return it }
-
+    private fun resolveCoverageBranchPipeline(gitRoot: File): ResolvedPipeline {
+        // findCoveragePipeline mutates the shared fallbackReason field; reset it before each call
+        // so a previous resolution doesn't taint the new one.
+        fallbackReason = null
         val (commitHash, pipelineId) = findCoveragePipeline(gitRoot)
         return ResolvedPipeline(
             commitHash = commitHash,
