@@ -1,0 +1,384 @@
+Scheduled verifications (7):
+com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-261.23567.149, com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-253.32098.40, com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-252.28539.9, com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-251.29188.4, com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-243.28141.5, com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-242.26775.23, com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-241.19416.23
+
+2026-04-29T13:20:25 [main] INFO  verification - Finished 1 of 7 verifications (in 96.2 s): PS-241.19416.23 against com.github.yakov255.perlinecoverageinfo:2.2.0: Compatible. 6 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+2026-04-29T13:20:32 [main] INFO  verification - Finished 2 of 7 verifications (in 103.2 s): PS-242.26775.23 against com.github.yakov255.perlinecoverageinfo:2.2.0: Compatible. 6 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+2026-04-29T13:20:35 [main] INFO  verification - Finished 3 of 7 verifications (in 105.7 s): PS-243.28141.5 against com.github.yakov255.perlinecoverageinfo:2.2.0: Compatible. 6 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+2026-04-29T13:21:11 [main] INFO  verification - Finished 4 of 7 verifications (in 142.4 s): PS-251.29188.4 against com.github.yakov255.perlinecoverageinfo:2.2.0: Compatible. 8 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+2026-04-29T13:21:37 [main] INFO  verification - Finished 5 of 7 verifications (in 168.2 s): PS-252.28539.9 against com.github.yakov255.perlinecoverageinfo:2.2.0: Compatible. 10 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+2026-04-29T13:21:47 [main] INFO  verification - Finished 6 of 7 verifications (in 178.4 s): PS-253.32098.40 against com.github.yakov255.perlinecoverageinfo:2.2.0: Compatible. 12 usages of deprecated API. 13 usages of experimental API
+2026-04-29T13:21:55 [main] INFO  verification - Finished 7 of 7 verifications (in 185.7 s): PS-261.23567.149 against com.github.yakov255.perlinecoverageinfo:2.2.0: Compatible. 13 usages of deprecated API. 13 usages of experimental API
+Plugin com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-241.19416.23: Compatible. 6 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+Deprecated API usages (6):
+    #Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(Project, String, GlobalSearchScope) invocation
+        Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(com.intellij.openapi.project.Project project, java.lang.String name, com.intellij.psi.search.GlobalSearchScope scope) : com.intellij.psi.PsiFile[] is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestNavigator.navigateToTest(Project, String) : void
+    #Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() invocation
+        Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsPanel.switchToAffected() : void
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isApplicable(Project) : boolean
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isDoNotActivateOnStart() : boolean
+Experimental API usages (9):
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method can be changed in a future release leading to incompatibilities
+    #Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer reference
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This interface can be changed in a future release leading to incompatibilities
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This interface can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(Editor, Graphics, Rectangle) is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(com.intellij.openapi.editor.Editor editor, java.awt.Graphics g, java.awt.Rectangle r) : void is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() invocation
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() : java.lang.Integer is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() : com.intellij.openapi.editor.colors.TextAttributesKey is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+Internal API usages (6):
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getAnchor() : ToolWindowAnchor. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getIcon() : Icon. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+Dynamic Plugin Eligibility:
+    Plugin can probably be enabled or disabled without IDE restart
+
+Plugin com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-242.26775.23: Compatible. 6 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+Deprecated API usages (6):
+    #Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(Project, String, GlobalSearchScope) invocation
+        Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(com.intellij.openapi.project.Project project, java.lang.String name, com.intellij.psi.search.GlobalSearchScope scope) : com.intellij.psi.PsiFile[] is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestNavigator.navigateToTest(Project, String) : void
+    #Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() invocation
+        Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsPanel.switchToAffected() : void
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isApplicable(Project) : boolean
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isDoNotActivateOnStart() : boolean
+Experimental API usages (9):
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method can be changed in a future release leading to incompatibilities
+    #Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer reference
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This interface can be changed in a future release leading to incompatibilities
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This interface can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(Editor, Graphics, Rectangle) is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(com.intellij.openapi.editor.Editor editor, java.awt.Graphics g, java.awt.Rectangle r) : void is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() invocation
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() : java.lang.Integer is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() : com.intellij.openapi.editor.colors.TextAttributesKey is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+Internal API usages (6):
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getAnchor() : ToolWindowAnchor. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getIcon() : Icon. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+Dynamic Plugin Eligibility:
+    Plugin can probably be enabled or disabled without IDE restart
+
+Plugin com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-243.28141.5: Compatible. 6 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+Deprecated API usages (6):
+    #Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(Project, String, GlobalSearchScope) invocation
+        Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(com.intellij.openapi.project.Project project, java.lang.String name, com.intellij.psi.search.GlobalSearchScope scope) : com.intellij.psi.PsiFile[] is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestNavigator.navigateToTest(Project, String) : void
+    #Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() invocation
+        Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsPanel.switchToAffected() : void
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isApplicable(Project) : boolean
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isDoNotActivateOnStart() : boolean
+Experimental API usages (9):
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method can be changed in a future release leading to incompatibilities
+    #Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer reference
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This interface can be changed in a future release leading to incompatibilities
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This interface can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(Editor, Graphics, Rectangle) is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(com.intellij.openapi.editor.Editor editor, java.awt.Graphics g, java.awt.Rectangle r) : void is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() invocation
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() : java.lang.Integer is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() : com.intellij.openapi.editor.colors.TextAttributesKey is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+Internal API usages (6):
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getAnchor() : ToolWindowAnchor. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getIcon() : Icon. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+Dynamic Plugin Eligibility:
+    Plugin can probably be enabled or disabled without IDE restart
+
+Plugin com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-251.29188.4: Compatible. 8 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+Deprecated API usages (8):
+    #Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() invocation
+        Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() : com.intellij.openapi.fileChooser.FileChooserDescriptor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageArtifactsPanel.doLoadFromFile() : void
+        Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() : com.intellij.openapi.fileChooser.FileChooserDescriptor is invoked in com.github.yakov255.perlinecoverageinfo.LoadLocalCoverageAction.actionPerformed(AnActionEvent) : void
+    #Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(Project, String, GlobalSearchScope) invocation
+        Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(com.intellij.openapi.project.Project project, java.lang.String name, com.intellij.psi.search.GlobalSearchScope scope) : com.intellij.psi.PsiFile[] is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestNavigator.navigateToTest(Project, String) : void
+    #Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() invocation
+        Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsPanel.switchToAffected() : void
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isApplicable(Project) : boolean
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isDoNotActivateOnStart() : boolean
+Experimental API usages (9):
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method can be changed in a future release leading to incompatibilities
+    #Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer reference
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This interface can be changed in a future release leading to incompatibilities
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This interface can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(Editor, Graphics, Rectangle) is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(com.intellij.openapi.editor.Editor editor, java.awt.Graphics g, java.awt.Rectangle r) : void is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() invocation
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() : java.lang.Integer is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() : com.intellij.openapi.editor.colors.TextAttributesKey is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+Internal API usages (6):
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getAnchor() : ToolWindowAnchor. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getIcon() : Icon. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+Dynamic Plugin Eligibility:
+    Plugin can probably be enabled or disabled without IDE restart
+
+Plugin com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-252.28539.9: Compatible. 10 usages of deprecated API. 9 usages of experimental API. 6 usages of internal API
+Deprecated API usages (10):
+    #Deprecated class com.intellij.execution.process.ProcessAdapter reference
+        Deprecated class com.intellij.execution.process.ProcessAdapter is referenced in com.github.yakov255.perlinecoverageinfo.BehatTestRunner.executeWithCallback.callback$1$1
+        Deprecated class com.intellij.execution.process.ProcessAdapter is referenced in com.github.yakov255.perlinecoverageinfo.BehatTestRunner.executeWithCallback.callback$1$1.<init>(Function1)
+    #Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() invocation
+        Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() : com.intellij.openapi.fileChooser.FileChooserDescriptor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageArtifactsPanel.doLoadFromFile() : void
+        Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() : com.intellij.openapi.fileChooser.FileChooserDescriptor is invoked in com.github.yakov255.perlinecoverageinfo.LoadLocalCoverageAction.actionPerformed(AnActionEvent) : void
+    #Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(Project, String, GlobalSearchScope) invocation
+        Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(com.intellij.openapi.project.Project project, java.lang.String name, com.intellij.psi.search.GlobalSearchScope scope) : com.intellij.psi.PsiFile[] is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestNavigator.navigateToTest(Project, String) : void
+    #Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() invocation
+        Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsPanel.switchToAffected() : void
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isApplicable(Project) : boolean
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isDoNotActivateOnStart() : boolean
+Experimental API usages (9):
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method can be changed in a future release leading to incompatibilities
+    #Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer reference
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This interface can be changed in a future release leading to incompatibilities
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This interface can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(Editor, Graphics, Rectangle) is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(com.intellij.openapi.editor.Editor editor, java.awt.Graphics g, java.awt.Rectangle r) : void is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() invocation
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() : java.lang.Integer is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() : com.intellij.openapi.editor.colors.TextAttributesKey is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+Internal API usages (6):
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getAnchor() : ToolWindowAnchor. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() invocation
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getIcon() : Icon. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+    #Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() is overridden
+        Internal method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method is marked with @org.jetbrains.annotations.ApiStatus.Internal annotation or @com.intellij.openapi.util.IntellijInternalApi annotation and indicates that the method is not supposed to be used in client code.
+Dynamic Plugin Eligibility:
+    Plugin can probably be enabled or disabled without IDE restart
+
+Plugin com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-253.32098.40: Compatible. 12 usages of deprecated API. 13 usages of experimental API
+Deprecated API usages (12):
+    #Deprecated class com.intellij.execution.process.ProcessAdapter reference
+        Deprecated class com.intellij.execution.process.ProcessAdapter is referenced in com.github.yakov255.perlinecoverageinfo.BehatTestRunner.executeWithCallback.callback$1$1
+        Deprecated class com.intellij.execution.process.ProcessAdapter is referenced in com.github.yakov255.perlinecoverageinfo.BehatTestRunner.executeWithCallback.callback$1$1.<init>(Function1)
+    #Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() invocation
+        Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() : com.intellij.openapi.fileChooser.FileChooserDescriptor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageArtifactsPanel.doLoadFromFile() : void
+        Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() : com.intellij.openapi.fileChooser.FileChooserDescriptor is invoked in com.github.yakov255.perlinecoverageinfo.LoadLocalCoverageAction.actionPerformed(AnActionEvent) : void
+    #Deprecated method com.intellij.openapi.editor.Document.addDocumentListener(DocumentListener) invocation
+        Deprecated method com.intellij.openapi.editor.Document.addDocumentListener(com.intellij.openapi.editor.event.DocumentListener listener) : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageEditorListener.installDocumentListener(Editor, Project) : void
+    #Deprecated constructor com.intellij.ui.CheckboxTree.<init>(CheckboxTree.CheckboxTreeCellRenderer, CheckedTreeNode) invocation
+        Deprecated constructor com.intellij.ui.CheckboxTree.<init>(com.intellij.ui.CheckboxTree.CheckboxTreeCellRenderer cellRenderer, com.intellij.ui.CheckedTreeNode root) is invoked in com.github.yakov255.perlinecoverageinfo.AffectedFilesPane.<init>(Project, Function0)
+    #Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(Project, String, GlobalSearchScope) invocation
+        Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(com.intellij.openapi.project.Project project, java.lang.String name, com.intellij.psi.search.GlobalSearchScope scope) : com.intellij.psi.PsiFile[] is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestNavigator.navigateToTest(Project, String) : void
+    #Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() invocation
+        Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsPanel.switchToAffected() : void
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isApplicable(Project) : boolean
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isDoNotActivateOnStart() : boolean
+Experimental API usages (13):
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method can be changed in a future release leading to incompatibilities
+    #Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer reference
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This interface can be changed in a future release leading to incompatibilities
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This interface can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(Editor, Graphics, Rectangle) is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(com.intellij.openapi.editor.Editor editor, java.awt.Graphics g, java.awt.Rectangle r) : void is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() invocation
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getAnchor() : ToolWindowAnchor. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getIcon() is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() : java.lang.Integer is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getIcon() invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() : com.intellij.openapi.editor.colors.TextAttributesKey is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+Dynamic Plugin Eligibility:
+    Plugin can probably be enabled or disabled without IDE restart
+
+Plugin com.github.yakov255.perlinecoverageinfo:2.2.0 against PS-261.23567.149: Compatible. 13 usages of deprecated API. 13 usages of experimental API
+Deprecated API usages (13):
+    #Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() invocation
+        Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() : com.intellij.openapi.fileChooser.FileChooserDescriptor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageArtifactsPanel.doLoadFromFile() : void
+        Deprecated method com.intellij.openapi.fileChooser.FileChooserDescriptorFactory.createSingleFileDescriptor() : com.intellij.openapi.fileChooser.FileChooserDescriptor is invoked in com.github.yakov255.perlinecoverageinfo.LoadLocalCoverageAction.actionPerformed(AnActionEvent) : void
+    #Deprecated method com.intellij.openapi.editor.Document.addDocumentListener(DocumentListener) invocation
+        Deprecated method com.intellij.openapi.editor.Document.addDocumentListener(com.intellij.openapi.editor.event.DocumentListener listener) : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageEditorListener.installDocumentListener(Editor, Project) : void
+    #Deprecated method com.intellij.openapi.application.ReadAction.compute(ThrowableComputable) invocation
+        Deprecated method com.intellij.openapi.application.ReadAction.compute(com.intellij.openapi.util.ThrowableComputable action) : T is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestNavigator.resolveScenarioName(Project, String, String) : String
+    #Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() invocation
+        Deprecated method com.intellij.openapi.actionSystem.ActionToolbar.updateActionsImmediately() : void is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsPanel.switchToAffected() : void
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(Project) invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isApplicable(com.intellij.openapi.project.Project project) : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isApplicable(Project) : boolean
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() is overridden
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory
+    #Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() invocation
+        Deprecated method com.intellij.openapi.wm.ToolWindowFactory.isDoNotActivateOnStart() : boolean is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.isDoNotActivateOnStart() : boolean
+    #Deprecated class com.intellij.execution.process.ProcessAdapter reference
+        Deprecated class com.intellij.execution.process.ProcessAdapter is referenced in com.github.yakov255.perlinecoverageinfo.BehatTestRunner.executeWithCallback.callback$1$1
+        Deprecated class com.intellij.execution.process.ProcessAdapter is referenced in com.github.yakov255.perlinecoverageinfo.BehatTestRunner.executeWithCallback.callback$1$1.<init>(Function1)
+    #Deprecated constructor com.intellij.ui.CheckboxTree.<init>(CheckboxTree.CheckboxTreeCellRenderer, CheckedTreeNode) invocation
+        Deprecated constructor com.intellij.ui.CheckboxTree.<init>(com.intellij.ui.CheckboxTree.CheckboxTreeCellRenderer cellRenderer, com.intellij.ui.CheckedTreeNode root) is invoked in com.github.yakov255.perlinecoverageinfo.AffectedFilesPane.<init>(Project, Function0)
+    #Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(Project, String, GlobalSearchScope) invocation
+        Deprecated method com.intellij.psi.search.FilenameIndex.getFilesByName(com.intellij.openapi.project.Project project, java.lang.String name, com.intellij.psi.search.GlobalSearchScope scope) : com.intellij.psi.PsiFile[] is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestNavigator.navigateToTest(Project, String) : void
+Experimental API usages (13):
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) : Object. This method can be changed in a future release leading to incompatibilities
+    #Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer reference
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This interface can be changed in a future release leading to incompatibilities
+        Experimental API interface com.intellij.openapi.editor.markup.FillingLineMarkerRenderer is referenced in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This interface can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(ToolWindow, ToolWindowManager, Continuation) is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.manage(com.intellij.openapi.wm.ToolWindow toolWindow, com.intellij.openapi.wm.ToolWindowManager toolWindowManager, kotlin.coroutines.Continuation $completion) : java.lang.Object is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(Editor, Graphics, Rectangle) is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.paint(com.intellij.openapi.editor.Editor editor, java.awt.Graphics g, java.awt.Rectangle r) : void is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() invocation
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getAnchor() : com.intellij.openapi.wm.ToolWindowAnchor is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getAnchor() : ToolWindowAnchor. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getIcon() is overridden
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getMaxWidth() : java.lang.Integer is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getIcon() invocation
+        Experimental API method com.intellij.openapi.wm.ToolWindowFactory.getIcon() : javax.swing.Icon is invoked in com.github.yakov255.perlinecoverageinfo.CoverageTestsToolWindowFactory.getIcon() : Icon. This method can be changed in a future release leading to incompatibilities
+    #Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() is overridden
+        Experimental API method com.intellij.openapi.editor.markup.FillingLineMarkerRenderer.getTextAttributesKey() : com.intellij.openapi.editor.colors.TextAttributesKey is overridden in class com.github.yakov255.perlinecoverageinfo.CoverageGutterRenderer. This method can be changed in a future release leading to incompatibilities
+Dynamic Plugin Eligibility:
+    Plugin can probably be enabled or disabled without IDE restart
+
+2026-04-29T13:21:55 [main] INFO  verification - Total time spent downloading plugins and their dependencies: 39 s 498 ms
+2026-04-29T13:21:55 [main] INFO  verification - Total amount of plugins and dependencies downloaded: 449.31 MB
+2026-04-29T13:21:55 [main] INFO  verification - Total amount of space used for plugins and dependencies: 449.31 MB
+2026-04-29T13:21:55 [main] INFO  verification - Verification reports for com.github.yakov255.perlinecoverageinfo:2.2.0 saved to /home/yvladimirov/projects/per-line-coverage-info/build/reports/pluginVerifier/PS-241.19416.23
+2026-04-29T13:21:55 [main] INFO  verification - Verification reports for com.github.yakov255.perlinecoverageinfo:2.2.0 saved to /home/yvladimirov/projects/per-line-coverage-info/build/reports/pluginVerifier/PS-242.26775.23
+2026-04-29T13:21:55 [main] INFO  verification - Verification reports for com.github.yakov255.perlinecoverageinfo:2.2.0 saved to /home/yvladimirov/projects/per-line-coverage-info/build/reports/pluginVerifier/PS-243.28141.5
+2026-04-29T13:21:55 [main] INFO  verification - Verification reports for com.github.yakov255.perlinecoverageinfo:2.2.0 saved to /home/yvladimirov/projects/per-line-coverage-info/build/reports/pluginVerifier/PS-251.29188.4
+2026-04-29T13:21:55 [main] INFO  verification - Verification reports for com.github.yakov255.perlinecoverageinfo:2.2.0 saved to /home/yvladimirov/projects/per-line-coverage-info/build/reports/pluginVerifier/PS-252.28539.9
+2026-04-29T13:21:55 [main] INFO  verification - Verification reports for com.github.yakov255.perlinecoverageinfo:2.2.0 saved to /home/yvladimirov/projects/per-line-coverage-info/build/reports/pluginVerifier/PS-253.32098.40
+2026-04-29T13:21:55 [main] INFO  verification - Verification reports for com.github.yakov255.perlinecoverageinfo:2.2.0 saved to /home/yvladimirov/projects/per-line-coverage-info/build/reports/pluginVerifier/PS-261.23567.149
+2026-04-29T13:21:55 [main] INFO  verification - Total time spent in plugin verification: 3 m 11 s 835 ms
+
+[Incubating] Problems report is available at: file:///home/yvladimirov/projects/per-line-coverage-info/build/reports/problems/problems-report.html
+
+BUILD SUCCESSFUL in 7m 43s
+15 actionable tasks: 12 executed, 3 up-to-date
+Configuration cache entry stored.

@@ -39,7 +39,7 @@ internal class AffectedFilesPane(
     private var currentModel: AffectedTestsModel? = null
     private var syncPending = false
 
-    val filesTree: CheckboxTree = CheckboxTree(object : CheckboxTree.CheckboxTreeCellRenderer() {
+    val filesTree: CheckboxTree = @Suppress("DEPRECATION") CheckboxTree(object : CheckboxTree.CheckboxTreeCellRenderer() {
         override fun customizeRenderer(
             tree: JTree?, value: Any?, selected: Boolean,
             expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean

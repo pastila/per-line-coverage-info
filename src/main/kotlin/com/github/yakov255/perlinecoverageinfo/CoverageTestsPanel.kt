@@ -326,10 +326,7 @@ class CoverageTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     private fun switchToAffected() {
         splitter.secondComponent = treeScrollPane
         cardLayout.show(cardPanel, AFFECTED_CARD)
-        // Force toolbar to re-evaluate action enabled state now that
-        // the affected card is visible and allTests is populated.
-        @Suppress("DEPRECATION")
-        affectedToolbarRef.updateActionsImmediately()
+        affectedToolbarRef.updateActionsAsync()
     }
 
     // ── Normal mode ─────────────────────────────────────────────────

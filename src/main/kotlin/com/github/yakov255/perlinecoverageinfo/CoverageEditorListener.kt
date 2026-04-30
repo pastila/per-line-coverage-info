@@ -1,5 +1,6 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
@@ -7,6 +8,7 @@ import com.intellij.openapi.editor.event.EditorFactoryEvent
 import com.intellij.openapi.editor.event.EditorFactoryListener
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.intellij.util.Alarm
 
@@ -20,7 +22,7 @@ import com.intellij.util.Alarm
 class CoverageEditorListener : EditorFactoryListener {
 
     companion object {
-        private val DOCUMENT_LISTENER_KEY = Key.create<CoverageDocumentListener>("COVERAGE_DOCUMENT_LISTENER")
+        private val COVERAGE_DOC_DISPOSABLE_KEY = Key.create<Disposable>("COVERAGE_DOC_DISPOSABLE")
     }
 
     override fun editorCreated(event: EditorFactoryEvent) {
@@ -32,11 +34,10 @@ class CoverageEditorListener : EditorFactoryListener {
 
     override fun editorReleased(event: EditorFactoryEvent) {
         val editor = event.editor
-        val listener = editor.getUserData(DOCUMENT_LISTENER_KEY)
-        if (listener != null) {
-            editor.document.removeDocumentListener(listener)
-            listener.dispose()
-            editor.putUserData(DOCUMENT_LISTENER_KEY, null)
+        val disposable = editor.getUserData(COVERAGE_DOC_DISPOSABLE_KEY)
+        if (disposable != null) {
+            Disposer.dispose(disposable)
+            editor.putUserData(COVERAGE_DOC_DISPOSABLE_KEY, null)
         }
     }
 
@@ -49,8 +50,10 @@ class CoverageEditorListener : EditorFactoryListener {
         lineMappingService.toRelativePath(virtualFile.path) ?: return
 
         val listener = CoverageDocumentListener(editor, project)
-        editor.document.addDocumentListener(listener)
-        editor.putUserData(DOCUMENT_LISTENER_KEY, listener)
+        val disposable = Disposer.newDisposable()
+        editor.document.addDocumentListener(listener, disposable)
+        Disposer.register(disposable, listener)
+        editor.putUserData(COVERAGE_DOC_DISPOSABLE_KEY, disposable)
     }
 }
 
@@ -62,7 +65,7 @@ class CoverageEditorListener : EditorFactoryListener {
 private class CoverageDocumentListener(
     private val editor: Editor,
     private val project: Project
-) : DocumentListener {
+) : DocumentListener, Disposable {
 
     private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD)
 
@@ -75,7 +78,7 @@ private class CoverageDocumentListener(
         }, REHIGHLIGHT_DELAY_MS)
     }
 
-    fun dispose() {
+    override fun dispose() {
         alarm.cancelAllRequests()
     }
 
