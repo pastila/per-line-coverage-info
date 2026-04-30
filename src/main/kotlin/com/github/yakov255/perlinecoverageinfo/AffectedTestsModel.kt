@@ -1,7 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
 /**
- * Pure (Swing-free) data model for the "affected tests" view in [CoverageTestsPanel].
+ * Pure (Swing-free) data model for the "affected tests" view in [AffectedTestsPanel].
  *
  * Holds the immutable per-file → tests map plus mutable user state ([checkedFiles] and
  * [removedTests]) and exposes:

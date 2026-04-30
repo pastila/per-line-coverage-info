@@ -80,9 +80,11 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Tests tool window
 | File | Purpose |
 |------|---------|
-| `CoverageTestsToolWindowFactory.kt` | Registers "Coverage Tests" bottom tool window (Tests / Artifacts / Log tabs) |
+| `CoverageTestsToolWindowFactory.kt` | Registers "Coverage Tests" bottom tool window (Covering Line / Affected by Changes / Artifacts / Log tabs) |
 | `CoverageTestNodeData.kt` | Sealed node-payload hierarchy for test tree: Dir, BehatGroup, BehatScenario, PhpUnitGroup, PhpUnitMethod |
-| `CoverageTestsPanel.kt` | Main panel: per-line mode (tests for a line) + affected mode (tests for changed lines); flat/tree toggle; Run All as single Behat process |
+| `TestTreeView.kt` | Shared test-tree widget: tree+model+renderer, double-click navigate, popup (Run / Debug / Go to), flat-vs-tree toggle, Behat/PhpUnit hierarchy builders, Run-All-bundled |
+| `CoveringLinePanel.kt` | "Covering Line" tab: per-line view — tests covering the line clicked in the editor gutter; toolbar: toggleView, Run All, Run All Debug |
+| `AffectedTestsPanel.kt` | "Affected by Changes" tab: `AffectedFilesPane` + `TestTreeView` in splitter; toolbar: Find HEAD, Find Working Tree, Refresh, toggleView, Run All, Run All Debug, Remove Selected; F5 = Refresh |
 | `CoverageArtifactsPanel.kt` | Artifacts tab: table of cached COV4 files with Fetch / Load / Delete toolbar |
 | `CoverageLogPanel.kt` | Log tab: `ConsoleView` + `CoverageLogService` subscription |
 

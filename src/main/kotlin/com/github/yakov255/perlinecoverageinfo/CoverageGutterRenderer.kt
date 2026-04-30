@@ -70,7 +70,7 @@ class CoverageGutterRenderer(
         val project = editor.project ?: return
         val virtualFile = FileDocumentManager.getInstance().getFile(editor.document)
         val filePath = virtualFile?.path ?: ""
-        CoverageTestsPanel.showTestsInPanel(project, lineNumber, filePath, tests)
+        CoveringLinePanel.showTestsInPanel(project, lineNumber, filePath, tests)
     }
 
     override fun getAccessibleName(): String {
