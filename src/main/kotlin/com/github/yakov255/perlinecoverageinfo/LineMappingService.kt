@@ -44,13 +44,34 @@ class LineMappingService(private val project: Project) {
         val relativePath = toRelativePath(absolutePath) ?: return null
 
         val rawCoverage = findRawCoverage(relativePath, dataService) ?: return null
+        val commitHash = dataService.coverageCommitHash ?: return rawCoverage
 
-        val oldContent = getOrFetchOldContent(relativePath) ?: return rawCoverage
+        return mapWithCommit(rawCoverage, relativePath, commitHash, currentContent)
+    }
 
-        // Diff old content vs current editor content using ComparisonManager
+    /**
+     * Same as [getMappedCoverage] but for the baseline (master) coverage in dual-coverage mode.
+     * Returns null when no baseline is loaded or the file is absent from the baseline coverage.
+     */
+    fun getMappedBaselineCoverage(absolutePath: String, currentContent: String): Map<Int, List<String>>? {
+        val dataService = CoverageDataService.getInstance(project)
+        if (!dataService.hasBaseline()) return null
+        val baselineCommit = dataService.baselineCommitHash ?: return null
+        val relativePath = toRelativePath(absolutePath) ?: return null
+        val gitRelativePath = toGitRelativePath(relativePath) ?: return null
+        val raw = dataService.getBaselineCoverage(gitRelativePath) ?: return null
+        return mapWithCommit(raw, relativePath, baselineCommit, currentContent)
+    }
+
+    private fun mapWithCommit(
+        rawCoverage: Map<Int, List<String>>,
+        relativePath: String,
+        commitHash: String,
+        currentContent: String,
+    ): Map<Int, List<String>> {
+        val oldContent = getOrFetchOldContent(relativePath, commitHash) ?: return rawCoverage
         val mapping = CoverageLineMapper.computeMappingFromContent(oldContent, currentContent)
-            ?: return rawCoverage // null = identical content, use raw
-
+            ?: return rawCoverage
         return CoverageLineMapper.mapCoverage(rawCoverage, mapping)
     }
 
@@ -62,16 +83,15 @@ class LineMappingService(private val project: Project) {
     }
 
     /**
-     * Drops cache entries whose commit hash does not match [activeCommit].
-     * Called from [CoverageDataService.setCoverageContext] so entries from a
-     * previous coverage commit don't occupy slots in the LRU after a reload.
-     * Entries for the active commit are preserved so consecutive loads that
-     * resolve to the same commit stay warm.
+     * Drops cache entries whose commit hash is not in [activeCommits].
+     * Called from [CoverageDataService.setCoverageContext] so entries from previous
+     * coverage commits don't occupy slots in the LRU after a reload, while still
+     * keeping both the primary and the baseline commit warm in dual-coverage mode.
      */
-    fun pruneToCommit(activeCommit: String) {
+    fun pruneToCommits(activeCommits: Set<String>) {
         val it = oldContentCache.entries.iterator()
         while (it.hasNext()) {
-            if (it.next().key.first != activeCommit) it.remove()
+            if (it.next().key.first !in activeCommits) it.remove()
         }
     }
 
@@ -99,9 +119,8 @@ class LineMappingService(private val project: Project) {
         return absoluteFile.relativeTo(gitRoot).path.replace(File.separatorChar, '/')
     }
 
-    private fun getOrFetchOldContent(relativePath: String): String? {
+    private fun getOrFetchOldContent(relativePath: String, commitHash: String): String? {
         val dataService = CoverageDataService.getInstance(project)
-        val commitHash = dataService.coverageCommitHash ?: return null
         val gitRoot = dataService.gitRoot ?: return null
 
         val key = commitHash to relativePath

@@ -27,4 +27,21 @@ object CoveragePathResolver {
         }
         return null
     }
+
+    /**
+     * Same as [resolve] but consults the baseline reader on the data service.
+     * Returns null if the data service has no baseline attached.
+     */
+    fun resolveBaseline(
+        data: CoverageDataService,
+        candidates: List<String>,
+    ): Map<Int, List<String>>? {
+        if (!data.hasBaseline()) return null
+        for (candidate in candidates) {
+            if (candidate.isEmpty()) continue
+            data.getBaselineCoverage(candidate)?.let { return it }
+            data.getBaselineCoverage("/$candidate")?.let { return it }
+        }
+        return null
+    }
 }

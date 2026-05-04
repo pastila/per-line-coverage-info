@@ -94,10 +94,26 @@ Access plugin settings via **File > Settings > Tools > Coverage API** (or **Inte
 
 ## Installation
 
-1. Download the plugin JAR from the [releases page](https://github.com/your-repo/per-line-coverage-info/releases).
-2. In IntelliJ IDEA, go to **File > Settings > Plugins**.
-3. Click the gear icon > **Install Plugin from Disk**.
-4. Select the downloaded JAR and restart IntelliJ.
+### Option A — Custom Plugin Repository (auto-update from GitHub, recommended)
+
+This bypasses JetBrains Marketplace. The IDE will pick up new releases the same way it picks up Marketplace updates.
+
+1. Open **Settings → Plugins**.
+2. Click the **⚙ (gear)** icon → **Manage Plugin Repositories…**
+3. Add this URL:
+   ```
+   https://yakov255.github.io/per-line-coverage-info/updatePlugins.xml
+   ```
+4. Open the **Marketplace** tab, search for `per-line-coverage-info`, install. Future updates appear automatically.
+
+The plugin also performs an in-IDE GitHub Releases check at most once every 24 hours and shows a balloon notification with **Open Releases** and **Don't check again** actions when a newer version is published.
+
+### Option B — Manual install from a release zip
+
+1. Download the latest `per-line-coverage-info-*.zip` from the [releases page](https://github.com/yakov255/per-line-coverage-info/releases).
+2. In your IDE, go to **Settings → Plugins**.
+3. Click the gear icon → **Install Plugin from Disk…**
+4. Select the downloaded zip and restart the IDE.
 
 ### Requirements
 - IntelliJ IDEA 2021.3 or later

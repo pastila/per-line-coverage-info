@@ -12,11 +12,17 @@ class CoverageTestsToolWindowFactory : ToolWindowFactory {
         val contentFactory = ContentFactory.getInstance()
         val contentManager = toolWindow.contentManager
 
-        val testsPanel = CoverageTestsPanel(project)
-        val testsContent = contentFactory.createContent(testsPanel, "Tests", false).apply {
-            isCloseable = false
-        }
-        contentManager.addContent(testsContent)
+        val coveringLinePanel = CoveringLinePanel(project)
+        val coveringLineContent = contentFactory.createContent(
+            coveringLinePanel, CoveringLinePanel.TAB_TITLE, false
+        ).apply { isCloseable = false }
+        contentManager.addContent(coveringLineContent)
+
+        val affectedPanel = AffectedTestsPanel(project)
+        val affectedContent = contentFactory.createContent(
+            affectedPanel, AffectedTestsPanel.TAB_TITLE, false
+        ).apply { isCloseable = false }
+        contentManager.addContent(affectedContent)
 
         val artifactsPanel = CoverageArtifactsPanel(project)
         val artifactsContent = contentFactory.createContent(artifactsPanel, "Artifacts", false).apply {

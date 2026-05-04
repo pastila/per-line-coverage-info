@@ -29,6 +29,10 @@
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageMcpSettings"/>
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.McpServer"/>
+        <applicationService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.GitHubUpdateCheckSettings"/>
+        <applicationService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.GitHubUpdateCheckService"/>
         <applicationConfigurable
             parentId="tools"
             instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"

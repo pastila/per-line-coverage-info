@@ -25,8 +25,15 @@ class CoverageDataService(private val project: Project) {
     /** COV4 reader for disk-cached coverage (lazy per-file parsing) */
     private var cov4Reader: Cov4Reader? = null
 
+    /** Optional baseline (master) COV4 reader for dual-coverage mode. */
+    private var baselineReader: Cov4Reader? = null
+
     /** The commit hash that coverage data was loaded from. */
     var coverageCommitHash: String? = null
+        private set
+
+    /** Commit hash of the baseline (master) coverage, when in dual-coverage mode. */
+    var baselineCommitHash: String? = null
         private set
 
     /** The git root directory for the project. */
@@ -63,6 +70,32 @@ class CoverageDataService(private val project: Project) {
     }
 
     /**
+     * Sets the baseline (master) reader for dual-coverage mode. Pass null to clear.
+     * The baseline commit may differ from the primary [coverageCommitHash].
+     */
+    fun setBaselineCov4Reader(reader: Cov4Reader?, commitHash: String?) {
+        closeBaselineReader()
+        baselineReader = reader
+        baselineCommitHash = commitHash
+        if (reader != null) {
+            log.info("Coverage: baseline reader set with ${reader.allFilePaths.size} files (commit ${commitHash?.take(8)})")
+        }
+    }
+
+    fun clearBaseline() {
+        closeBaselineReader()
+        baselineReader = null
+        baselineCommitHash = null
+    }
+
+    fun hasBaseline(): Boolean = baselineReader != null
+
+    /** Returns baseline coverage for the given file, or null if no baseline or file missing. */
+    fun getBaselineCoverage(filePath: String): Map<Int, List<String>>? {
+        return baselineReader?.getCoverage(filePath)
+    }
+
+    /**
      * Gets coverage for a file. Checks in-memory data first, then COV4 reader.
      */
     fun getCoverage(filePath: String): Map<Int, List<String>>? {
@@ -80,6 +113,9 @@ class CoverageDataService(private val project: Project) {
 
     fun clear() {
         closeCov4Reader()
+        closeBaselineReader()
+        baselineReader = null
+        baselineCommitHash = null
         data.clear()
         coverageCommitHash = null
         gitRoot = null
@@ -93,9 +129,10 @@ class CoverageDataService(private val project: Project) {
         this.coverageCommitHash = commitHash
         this.gitRoot = gitRoot
         this.isStale = stale
-        // Drop old-content cache entries from previous commits so the LRU stays
-        // focused on files relevant to the currently active coverage.
-        LineMappingService.getInstance(project).pruneToCommit(commitHash)
+        // Drop old-content cache entries from previous commits so the LRU stays focused on
+        // files relevant to the currently active coverage. Keep the baseline commit warm too.
+        val keep = setOfNotNull(commitHash, baselineCommitHash)
+        LineMappingService.getInstance(project).pruneToCommits(keep)
     }
 
     private fun closeCov4Reader() {
@@ -105,6 +142,15 @@ class CoverageDataService(private val project: Project) {
             log.warn("Failed to close COV4 reader", e)
         }
         cov4Reader = null
+    }
+
+    private fun closeBaselineReader() {
+        try {
+            baselineReader?.close()
+        } catch (e: Exception) {
+            log.warn("Failed to close baseline COV4 reader", e)
+        }
+        baselineReader = null
     }
 
     companion object {
