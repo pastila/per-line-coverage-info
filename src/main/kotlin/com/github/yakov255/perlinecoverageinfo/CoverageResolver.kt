@@ -263,16 +263,13 @@ class CoverageResolver(
 
     private fun getCoverageBranch(): String {
         val configured = CoverageApiSettings.getInstance().coverageBranch.trim()
-        if (configured.isNotEmpty()) return configured
-
-        val basePath = project.basePath ?: return "main"
-        val projectDir = File(basePath)
-        val symbolic = runGitCommand(projectDir, "symbolic-ref", "refs/remotes/origin/HEAD")
-        if (symbolic != null) {
-            return symbolic.removePrefix("refs/remotes/origin/")
+        if (configured.isEmpty()) {
+            throw CoverageApiException(
+                "Coverage branch is not configured.\nPlease set it in Settings → Tools → GitLab Coverage.",
+                kind = CoverageErrorKind.PROJECT_SETUP,
+            )
         }
-        val branches = runGitCommand(projectDir, "branch", "--list", "main", "master") ?: return "main"
-        return if (branches.lines().any { it.trim().trimStart('*').trim() == "main" }) "main" else "master"
+        return configured
     }
 
     private fun getMergeBase(gitRoot: File, branch: String): String? {

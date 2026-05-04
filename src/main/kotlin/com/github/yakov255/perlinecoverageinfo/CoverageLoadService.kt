@@ -236,13 +236,23 @@ class CoverageLoadService(private val project: Project) {
                         loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.85)
                     }
                 } catch (ex: CoverageApiException) {
-                    // CoverageApiException is a structured, expected error — log message only, no stack trace.
                     log.warn("Coverage: GitLab load failed (${ex.kind}): ${ex.userMessage}")
                     val friendly = friendlyApiError(ex)
                     if (showErrors) {
                         val title = errorTitle(ex.kind)
                         ApplicationManager.getApplication().invokeLater {
                             Messages.showErrorDialog(project, ex.userMessage, title)
+                        }
+                    } else {
+                        ApplicationManager.getApplication().invokeLater {
+                            NotificationGroupManager.getInstance()
+                                .getNotificationGroup("Coverage Notifications")
+                                .createNotification(
+                                    "Coverage unavailable",
+                                    friendly,
+                                    NotificationType.WARNING,
+                                )
+                                .notify(project)
                         }
                     }
                     onError?.let { ApplicationManager.getApplication().invokeLater { it(friendly) } }
