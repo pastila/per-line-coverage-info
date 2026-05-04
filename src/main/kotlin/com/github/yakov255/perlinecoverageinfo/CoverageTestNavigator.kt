@@ -3,6 +3,7 @@ package com.github.yakov255.perlinecoverageinfo
 import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.VfsUtil
@@ -56,6 +57,8 @@ internal object CoverageTestNavigator {
             return
         }
 
+        if (DumbService.isDumb(project)) return
+
         val methodName = testName.substringAfterLast("::", testName).substringAfterLast("\\", testName)
         val className = testName.substringBeforeLast("::", "").substringAfterLast("\\", "")
 
@@ -96,6 +99,7 @@ internal object CoverageTestNavigator {
 
     /** Resolves a scenario name from a feature file path and line number string. */
     fun resolveScenarioName(project: Project, featurePath: String, lineStr: String): String? {
+        if (DumbService.isDumb(project)) return null
         val lineNumber = lineStr.toIntOrNull() ?: return null
         val relPath = toProjectRelativeFeaturePath(featurePath, project)
         val projectDir = project.guessProjectDir() ?: return null

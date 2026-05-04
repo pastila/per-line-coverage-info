@@ -2,6 +2,7 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.VfsUtil
@@ -180,6 +181,12 @@ internal class TestTreeView(private val project: Project) {
         }
 
         val tests = allTests
+        if (DumbService.isDumb(project)) {
+            // Index is rebuilding — build the tree immediately with raw test
+            // names (scenario labels will resolve to "line N" without PSI).
+            populateTreeNodes(tests, emptyMap())
+            return
+        }
         ApplicationManager.getApplication().executeOnPooledThread {
             val scenarioLabels = resolveScenarioLabels(tests)
             ApplicationManager.getApplication().invokeLater {
