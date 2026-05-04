@@ -26,6 +26,9 @@ class CoverageLoadService(private val project: Project) {
 
     private val log = CoverageLog.get(CoverageLoadService::class.java)
 
+    @Volatile
+    private var loadingCommitHash: String? = null
+
     /**
      * Validates that the plugin is enabled and GitLab settings are configured.
      * Returns an error message if invalid, null if OK.
@@ -52,6 +55,12 @@ class CoverageLoadService(private val project: Project) {
      */
     fun loadOfflineFirst() {
         log.info("Coverage: offline-first load started")
+
+        if (loadingCommitHash != null) {
+            log.info("Coverage: load already in progress, skipping redundant loadOfflineFirst")
+            return
+        }
+
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
         val selectionService = CoverageUserSelectionService.getInstance(project)
@@ -168,6 +177,14 @@ class CoverageLoadService(private val project: Project) {
             return
         }
 
+        if (loadingCommitHash != null) {
+            log.info("Coverage: GitLab load already in progress (commit ${loadingCommitHash?.take(8)}), skipping")
+            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            return
+        }
+
+        loadingCommitHash = "" // sentinel — refined to actual commit after resolution
+
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Coverage from GitLab", true) {
             override fun run(indicator: ProgressIndicator) {
                 try {
@@ -186,6 +203,7 @@ class CoverageLoadService(private val project: Project) {
                     val resolver = CoverageResolver(gitLabClient, project)
                     val dual = resolver.resolveDual()
                     val resolved = dual.primary
+                    loadingCommitHash = resolved.commitHash
                     log.info("Coverage: resolved primary pipeline ${resolved.pipelineId} at commit ${resolved.commitHash.take(8)}")
                     if (dual.baseline != null) {
                         log.info("Coverage: resolved baseline pipeline ${dual.baseline.pipelineId} at commit ${dual.baseline.commitHash.take(8)}")
@@ -195,11 +213,21 @@ class CoverageLoadService(private val project: Project) {
 
                     // Check disk cache by commit hash
                     val cache = CoverageCacheService.getInstance(project)
+                    val dataService = CoverageDataService.getInstance(project)
+
+                    // If the same commit is already loaded, skip the reader swap
+                    // and only refresh the baseline if necessary.
+                    if (dataService.coverageCommitHash == resolved.commitHash && dataService.hasData()) {
+                        log.info("Coverage: commit ${resolved.commitHash.take(8)} already loaded, skipping reader swap")
+                        dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
+                        loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.7)
+                        return
+                    }
+
                     val reader = cache.get(resolved.commitHash)
                     if (reader != null) {
                         log.info("Coverage: loaded primary from COV4 cache (commit ${resolved.commitHash})")
                         cache.updateLastUsed(resolved.commitHash)
-                        val dataService = CoverageDataService.getInstance(project)
                         dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
                         dataService.setCov4Reader(reader)
 
@@ -270,6 +298,7 @@ class CoverageLoadService(private val project: Project) {
                     }
                     onError?.let { ApplicationManager.getApplication().invokeLater { it(friendly) } }
                 } finally {
+                    loadingCommitHash = null
                     onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
                 }
             }

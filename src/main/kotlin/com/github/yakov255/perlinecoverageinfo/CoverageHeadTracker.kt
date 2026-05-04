@@ -34,6 +34,14 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
         alarm.cancelAllRequests()
         alarm.addRequest({
             if (!project.isDisposed) {
+                val dataService = CoverageDataService.getInstance(project)
+                val revision = lastKnownRevision ?: return@addRequest
+
+                if (dataService.coverageCommitHash == revision && dataService.hasData() && !dataService.isStale) {
+                    log.info("Coverage: HEAD unchanged after debounce — commit $revision already loaded, skipping reload")
+                    return@addRequest
+                }
+
                 val loadService = CoverageLoadService.getInstance(project)
                 if (loadService.validateSettings() == null) {
                     loadService.loadOfflineFirst()
