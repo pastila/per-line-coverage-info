@@ -15,7 +15,7 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
         var bearerToken: String = "",
         var gitlabProjectId: Long = 335,
         var gitlabProjectName: String = "raketa/raketa",
-        var coverageBranch: String = "behat-run-necessary-tests",
+        var coverageBranch: String = "master",
         /** Whether the plugin is enabled for this IDE installation. */
         var enabled: Boolean = false,
     )
