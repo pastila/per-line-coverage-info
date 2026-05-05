@@ -69,17 +69,16 @@ object BehatTestRunner {
     }
 
     /**
-     * Bundles multiple feature files / scenarios into a single Behat launch using the
-     * custom `--paths` option. [pathsByFile] maps a feature file absolute path to the
-     * list of 1-based scenario line numbers to run; an empty list means "run the
-     * entire file".
+     * Bundles multiple feature files / scenarios into a single Behat launch as positional
+     * arguments. [pathsByFile] maps a feature file absolute path to the list of 1-based
+     * scenario line numbers to run; an empty list means "run the entire file".
      *
      * Paths are converted to be relative to the Behat working directory (derived from
      * the run configuration's config file location) so that Behat receives paths like
-     * `src/Features/foo.feature:10,20` rather than absolute filesystem paths.
+     * `src/Features/foo.feature:10` rather than absolute filesystem paths.
      *
      * Example produced CLI options (as a single string passed via test runner options):
-     *   --paths features/a.feature:10,20 --paths features/b.feature
+     *   features/a.feature:10 features/a.feature:20 features/b.feature
      */
     private fun createMultiPathsConfig(
         project: Project,
@@ -99,7 +98,7 @@ object BehatTestRunner {
 
         val runnerSettings = config.settings.runnerSettings
         // Force ConfigurationFile scope so the handler does not append any positional
-        // path argument — paths are driven exclusively through `--paths`. We
+        // path argument — paths are passed as separate positional arguments to behat. We
         // intentionally do NOT touch `isUseAlternativeConfigurationFile` or
         // `configurationFilePath`: those are inherited from the run configuration
         // template the user edits via "Edit Configuration Templates", so both the
@@ -108,9 +107,7 @@ object BehatTestRunner {
 
         val workingDir = resolveBehatWorkingDir(project, runnerSettings)
         val relativePaths = relativizePaths(pathsByFile, workingDir)
-        val pathsArgs = relativePaths.entries.joinToString(" ") { (file, lines) ->
-            buildPathsArg(file, lines)
-        }
+        val pathsArgs = buildPositionalPathArgsInternal(relativePaths)
         val existing = runnerSettings.testRunnerOptions.orEmpty()
         runnerSettings.testRunnerOptions = if (existing.isBlank()) pathsArgs else "$existing $pathsArgs"
         return settings
@@ -261,13 +258,6 @@ object BehatTestRunner {
         }
     }
 
-    private fun buildPathsArg(file: String, lines: List<Int>): String {
-        val suffix = if (lines.isEmpty()) "" else ":${lines.joinToString(",")}"
-        // Quote the whole value when the path contains whitespace so the
-        // ParametersList tokenizer keeps it as a single argument.
-        return if (file.any { it.isWhitespace() }) "--paths \"$file$suffix\"" else "--paths $file$suffix"
-    }
-
     /**
      * Runs multiple feature files / scenarios in a single Behat launch.
      * See [createMultiPathsConfig] for the [pathsByFile] format.
@@ -370,4 +360,28 @@ object BehatTestRunner {
             false
         }
     }
+}
+
+internal fun buildPositionalPathArgsForTest(relativePaths: Map<String, List<Int>>): String {
+    return buildPositionalPathArgsInternal(relativePaths)
+}
+
+private fun buildPositionalPathArgsInternal(relativePaths: Map<String, List<Int>>): String {
+    val args = mutableListOf<String>()
+    relativePaths.forEach { (file, lines) ->
+        if (lines.isEmpty()) {
+            // If no specific lines, just add the file
+            args += quoteIfNeeded(file)
+        } else {
+            // For each line, create a separate argument
+            lines.forEach { line ->
+                args += quoteIfNeeded("$file:$line")
+            }
+        }
+    }
+    return args.joinToString(" ")
+}
+
+private fun quoteIfNeeded(path: String): String {
+    return if (path.any { it.isWhitespace() }) "\"$path\"" else path
 }

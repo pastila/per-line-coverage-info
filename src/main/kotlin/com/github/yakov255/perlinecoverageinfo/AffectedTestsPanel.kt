@@ -82,7 +82,7 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         }
 
         val runAllAction = object : AnAction(
-            "Run All", "Run all Behat tests in a single launch via --paths", AllIcons.Actions.RunAll
+            "Run All", "Run all Behat tests in a single launch", AllIcons.Actions.RunAll
         ) {
             override fun actionPerformed(e: AnActionEvent) = testTree.runAllBehatBundled(debug = false)
             override fun update(e: AnActionEvent) {
@@ -95,7 +95,7 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         val runAllDebugAction = object : AnAction(
             "Run All With Debug",
-            "Debug all Behat tests in a single launch via --paths",
+            "Debug all Behat tests in a single launch",
             AllIcons.Actions.StartDebugger
         ) {
             override fun actionPerformed(e: AnActionEvent) = testTree.runAllBehatBundled(debug = true)
