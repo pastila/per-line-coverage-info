@@ -32,6 +32,8 @@ import javax.swing.tree.DefaultTreeModel
 internal class AffectedFilesPane(
     private val project: Project,
     private val onCheckedFilesChanged: () -> Unit,
+    private val onRefresh: () -> Unit,
+    private val isRefreshEnabled: () -> Boolean,
 ) {
 
     private val filesRoot = CheckedTreeNode(null)
@@ -89,6 +91,16 @@ internal class AffectedFilesPane(
             }
         })
 
+        val refreshAction = object : AnAction(
+            "Refresh", "Re-compute affected tests", AllIcons.Actions.Refresh
+        ) {
+            override fun actionPerformed(e: AnActionEvent) = onRefresh()
+            override fun update(e: AnActionEvent) {
+                e.presentation.isEnabled = isRefreshEnabled()
+            }
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        }
+
         val treeToggleAction = ToggleAffectedFilesViewAction(
             isTreeView = { isTreeView },
             toggle = { state ->
@@ -142,6 +154,8 @@ internal class AffectedFilesPane(
         val filesToolbar = ActionManager.getInstance().createActionToolbar(
             "AffectedFilesToolbar",
             DefaultActionGroup(
+                refreshAction,
+                Separator.getInstance(),
                 treeToggleAction, expandAllAction, collapseAllAction,
                 Separator.getInstance(),
                 checkAllAction, uncheckAllAction,

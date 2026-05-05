@@ -36,14 +36,6 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
     private var currentFilter: TestFilter = TestFilter.BOTH
 
     init {
-        val toggleViewAction = object : ToggleAction(
-            "Tree View", "Toggle between tree and flat test list", AllIcons.Actions.GroupByPackage
-        ) {
-            override fun isSelected(e: AnActionEvent): Boolean = testTree.isTreeView
-            override fun setSelected(e: AnActionEvent, state: Boolean) { testTree.isTreeView = state }
-            override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
-        }
-
         val runAllAction = object : AnAction(
             "Run All", "Run all Behat tests in a single launch", AllIcons.Actions.RunAll
         ) {
@@ -77,8 +69,6 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
         val toolbar = ActionManager.getInstance().createActionToolbar(
             "CoveringLinePanelToolbar",
             DefaultActionGroup(
-                toggleViewAction,
-                Separator.getInstance(),
                 runAllAction, runAllDebugAction,
                 Separator.getInstance(),
                 filterBoth, filterMaster, filterFeature,
