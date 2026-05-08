@@ -2,6 +2,7 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
@@ -55,7 +56,7 @@ internal class TestTreeView(private val project: Project) {
         private set
 
     private val rootNode = CheckedTreeNode("Tests")
-    private val treeModel = DefaultTreeModel(rootNode)
+    private val treeModel: DefaultTreeModel get() = tree.model as DefaultTreeModel
 
     @Suppress("DEPRECATION")
     val tree: CheckboxTree = CheckboxTree(object : CheckboxTree.CheckboxTreeCellRenderer() {
@@ -95,6 +96,7 @@ internal class TestTreeView(private val project: Project) {
     private val scrollPane = JBScrollPane(tree)
     val component: JComponent
 
+    private val toolbar: ActionToolbar
     private val statusLabel = JBLabel()
     private var allTests: List<String> = emptyList()
     private var emptyMessage: String = "No tests"
@@ -102,12 +104,6 @@ internal class TestTreeView(private val project: Project) {
     init {
         tree.isRootVisible = false
         tree.showsRootHandles = true
-
-        tree.addCheckboxTreeListener(object : CheckboxTreeListener {
-            override fun nodeStateChanged(node: CheckedTreeNode) {
-                // Let CheckboxTree handle parent/child cascade; no extra logic needed.
-            }
-        })
 
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
@@ -190,7 +186,7 @@ internal class TestTreeView(private val project: Project) {
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = !runAllInProgress &&
                     BehatTestRunner.isAvailable() &&
-                    hasAnyBehatTest()
+                    checkedTestNames().any { isBehatTest(it) }
             }
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
         }
@@ -204,12 +200,12 @@ internal class TestTreeView(private val project: Project) {
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = !runAllInProgress &&
                     BehatTestRunner.isAvailable() &&
-                    hasAnyBehatTest()
+                    checkedTestNames().any { isBehatTest(it) }
             }
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
         }
 
-        val toolbar = ActionManager.getInstance().createActionToolbar(
+        toolbar = ActionManager.getInstance().createActionToolbar(
             "TestTreeViewToolbar",
             DefaultActionGroup(
                 toggleViewAction, expandAllAction, collapseAllAction,
@@ -232,6 +228,13 @@ internal class TestTreeView(private val project: Project) {
         panel.add(bar, BorderLayout.NORTH)
         panel.add(scrollPane, BorderLayout.CENTER)
         component = panel
+
+        tree.addCheckboxTreeListener(object : CheckboxTreeListener {
+            override fun nodeStateChanged(node: CheckedTreeNode) {
+                refreshCheckedCount()
+                toolbar.updateActionsImmediately()
+            }
+        })
     }
 
     // ── Public API ──────────────────────────────────────────────────
@@ -270,6 +273,11 @@ internal class TestTreeView(private val project: Project) {
     }
 
     fun hasAnyBehatTest(): Boolean = allTests.any { isBehatTest(it) }
+
+    private fun refreshCheckedCount() {
+        val count = checkedTestNames().size
+        statusLabel.text = if (count == 0 && allTests.isEmpty()) "" else "selected $count test${if (count != 1) "s" else ""}"
+    }
 
     /** Resolves all test-leaf names under the user's tree selection. */
     fun collectSelectedTestNames(): Set<String> {
@@ -387,6 +395,7 @@ internal class TestTreeView(private val project: Project) {
 
         treeModel.reload()
         for (i in 0 until tree.rowCount) tree.expandRow(i)
+        refreshCheckedCount()
     }
 
     private fun buildBehatHierarchy(
@@ -516,6 +525,11 @@ internal class TestTreeView(private val project: Project) {
                     collectTestNames(node.getChildAt(i) as CheckedTreeNode, into)
                 }
             }
+            else -> {
+                for (i in 0 until node.childCount) {
+                    collectTestNames(node.getChildAt(i) as CheckedTreeNode, into)
+                }
+            }
         }
     }
 
@@ -528,6 +542,11 @@ internal class TestTreeView(private val project: Project) {
                 if (node.isChecked) into += (node.userObject as TestNodeData.PhpUnitMethod).fullTestName
             }
             is TestNodeData.BehatGroup, is TestNodeData.PhpUnitGroup, is TestNodeData.Dir -> {
+                for (i in 0 until node.childCount) {
+                    collectCheckedTestNames(node.getChildAt(i) as CheckedTreeNode, into)
+                }
+            }
+            else -> {
                 for (i in 0 until node.childCount) {
                     collectCheckedTestNames(node.getChildAt(i) as CheckedTreeNode, into)
                 }

@@ -81,13 +81,6 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         val model = AffectedTestsModel(result.perFile.mapValues { (_, v) -> v })
         affectedModel = model
 
-        val modeStr = if (result.mode == ChangedLinesAnalyzer.DiffMode.COMMITTED) "HEAD" else "Working Tree"
-        val parts = mutableListOf("${model.displayedTests.size} tests, ${model.allFiles.size} files ($modeStr)")
-        if (result.newFiles.isNotEmpty()) parts += "${result.newFiles.size} new"
-        if (result.deletedFiles.isNotEmpty()) parts += "${result.deletedFiles.size} deleted"
-        if (result.filesWithoutCoverage.isNotEmpty()) parts += "${result.filesWithoutCoverage.size} no coverage"
-        testTree.setStatusText(parts.joinToString(" · "))
-
         affectedFilesPane.populate(model)
         updateTestsFromModel()
 
@@ -97,8 +90,6 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     private fun updateTestsFromModel() {
         val model = affectedModel ?: return
         val displayed = model.displayedTests
-        val modeStr = if (lastDiffMode == ChangedLinesAnalyzer.DiffMode.COMMITTED) "HEAD" else "Working Tree"
-        testTree.setStatusText("${displayed.size} tests, ${model.allFiles.size} files ($modeStr)")
         testTree.setTests(displayed.toList())
     }
 
