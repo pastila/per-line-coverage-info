@@ -1,6 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.icons.AllIcons
+import com.jetbrains.php.PhpIcons
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -63,7 +64,7 @@ internal class AffectedFilesPane(
                     r.append(data.displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                 }
                 is FileNodeData.FileEntry -> {
-                    r.icon = AllIcons.FileTypes.Any_type
+                    r.icon = if (data.path.endsWith(".php")) PhpIcons.PHP_FILE else AllIcons.FileTypes.Any_type
                     val tests = model.perFile[data.path] ?: emptySet()
                     r.append("${tests.size} ", SimpleTextAttributes.REGULAR_ATTRIBUTES)
                     val delta = model.deltaForFiles(setOf(data.path))
