@@ -351,7 +351,6 @@ class CoverageLoadService(private val project: Project) {
 
         val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
         val totalJobs = artifactJobs.size
-        var covtCount = 0
 
         for ((index, job) in artifactJobs.withIndex()) {
             indicator.text = "Downloading artifact from job '${job.name}'... (${index + 1}/$totalJobs)"
@@ -365,15 +364,14 @@ class CoverageLoadService(private val project: Project) {
                 )
             }
 
-            val zipBytes = gitLabClient.downloadJobArtifacts(settings.gitlabProjectId, job.id)
-            log.info("Coverage: downloaded ${zipBytes.size} bytes from job ${job.name} (id=${job.id})")
+            val covtBytes = gitLabClient.downloadSingleArtifactFile(
+                settings.gitlabProjectId,
+                job.id,
+                "coverage-reports/coverage.covt.gz",
+            )
+            log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
 
-            val parsed = BinaryCoverageParser.parseZipArtifact(zipBytes)
-            if (parsed == null) {
-                log.info("Coverage: no .covt file in artifact from job ${job.name}, skipping")
-                continue
-            }
-            covtCount++
+            val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
             log.info("Coverage: parsed ${parsed.size} files from job ${job.name}")
 
             for ((filePath, lineMap) in parsed) {
@@ -389,23 +387,6 @@ class CoverageLoadService(private val project: Project) {
             }
         }
 
-        if (covtCount == 0) {
-            throw CoverageApiException(
-                buildString {
-                    appendLine("No coverage data (.covt) found in any artifact of pipeline #${resolved.pipelineId}.")
-                    appendLine()
-                    appendLine("Downloaded artifacts from ${artifactJobs.size} job(s): ${artifactJobs.joinToString(", ") { it.name }}")
-                    appendLine()
-                    append("Make sure the CI jobs produce .covt or .covt.gz files in their artifacts.")
-                },
-                details = mapOf(
-                    "pipelineId" to resolved.pipelineId.toString(),
-                    "artifactJobs" to artifactJobs.size.toString(),
-                ),
-                kind = CoverageErrorKind.NO_DATA,
-            )
-        }
-
         val finalCoverage: Map<String, Map<Int, List<String>>> = mergedCoverage.mapValues { (_, lineMap) ->
             lineMap.mapValues { (_, tests) -> tests.toList() }
         }
@@ -413,7 +394,7 @@ class CoverageLoadService(private val project: Project) {
         return CoverageLoadResult(
             coverage = finalCoverage,
             resolved = resolved,
-            artifactCount = covtCount,
+            artifactCount = totalJobs,
         )
     }
 

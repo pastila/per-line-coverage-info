@@ -3,7 +3,6 @@ package com.github.yakov255.perlinecoverageinfo
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.GZIPInputStream
-import java.util.zip.ZipInputStream
 
 /**
  * Parses the COVT binary coverage format and extracts `.covt` files from ZIP archives.
@@ -157,59 +156,17 @@ object BinaryCoverageParser {
     }
 
     /**
-     * Extracts the first `.covt` or `.covt.gz` file from a ZIP archive.
-     * If a `.covt.gz` entry is found, it is decompressed via GZIP before returning.
-     *
-     * @return the raw bytes of the `.covt` data, or `null` if none found.
+     * Parses raw bytes that may be gzipped (`.covt.gz`) or plain (`.covt`).
+     * Auto-detects GZIP via the magic bytes `0x1F 0x8B`.
      */
-    fun extractCovtFromZip(zipBytes: ByteArray): ByteArray? {
-        try {
-            ZipInputStream(zipBytes.inputStream()).use { zis ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    if (!entry.isDirectory) {
-                        val name = entry.name
-                        if (name.endsWith(".covt.gz")) {
-                            log.info("COVT: found gzipped ${name} in ZIP archive, decompressing")
-                            val gzippedBytes = zis.readBytes()
-                            return GZIPInputStream(gzippedBytes.inputStream()).use { it.readBytes() }
-                        }
-                        if (name.endsWith(".covt")) {
-                            log.info("COVT: found ${name} in ZIP archive")
-                            return zis.readBytes()
-                        }
-                    }
-                    entry = zis.nextEntry
-                }
-            }
-        } catch (e: Exception) {
-            log.warn("Failed to read ZIP archive for .covt extraction", e)
-            return null
+    fun parsePossiblyGzippedCovtBytes(bytes: ByteArray): Map<String, Map<Int, List<String>>> {
+        val data = if (bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()) {
+            log.info("COVT: input is gzipped, decompressing")
+            GZIPInputStream(bytes.inputStream()).use { it.readBytes() }
+        } else {
+            bytes
         }
-        return null
-    }
-
-    /**
-     * Convenience method: extracts a `.covt` or `.covt.gz` file from a ZIP archive and parses it.
-     *
-     * @return parsed coverage data, or `null` if the ZIP contains no `.covt`/`.covt.gz` entry.
-     * @throws CoverageApiException with kind [CoverageErrorKind.ARTIFACT_PARSE] if
-     *         a `.covt` file is found but parsing fails.
-     */
-    fun parseZipArtifact(zipBytes: ByteArray): Map<String, Map<Int, List<String>>>? {
-        val covtBytes = extractCovtFromZip(zipBytes) ?: return null
-        try {
-            return parseCovtBytes(covtBytes)
-        } catch (e: CoverageApiException) {
-            throw e
-        } catch (e: Exception) {
-            throw CoverageApiException(
-                "Failed to parse .covt file from ZIP artifact",
-                cause = e,
-                kind = CoverageErrorKind.ARTIFACT_PARSE,
-                details = mapOf("error" to e.message),
-            )
-        }
+        return parseCovtBytes(data)
     }
 
     private fun readString(buf: ByteBuffer, context: String): String {

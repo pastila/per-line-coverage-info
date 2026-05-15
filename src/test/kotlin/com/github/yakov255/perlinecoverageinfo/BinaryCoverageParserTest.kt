@@ -7,8 +7,6 @@ import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.zip.GZIPOutputStream
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
 
 class BinaryCoverageParserTest {
 
@@ -71,69 +69,44 @@ class BinaryCoverageParserTest {
     }
 
     @Test
-    fun testExtractCovtFromZipWithNoCovt() {
-        val zipBytes = createZip("data.txt", "hello".toByteArray())
-        val result = BinaryCoverageParser.extractCovtFromZip(zipBytes)
-        assertNull("Should return null when ZIP has no .covt file", result)
+    fun testParsePossiblyGzippedCovtBytesWithRawInput() {
+        val covtBytes = File("php-sample-code/calc/coverage.covt").readBytes()
+        val result = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
+
+        assertEquals("Expected exactly 1 file entry", 1, result.size)
+        assertTrue(result.containsKey("calc/src/BasicCalculator.php"))
+        val lines = result["calc/src/BasicCalculator.php"]!!
+        assertTrue("File should have at least one line of coverage data", lines.isNotEmpty())
+
+        var uncovered = false
+        var covered = false
+        for ((_, testNames) in lines) {
+            if (testNames.isEmpty()) uncovered = true else covered = true
+        }
+        assertTrue("Should have at least one uncovered line", uncovered)
+        assertTrue("Should have at least one covered line", covered)
     }
 
     @Test
-    fun testExtractCovtFromZipWithCovtFile() {
-        val covtContent = File("php-sample-code/calc/coverage.covt").readBytes()
-        val zipBytes = createZip("coverage.covt", covtContent)
-
-        val extracted = BinaryCoverageParser.extractCovtFromZip(zipBytes)
-        assertNotNull("Should extract .covt file from ZIP", extracted)
-        assertArrayEquals(covtContent, extracted)
-    }
-
-    @Test
-    fun testParseZipArtifactReturnsNullWhenNoCovtInZip() {
-        val zipBytes = createZip("readme.txt", "no coverage here".toByteArray())
-        val result = BinaryCoverageParser.parseZipArtifact(zipBytes)
-        assertNull("Should return null when ZIP has no .covt file", result)
-    }
-
-    @Test
-    fun testExtractCovtGzFromZip() {
-        val covtContent = File("php-sample-code/calc/coverage.covt").readBytes()
-
-        // Gzip the .covt content
+    fun testParsePossiblyGzippedCovtBytesWithGzipInput() {
+        val covtBytes = File("php-sample-code/calc/coverage.covt").readBytes()
         val gzipBaos = ByteArrayOutputStream()
-        GZIPOutputStream(gzipBaos).use { it.write(covtContent) }
+        GZIPOutputStream(gzipBaos).use { it.write(covtBytes) }
         val gzippedBytes = gzipBaos.toByteArray()
 
-        // Create ZIP with .covt.gz entry
-        val zipBytes = createZip("coverage.covt.gz", gzippedBytes)
+        val result = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(gzippedBytes)
 
-        val extracted = BinaryCoverageParser.extractCovtFromZip(zipBytes)
-        assertNotNull("Should extract and decompress .covt.gz file from ZIP", extracted)
-        assertArrayEquals("Decompressed content should match original .covt", covtContent, extracted)
-    }
-
-    @Test
-    fun testParseZipArtifactWithGzippedCovt() {
-        val covtContent = File("php-sample-code/calc/coverage.covt").readBytes()
-
-        val gzipBaos = ByteArrayOutputStream()
-        GZIPOutputStream(gzipBaos).use { it.write(covtContent) }
-        val gzippedBytes = gzipBaos.toByteArray()
-
-        val zipBytes = createZip("coverage.covt.gz", gzippedBytes)
-
-        val result = BinaryCoverageParser.parseZipArtifact(zipBytes)
-        assertNotNull("Should parse gzipped .covt from ZIP", result)
-        assertEquals("Expected exactly 1 file entry", 1, result!!.size)
+        assertEquals("Expected exactly 1 file entry", 1, result.size)
         assertTrue(result.containsKey("calc/src/BasicCalculator.php"))
     }
 
-    private fun createZip(entryName: String, content: ByteArray): ByteArray {
-        val baos = ByteArrayOutputStream()
-        ZipOutputStream(baos).use { zos ->
-            zos.putNextEntry(ZipEntry(entryName))
-            zos.write(content)
-            zos.closeEntry()
+    @Test
+    fun testParsePossiblyGzippedCovtBytesWithEmptyInput() {
+        try {
+            BinaryCoverageParser.parsePossiblyGzippedCovtBytes(ByteArray(0))
+            fail("Expected CoverageApiException for empty data")
+        } catch (e: CoverageApiException) {
+            assertEquals(CoverageErrorKind.ARTIFACT_PARSE, e.kind)
         }
-        return baos.toByteArray()
     }
 }

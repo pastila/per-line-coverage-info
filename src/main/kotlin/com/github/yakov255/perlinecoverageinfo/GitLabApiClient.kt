@@ -139,8 +139,8 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
     ): List<GitLabJob> =
         makeRequest("/api/v4/projects/$projectId/pipelines/$pipelineId/jobs?per_page=$perPage")
 
-    fun downloadJobArtifacts(projectId: Long, jobId: Long): ByteArray =
-        makeRawRequest("/api/v4/projects/$projectId/jobs/$jobId/artifacts")
+    fun downloadSingleArtifactFile(projectId: Long, jobId: Long, artifactPath: String): ByteArray =
+        makeRawRequest("/api/v4/projects/$projectId/jobs/$jobId/artifacts/${encode(artifactPath)}")
 
     fun getPipelineCommits(projectId: Long, ref: String): List<PipelineCommit> =
         listPipelines(projectId, ref).map { PipelineCommit(commitHash = it.sha, pipelineId = it.id) }
