@@ -5,3 +5,5 @@
 .kotlin
 .qodana
 build
+.gitlab-coverage.conf
+storage/
