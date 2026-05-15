@@ -153,11 +153,16 @@ class CoverageResolver(
      *   2. GitLab API merge_base — works with shallow clones and unfetched branches
      *   3. Fallback to latest pipeline — if merge-base can't be determined at all
      *
-     * Pipeline matching supports two topologies:
-     *   1. Coverage on same branch: merge-base or its ancestor has a pipeline
-     *   2. Coverage on dedicated branch: walk commits in mergeBase..coverageBranch
+     * Pipeline matching (stays on the history side of merge-base):
+     *   1. Exact merge-base match — best case
+     *   2. Walk ancestors of merge-base — find the nearest ancestor that has a pipeline
      *
-     * If no pipeline commit matches, falls back to the latest pipeline.
+     * For each candidate pipeline, verifies it actually contains behat jobs with
+     * downloadable artifacts. If the best-match pipeline has no coverage artifacts,
+     * the next candidate is tried until one with artifacts is found or all are exhausted.
+     *
+     * If no pipeline from merge-base/ancestors has artifacts, falls back to the most
+     * recent pipeline that has coverage artifacts on the coverage branch.
      */
     private fun findCoveragePipeline(gitRoot: File): Pair<String, Long> {
         val coverageBranch = getCoverageBranch()
@@ -165,10 +170,9 @@ class CoverageResolver(
         log.info("Coverage: coverage branch = $coverageBranch, gitRoot = $gitRoot")
 
         val pipelineCommits = gitLabClient.getPipelineCommits(projectId, coverageBranch)
-        val pipelineCommitSet = pipelineCommits.associate { it.commitHash to it.pipelineId }
-        log.info("Coverage: GitLab returned ${pipelineCommitSet.size} pipeline commits for branch $coverageBranch")
+        log.info("Coverage: GitLab returned ${pipelineCommits.size} pipeline commits for branch $coverageBranch")
 
-        if (pipelineCommitSet.isEmpty()) {
+        if (pipelineCommits.isEmpty()) {
             throw CoverageApiException(
                 "No successful pipelines found on branch '$coverageBranch'.\n\n" +
                     "Check that the branch exists and has CI pipeline runs.",
@@ -177,46 +181,90 @@ class CoverageResolver(
             )
         }
 
-        // --- Three-tier merge-base resolution ---
+        val pipelineCommitSet = pipelineCommits.associate { it.commitHash to it.pipelineId }
+
+        // Build prioritized candidate list:
+        //   1. merge-base exact match
+        //   2. ancestors of merge-base (newest first)
+        //   3. remaining pipelines from pipelineCommits (by updated_at desc)
+        val candidates = mutableListOf<Pair<String, Long>>()
+        val mergeBaseCandidates = mutableListOf<Pair<String, Long>>()
+
         val mergeBase = resolveThreeTierMergeBase(gitRoot, coverageBranch, projectId)
 
         if (mergeBase != null) {
-            // Fast path: merge-base itself has a pipeline
             if (mergeBase in pipelineCommitSet) {
-                log.info("Coverage: resolved commit = $mergeBase (exact merge-base, pipeline ${pipelineCommitSet[mergeBase]})")
-                return Pair(mergeBase, pipelineCommitSet[mergeBase]!!)
+                val pid = pipelineCommitSet[mergeBase]!!
+                mergeBaseCandidates.add(Pair(mergeBase, pid))
             }
 
-            // Topology 2: pipeline commits are on the coverage branch, not on master.
-            val branchCommits = getCommitsInRange(gitRoot, mergeBase, "origin/$coverageBranch")
-            val matchOnBranch = branchCommits.firstOrNull { it in pipelineCommitSet }
-            if (matchOnBranch != null) {
-                log.info("Coverage: resolved commit = $matchOnBranch (coverage branch after merge-base, pipeline ${pipelineCommitSet[matchOnBranch]})")
-                return Pair(matchOnBranch, pipelineCommitSet[matchOnBranch]!!)
-            }
-
-            // Topology 1 fallback: walk ancestors of merge-base
             val ancestors = getLocalAncestorCommits(gitRoot, mergeBase)
-            val matchAncestor = ancestors.firstOrNull { it in pipelineCommitSet }
-            if (matchAncestor != null) {
-                log.info("Coverage: resolved commit = $matchAncestor (ancestor of merge-base, pipeline ${pipelineCommitSet[matchAncestor]})")
-                return Pair(matchAncestor, pipelineCommitSet[matchAncestor]!!)
+            for (ancestor in ancestors) {
+                if (ancestor in pipelineCommitSet && ancestor != mergeBase) {
+                    val pid = pipelineCommitSet[ancestor]!!
+                    mergeBaseCandidates.add(Pair(ancestor, pid))
+                }
             }
         }
 
-        // --- Fallback: use latest pipeline ---
-        val latest = pipelineCommits.first()
-        val reason = if (mergeBase == null) {
-            "Could not determine merge-base with '$coverageBranch'"
-        } else {
-            "No pipeline commit matched merge-base or its neighbors"
+        candidates.addAll(mergeBaseCandidates)
+
+        // Append remaining pipelines by recency (dedup by pipeline ID)
+        for ((commitHash, pipelineId) in pipelineCommits) {
+            if (candidates.none { it.second == pipelineId }) {
+                candidates.add(Pair(commitHash, pipelineId))
+            }
         }
-        log.warn("Coverage: falling back to latest pipeline ${latest.pipelineId} (commit ${latest.commitHash}). Reason: $reason")
-        fallbackReason = reason
-        return Pair(latest.commitHash, latest.pipelineId)
+
+        val mergeBaseCandidateCount = mergeBaseCandidates.size
+
+        // Walk candidates, pick first that has coverage artifacts
+        for ((index, candidate) in candidates.withIndex()) {
+            val commitHash = candidate.first
+            val pipelineId = candidate.second
+
+            if (checkPipelineHasCoverage(projectId, pipelineId)) {
+                if (index >= mergeBaseCandidateCount) {
+                    fallbackReason = when {
+                        mergeBase == null ->
+                            "Could not determine merge-base with '$coverageBranch'"
+                        mergeBaseCandidateCount == 0 ->
+                            "No pipeline commit matched merge-base or its ancestors"
+                        else ->
+                            "Merge-base/ancestor pipelines had no coverage artifacts"
+                    }
+                    log.warn("Coverage: falling back to pipeline $pipelineId (commit ${commitHash.take(8)}). Reason: $fallbackReason")
+                }
+                log.info("Coverage: resolved commit = $commitHash (pipeline $pipelineId)")
+                return Pair(commitHash, pipelineId)
+            }
+            log.info("Coverage: pipeline $pipelineId (commit ${commitHash.take(8)}) has no coverage artifacts, trying next")
+        }
+
+        throw CoverageApiException(
+            "No pipelines with coverage artifacts found on branch '$coverageBranch'.\n\n" +
+                "Checked ${candidates.size} pipeline(s). " +
+                "None have successful jobs with 'behat' in the name and downloadable artifacts.",
+            details = mapOf("coverageBranch" to coverageBranch, "checkedPipelines" to candidates.size.toString()),
+            kind = CoverageErrorKind.NO_DATA,
+        )
     }
 
-    /** Set by findCoveragePipeline when falling back to latest pipeline. */
+    private fun checkPipelineHasCoverage(projectId: Long, pipelineId: Long): Boolean {
+        return try {
+            val jobs = gitLabClient.listPipelineJobs(projectId, pipelineId)
+            jobs.any { job ->
+                job.status == "success"
+                    && job.artifactsFile != null
+                    && job.name.contains("behat", ignoreCase = true)
+            }
+        } catch (e: Exception) {
+            log.warn("Coverage: failed to list jobs for pipeline $pipelineId: ${e.message}")
+            false
+        }
+    }
+
+    /** Set by findCoveragePipeline when falling back to a non-merge-base / non-ancestor pipeline. */
     var fallbackReason: String? = null
         private set
 
@@ -282,13 +330,6 @@ class CoverageResolver(
         return output.lines().filter { it.isNotBlank() }
     }
 
-    /**
-     * Returns commits reachable from [to] but not from [from], most-recent first.
-     */
-    private fun getCommitsInRange(gitRoot: File, from: String, to: String): List<String> {
-        val output = runGitCommand(gitRoot, "log", "--format=%H", "$from..$to") ?: return emptyList()
-        return output.lines().filter { it.isNotBlank() }
-    }
 
     companion object {
         fun runGitCommand(gitRoot: File, vararg args: String): String? {
