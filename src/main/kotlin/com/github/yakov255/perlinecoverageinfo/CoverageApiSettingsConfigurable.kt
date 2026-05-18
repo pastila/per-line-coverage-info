@@ -2,7 +2,9 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.options.Configurable
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.HyperlinkLabel
 import com.intellij.ui.components.JBList
@@ -186,6 +188,22 @@ class CoverageApiSettingsConfigurable : Configurable {
         settings.gitlabProjectId = selectedProjectId
         settings.gitlabProjectName = selectedProjectName
         settings.coverageBranch = coverageBranchField.text
+
+        triggerCoverageLoad()
+    }
+
+    private fun triggerCoverageLoad() {
+        val settings = CoverageApiSettings.getInstance()
+        if (!settings.enabled) return
+        if (settings.gitlabDomain.isBlank() || settings.bearerToken.isBlank() || settings.gitlabProjectId <= 0) return
+
+        invokeLater {
+            for (project in ProjectManager.getInstance().openProjects) {
+                if (!project.isDisposed) {
+                    CoverageLoadService.getInstance(project).loadOfflineFirst()
+                }
+            }
+        }
     }
 
     override fun reset() {

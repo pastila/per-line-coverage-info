@@ -24,7 +24,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | File | Purpose |
 |------|---------|
 | `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel |
-| `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage** |
+| `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; triggers `loadOfflineFirst()` for all open projects on Apply/OK if plugin enabled and configured |
 | `CoverageMcpSettings.kt` | Project-level MCP settings: port (17178), enabled flag |
 | `CoverageMcpSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage → MCP Server** |
 
@@ -139,7 +139,7 @@ When the current branch has its own pipeline **and** the coverage branch (master
 
 ## Flow
 
-On startup or HEAD change: `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
+On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
 
 ## MCP
 
