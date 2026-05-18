@@ -194,12 +194,14 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
         }
 
         val virtualFile = LocalFileSystem.getInstance().findFileByPath(absolutePath) ?: return emptyList()
-        val currentContent = FileDocumentManager.getInstance().getDocument(virtualFile)?.text
-            ?: try {
-                String(virtualFile.contentsToByteArray())
-            } catch (_: Exception) {
-                null
-            } ?: return emptyList()
+        val currentContent = ApplicationManager.getApplication().runReadAction<String?> {
+            FileDocumentManager.getInstance().getDocument(virtualFile)?.text
+                ?: try {
+                    String(virtualFile.contentsToByteArray())
+                } catch (_: Exception) {
+                    null
+                }
+        } ?: return emptyList()
 
         val lineMappingService = LineMappingService.getInstance(project)
         val mappedPrimary = lineMappingService.getMappedCoverage(virtualFile.path, currentContent) ?: return emptyList()
@@ -316,12 +318,14 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
         val vf = VfsUtil.findRelativeFile(projectRelativePath, projectDir) ?: return
 
         // Map the first feature-only line from the coverage commit to the current document
-        val currentContent = FileDocumentManager.getInstance().getDocument(vf)?.text
-            ?: try {
-                String(vf.contentsToByteArray())
-            } catch (_: Exception) {
-                null
-            }
+        val currentContent = ApplicationManager.getApplication().runReadAction<String?> {
+            FileDocumentManager.getInstance().getDocument(vf)?.text
+                ?: try {
+                    String(vf.contentsToByteArray())
+                } catch (_: Exception) {
+                    null
+                }
+        }
 
         val mappedLine = if (currentContent != null) {
             val lineMappingService = LineMappingService.getInstance(project)
