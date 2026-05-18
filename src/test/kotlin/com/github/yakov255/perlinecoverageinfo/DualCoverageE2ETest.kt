@@ -87,9 +87,9 @@ class DualCoverageE2ETest {
                 )
                 // Line 1: identical → COVERED (green).
                 assertEquals(CoverageCategory.COVERED, cat(1))
-                // Line 2: branch added a new test on top of the master one → FEATURE_ONLY (blue).
-                assertEquals(CoverageCategory.FEATURE_ONLY, cat(2))
-                // Line 3: branch covers a previously uncovered line → FEATURE_ONLY (blue).
+                // Line 2: branch added a new test but master also covers → COVERED (green).
+                assertEquals(CoverageCategory.COVERED, cat(2))
+                // Line 3: master has no coverage, branch covers → FEATURE_ONLY (blue).
                 assertEquals(CoverageCategory.FEATURE_ONLY, cat(3))
 
                 // --- Assert: filter math against real reader data (line 2 is the interesting one).

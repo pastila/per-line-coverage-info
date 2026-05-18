@@ -96,7 +96,7 @@ object CoverageHighlighter {
      * Pure helper exposed for tests: classify a line given its primary and baseline test lists.
      * - Empty primary → UNCOVERED (regardless of baseline; we trust primary as the source of truth
      *   for what tests currently exercise the line).
-     * - Has baseline + primary contains tests not present on baseline → FEATURE_ONLY.
+     * - Has baseline + master has no coverage on this line, but branch does → FEATURE_ONLY.
      * - Otherwise → COVERED.
      */
     @JvmStatic
@@ -107,8 +107,7 @@ object CoverageHighlighter {
     ): CoverageCategory {
         if (primary.isEmpty()) return CoverageCategory.UNCOVERED
         if (!hasBaseline) return CoverageCategory.COVERED
-        val featureOnly = CoverageDiff.featureOnly(primary, baseline)
-        return if (featureOnly.isNotEmpty()) CoverageCategory.FEATURE_ONLY else CoverageCategory.COVERED
+        return if (baseline.isEmpty()) CoverageCategory.FEATURE_ONLY else CoverageCategory.COVERED
     }
 
     private fun backgroundFor(category: CoverageCategory): Color = when (category) {

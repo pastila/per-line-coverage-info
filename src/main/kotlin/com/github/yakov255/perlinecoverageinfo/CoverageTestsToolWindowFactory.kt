@@ -25,6 +25,12 @@ class CoverageTestsToolWindowFactory : ToolWindowFactory, DumbAware {
         ).apply { isCloseable = false }
         contentManager.addContent(affectedContent)
 
+        val newCoveragePanel = NewCoveragePanel(project)
+        val newCoverageContent = contentFactory.createContent(
+            newCoveragePanel, NewCoveragePanel.TAB_TITLE, false
+        ).apply { isCloseable = false }
+        contentManager.addContent(newCoverageContent)
+
         val artifactsPanel = CoverageArtifactsPanel(project)
         val artifactsContent = contentFactory.createContent(artifactsPanel, "Artifacts", false).apply {
             isCloseable = false

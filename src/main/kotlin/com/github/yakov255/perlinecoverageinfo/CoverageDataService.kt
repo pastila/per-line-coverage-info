@@ -3,6 +3,7 @@ package com.github.yakov255.perlinecoverageinfo
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
+import com.intellij.util.messages.Topic
 
 /**
  * Project-level service holding per-line coverage data.
@@ -18,6 +19,11 @@ import com.intellij.openapi.project.Project
 class CoverageDataService(private val project: Project) {
 
     private val log = CoverageLog.get(CoverageDataService::class.java)
+
+    /** Monotonic counter incremented every time coverage data changes (set, baseline set, clear). */
+    @Volatile
+    var coverageGeneration: Long = 0
+        private set
 
     /** In-memory coverage: file-path → (line-number → list-of-test-names) */
     private val data = mutableMapOf<String, Map<Int, List<String>>>()
@@ -56,6 +62,7 @@ class CoverageDataService(private val project: Project) {
         closeCov4Reader()
         data.clear()
         data.putAll(allData)
+        notifyChanged()
     }
 
     /**
@@ -67,6 +74,7 @@ class CoverageDataService(private val project: Project) {
         data.clear()
         cov4Reader = reader
         log.info("Coverage: using COV4 reader with ${reader.allFilePaths.size} files")
+        notifyChanged()
     }
 
     /**
@@ -80,12 +88,14 @@ class CoverageDataService(private val project: Project) {
         if (reader != null) {
             log.info("Coverage: baseline reader set with ${reader.allFilePaths.size} files (commit ${commitHash?.take(8)})")
         }
+        notifyChanged()
     }
 
     fun clearBaseline() {
         closeBaselineReader()
         baselineReader = null
         baselineCommitHash = null
+        notifyChanged()
     }
 
     fun hasBaseline(): Boolean = baselineReader != null
@@ -121,6 +131,7 @@ class CoverageDataService(private val project: Project) {
         gitRoot = null
         isStale = false
         LineMappingService.getInstance(project).clear()
+        notifyChanged()
     }
 
     fun hasData(): Boolean = data.isNotEmpty() || cov4Reader != null
@@ -153,7 +164,20 @@ class CoverageDataService(private val project: Project) {
         baselineReader = null
     }
 
+    private fun notifyChanged() {
+        coverageGeneration++
+        project.messageBus.syncPublisher(COVERAGE_CHANGED_TOPIC).coverageChanged()
+    }
+
     companion object {
         fun getInstance(project: Project): CoverageDataService = project.service()
+
+        val COVERAGE_CHANGED_TOPIC = Topic(
+            "CoverageDataService.COVERAGE_CHANGED", CoverageChangeListener::class.java,
+        )
     }
+}
+
+fun interface CoverageChangeListener {
+    fun coverageChanged()
 }
