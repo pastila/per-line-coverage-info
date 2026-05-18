@@ -2,6 +2,7 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.icons.AllIcons
 import com.jetbrains.php.PhpIcons
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
@@ -10,12 +11,14 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.actionSystem.ToggleAction
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
+import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
@@ -24,6 +27,7 @@ import java.awt.BorderLayout
 import java.awt.Component
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.nio.file.Paths
 import javax.swing.JPanel
 import javax.swing.JTree
 import javax.swing.SwingConstants
@@ -32,13 +36,18 @@ import javax.swing.tree.DefaultTreeCellRenderer
 import javax.swing.tree.DefaultTreeModel
 import javax.swing.tree.TreeSelectionModel
 
-class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()) {
+class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
     private val log = CoverageLog.get(NewCoveragePanel::class.java)
 
     private var isTreeView = true
     private var currentModel: NewCoverageModel? = null
     private var lastCoverageGeneration: Long = -1
+
+    @Volatile
+    private var computing = false
+
+    private val messageBusConnection = project.messageBus.connect()
 
     private val filesRoot = DefaultMutableTreeNode("root")
     private val treeModel = DefaultTreeModel(filesRoot)
@@ -68,12 +77,16 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()) {
         statusPanel.add(statusLabel, BorderLayout.CENTER)
         add(statusPanel, BorderLayout.SOUTH)
 
-        project.messageBus.connect().subscribe(
+        messageBusConnection.subscribe(
             CoverageDataService.COVERAGE_CHANGED_TOPIC,
             CoverageChangeListener { refresh() },
         )
 
         refresh()
+    }
+
+    override fun dispose() {
+        messageBusConnection.dispose()
     }
 
     fun refresh() {
@@ -84,44 +97,124 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()) {
             return
         }
 
+        if (computing) return
         val currentGen = dataService.coverageGeneration
         if (currentGen == lastCoverageGeneration && currentModel != null) {
             return
         }
 
+        computing = true
         statusLabel.text = "Computing new coverage..."
 
         object : Task.Backgroundable(project, "Computing new coverage\u2026", true) {
             override fun run(indicator: ProgressIndicator) {
-                val model = computeNewCoverage()
+                val model = computeNewCoverage(indicator)
                 ApplicationManager.getApplication().invokeLater { populate(model) }
+            }
+
+            override fun onFinished() {
+                computing = false
             }
         }.queue()
     }
 
-    private fun computeNewCoverage(): NewCoverageModel {
+    private fun computeNewCoverage(indicator: ProgressIndicator): NewCoverageModel {
         val dataService = CoverageDataService.getInstance(project)
         if (!dataService.hasBaseline()) return NewCoverageModel.EMPTY
 
+        val gitRoot = dataService.gitRoot ?: return NewCoverageModel.EMPTY
+        val primaryCommit = dataService.coverageCommitHash ?: return NewCoverageModel.EMPTY
+        val baselineCommit = dataService.baselineCommitHash ?: return NewCoverageModel.EMPTY
+        val allFiles = dataService.allFiles()
+
+        // ── Phase 1: find files changed between baseline and primary commits ──
+        indicator.text = "Resolving changed files…"
+        val changedFiles = CoverageResolver.runGitCommand(
+            gitRoot, "diff", "--name-only", baselineCommit, primaryCommit,
+        )?.lines()?.map { it.replace('\\', '/') }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+
+        log.info("NewCoverage: scanning ${allFiles.size} files (${changedFiles.size} changed between commits)")
+
         val result = mutableListOf<NewCoverageFile>()
+        var processed = 0
+        val total = allFiles.size
 
-        for (filePath in dataService.allFiles()) {
-            val primary = dataService.getCoverage(filePath) ?: continue
-            val baseline = dataService.getBaselineCoverage(filePath) ?: continue
+        for (gitRelativePath in allFiles) {
+            if (indicator.isCanceled) break
 
-            val featureOnlyLines = primary.mapNotNull { (line, tests) ->
-                val baselineTests = baseline[line] ?: emptyList()
-                if (baselineTests.isEmpty() && tests.isNotEmpty()) NewCoverageLine(line, tests) else null
+            val primary = dataService.getCoverage(gitRelativePath) ?: continue
+            val baseline = dataService.getBaselineCoverage(gitRelativePath) ?: emptyMap()
+
+            val isChanged = gitRelativePath in changedFiles
+
+            val featureOnlyLines = if (isChanged) {
+                computeMappedFeatureOnly(gitRelativePath, gitRoot)
+            } else {
+                computeRawFeatureOnly(primary, baseline)
             }
 
             if (featureOnlyLines.isNotEmpty()) {
-                result.add(NewCoverageFile(filePath, featureOnlyLines))
+                result.add(NewCoverageFile(gitRelativePath, featureOnlyLines))
+            }
+
+            processed++
+            if (processed % 1000 == 0) {
+                indicator.text = "Scanning $processed / $total files"
+                indicator.fraction = processed.toDouble() / total
+                log.info("NewCoverage: processed $processed / $total")
             }
         }
 
         result.sortByDescending { it.count }
-        log.info("NewCoverage: computed ${result.size} files, ${result.sumOf { it.count }} feature-only lines across ${dataService.allFiles().size} total files")
+        val changedCount = result.count { it.gitRelativePath in changedFiles }
+        log.info("NewCoverage: computed ${result.size} files (${changedCount} from changed, ${result.size - changedCount} from unchanged), ${result.sumOf { it.count }} feature-only lines")
         return NewCoverageModel(result, result.size, result.sumOf { it.count })
+    }
+
+    /** Fast path: raw line-number comparison for unchanged files. */
+    private fun computeRawFeatureOnly(
+        primary: Map<Int, List<String>>,
+        baseline: Map<Int, List<String>>,
+    ): List<NewCoverageLine> {
+        return primary.mapNotNull { (line, tests) ->
+            val baselineTests = baseline[line] ?: emptyList()
+            if (baselineTests.isEmpty() && tests.isNotEmpty()) NewCoverageLine(line, tests) else null
+        }
+    }
+
+    /** Slow path: line-mapped comparison for files changed between commits. */
+    private fun computeMappedFeatureOnly(
+        gitRelativePath: String,
+        gitRoot: java.io.File,
+    ): List<NewCoverageLine> {
+        val absolutePath = try {
+            Paths.get(gitRoot.path, gitRelativePath).toString()
+        } catch (_: Exception) {
+            return emptyList()
+        }
+
+        val virtualFile = LocalFileSystem.getInstance().findFileByPath(absolutePath) ?: return emptyList()
+        val currentContent = FileDocumentManager.getInstance().getDocument(virtualFile)?.text
+            ?: try {
+                String(virtualFile.contentsToByteArray())
+            } catch (_: Exception) {
+                null
+            } ?: return emptyList()
+
+        val lineMappingService = LineMappingService.getInstance(project)
+        val mappedPrimary = lineMappingService.getMappedCoverage(virtualFile.path, currentContent) ?: return emptyList()
+        val mappedBaseline = lineMappingService.getMappedBaselineCoverage(virtualFile.path, currentContent)
+
+        if (mappedBaseline == null) {
+            // New file on branch — all covered lines are feature-only
+            return mappedPrimary.filter { it.value.isNotEmpty() }
+                .map { NewCoverageLine(it.key, it.value) }
+        }
+
+        return mappedPrimary.mapNotNull { (line, tests) ->
+            val baselineTests = mappedBaseline[line] ?: emptyList()
+            if (baselineTests.isEmpty() && tests.isNotEmpty()) NewCoverageLine(line, tests) else null
+        }
     }
 
     private fun populate(model: NewCoverageModel) {
@@ -221,7 +314,34 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()) {
         val projectRelativePath = CoverageTestNavigator.toProjectRelativeFeaturePath(file.gitRelativePath, project)
         val projectDir = project.guessProjectDir() ?: return
         val vf = VfsUtil.findRelativeFile(projectRelativePath, projectDir) ?: return
-        val line = if (file.firstFeatureOnlyLine > 0) file.firstFeatureOnlyLine - 1 else 0
+
+        // Map the first feature-only line from the coverage commit to the current document
+        val currentContent = FileDocumentManager.getInstance().getDocument(vf)?.text
+            ?: try {
+                String(vf.contentsToByteArray())
+            } catch (_: Exception) {
+                null
+            }
+
+        val mappedLine = if (currentContent != null) {
+            val lineMappingService = LineMappingService.getInstance(project)
+            val mappedPrimary = lineMappingService.getMappedCoverage(vf.path, currentContent)
+            val mappedBaseline = lineMappingService.getMappedBaselineCoverage(vf.path, currentContent)
+            if (mappedPrimary != null) {
+                mappedPrimary.entries
+                    .filter { (line, tests) ->
+                        val bt = mappedBaseline?.get(line) ?: emptyList()
+                        tests.isNotEmpty() && bt.isEmpty()
+                    }
+                    .minOfOrNull { it.key }
+            } else {
+                null
+            }
+        } else {
+            null
+        } ?: file.firstFeatureOnlyLine
+
+        val line = if (mappedLine > 0) mappedLine - 1 else 0
         FileEditorManager.getInstance(project).openTextEditor(OpenFileDescriptor(project, vf, line, 0), true)
     }
 

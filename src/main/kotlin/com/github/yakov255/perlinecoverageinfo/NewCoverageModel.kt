@@ -8,10 +8,10 @@ data class NewCoverageLine(
 data class NewCoverageFile(
     val gitRelativePath: String,
     val featureOnlyLines: List<NewCoverageLine>,
-    val count: Int = featureOnlyLines.size,
 ) {
     val displayName: String get() = gitRelativePath.substringAfterLast("/")
     val firstFeatureOnlyLine: Int get() = featureOnlyLines.first().lineNumber
+    val count: Int get() = featureOnlyLines.size
 }
 
 data class NewCoverageModel(
