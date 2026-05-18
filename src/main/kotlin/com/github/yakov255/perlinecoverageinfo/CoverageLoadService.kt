@@ -327,18 +327,36 @@ class CoverageLoadService(private val project: Project) {
         }
 
         if (artifactJobs.isEmpty()) {
+            val hasExpired = jobs.any { job ->
+                job.status == "success"
+                    && job.name.contains("behat", ignoreCase = true)
+                    && job.artifacts.isNotEmpty()
+                    && job.artifactsFile == null
+            }
+            val branchName = CoverageResolver.runGitCommand(resolved.gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
+            val branch = branchName ?: resolved.commitHash.take(8)
+
             throw CoverageApiException(
                 buildString {
-                    appendLine("No jobs with artifacts found in pipeline #${resolved.pipelineId}.")
-                    appendLine()
-                    appendLine("Pipeline has ${jobs.size} job(s): ${jobs.joinToString(", ") { "${it.name} (${it.status})" }}")
-                    appendLine()
-                    append("Make sure the CI pipeline produces downloadable artifacts.")
+                    if (hasExpired) {
+                        appendLine(
+                            "Не удалось получить данные о покрытии для ветки $branch:" +
+                                " время жизни данных о покрытии в GitLab истекло."
+                        )
+                        appendLine("Запустите pipeline в GitLab для получения свежего покрытия.")
+                    } else {
+                        appendLine("No jobs with artifacts found in pipeline #${resolved.pipelineId}.")
+                        appendLine()
+                        appendLine("Pipeline has ${jobs.size} job(s): ${jobs.joinToString(", ") { "${it.name} (${it.status})" }}")
+                        appendLine()
+                        append("Make sure the CI pipeline produces downloadable artifacts.")
+                    }
                 },
                 details = mapOf(
                     "pipelineId" to resolved.pipelineId.toString(),
                     "totalJobs" to jobs.size.toString(),
                     "jobNames" to jobs.joinToString(", ") { it.name },
+                    "expired" to hasExpired.toString(),
                 ),
                 kind = CoverageErrorKind.NO_DATA,
             )
@@ -684,7 +702,7 @@ class CoverageLoadService(private val project: Project) {
             ex.kind == CoverageErrorKind.NETWORK ->
                 "Cannot connect to GitLab. Check your network connection."
             ex.kind == CoverageErrorKind.NO_DATA ->
-                "No coverage artifacts found for this commit."
+                ex.userMessage
             else -> ex.userMessage
         }
     }
