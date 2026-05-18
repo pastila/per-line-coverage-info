@@ -51,12 +51,14 @@ object CoverageHighlighter {
         val document = editor.document
         val virtualFile = FileDocumentManager.getInstance().getFile(document) ?: return
 
+        val hasBaseline = dataService.hasBaseline()
+
         val lineMappingService = LineMappingService.getInstance(project)
         val coverageLines = lineMappingService.getMappedCoverage(virtualFile.path, document.text)
             ?: findCoverageForFile(virtualFile.path, project)
             ?: return
 
-        val baselineLines: Map<Int, List<String>>? = if (dataService.hasBaseline()) {
+        val baselineLines: Map<Int, List<String>>? = if (hasBaseline) {
             lineMappingService.getMappedBaselineCoverage(virtualFile.path, document.text)
                 ?: findBaselineCoverageForFile(virtualFile.path, project)
         } else {
@@ -72,7 +74,7 @@ object CoverageHighlighter {
             val tests = coverageLines[lineNumber] ?: continue
 
             val baselineTests = baselineLines?.get(lineNumber) ?: emptyList()
-            val category = categorizeLine(tests, baselineTests, baselineLines != null)
+            val category = categorizeLine(tests, baselineTests, hasBaseline)
             val bg = backgroundFor(category)
             val startOffset = document.getLineStartOffset(line)
             val endOffset = document.getLineEndOffset(line)
@@ -85,7 +87,7 @@ object CoverageHighlighter {
                 lineNumber = lineNumber,
                 tests = tests,
                 baselineTests = baselineTests,
-                hasBaseline = baselineLines != null,
+                hasBaseline = hasBaseline,
                 category = category,
             )
             highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
