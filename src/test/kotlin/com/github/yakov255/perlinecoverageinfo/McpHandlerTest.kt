@@ -55,7 +55,7 @@ class McpHandlerTest {
     // --- tools/list ---
 
     @Test
-    fun toolsListReturnsSingleTool() {
+    fun toolsListReturnsBothTools() {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
@@ -68,17 +68,37 @@ class McpHandlerTest {
         val result = response["result"]!!.jsonObject
         val tools = result["tools"]!!.jsonArray
 
-        assertEquals(1, tools.size)
-        val tool = tools[0].jsonObject
-        assertEquals("get_coverage_for_file", tool["name"]?.jsonPrimitive?.content)
-        assertNotNull(tool["description"])
-        assertNotNull(tool["inputSchema"])
+        assertEquals(2, tools.size)
 
-        val schema = tool["inputSchema"]!!.jsonObject
-        assertEquals("object", schema["type"]?.jsonPrimitive?.content)
-        assertNotNull(schema["properties"]?.jsonObject?.get("file_path"))
-        val required = schema["required"]!!.jsonArray
+        val getCoverageTool = tools[0].jsonObject
+        assertEquals("get_coverage_for_file", getCoverageTool["name"]?.jsonPrimitive?.content)
+        assertNotNull(getCoverageTool["description"])
+        assertNotNull(getCoverageTool["inputSchema"])
+
+        val getSchema = getCoverageTool["inputSchema"]!!.jsonObject
+        assertEquals("object", getSchema["type"]?.jsonPrimitive?.content)
+        assertNotNull(getSchema["properties"]?.jsonObject?.get("file_path"))
+        assertNotNull(getSchema["properties"]?.jsonObject?.get("detail"))
+        val required = getSchema["required"]!!.jsonArray
         assertTrue(required.any { it.jsonPrimitive.content == "file_path" })
+
+        val detailSchema = getSchema["properties"]!!.jsonObject["detail"]!!.jsonObject
+        assertEquals("string", detailSchema["type"]?.jsonPrimitive?.content)
+        val detailEnum = detailSchema["enum"]!!.jsonArray
+        assertTrue(detailEnum.map { it.jsonPrimitive.content }.containsAll(listOf("summary", "detailed")))
+
+        val listFilesTool = tools[1].jsonObject
+        assertEquals("list_files", listFilesTool["name"]?.jsonPrimitive?.content)
+        assertNotNull(listFilesTool["description"])
+        assertNotNull(listFilesTool["inputSchema"])
+
+        val listSchema = listFilesTool["inputSchema"]!!.jsonObject
+        assertNotNull(listSchema["properties"]?.jsonObject?.get("path"))
+        assertNotNull(listSchema["properties"]?.jsonObject?.get("recursive"))
+        assertNotNull(listSchema["properties"]?.jsonObject?.get("sort"))
+        assertNotNull(listSchema["properties"]?.jsonObject?.get("offset"))
+        val listRequired = listSchema["required"]!!.jsonArray
+        assertTrue(listRequired.any { it.jsonPrimitive.content == "path" })
     }
 
     // --- unknown method ---
@@ -224,23 +244,6 @@ class McpHandlerTest {
         assertTrue("Should mention no project context", text.contains("No project"))
     }
 
-    // --- ping ---
-
-    @Test
-    fun pingReturnsEmptyResult() {
-        val handler = createHandler()
-        val request = buildJsonObject {
-            put("jsonrpc", "2.0")
-            put("id", 9)
-            put("method", "ping")
-        }.toString()
-
-        val responseJson = handler.handle(request)!!
-        val response = Json.parseToJsonElement(responseJson).jsonObject
-        assertNull(response["error"])
-        assertNotNull(response["result"])
-    }
-
     // --- malformed JSON ---
 
     @Test
@@ -250,5 +253,205 @@ class McpHandlerTest {
         val response = Json.parseToJsonElement(responseJson).jsonObject
         val error = response["error"]!!.jsonObject
         assertEquals(-32700, error["code"]?.jsonPrimitive?.int)
+    }
+
+    // --- collapseToRanges ---
+
+    @Test
+    fun collapseToRangesEmpty() {
+        val handler = createHandler()
+        assertEquals("none", handler.collapseToRanges(emptyList()))
+    }
+
+    @Test
+    fun collapseToRangesSingleLine() {
+        val handler = createHandler()
+        assertEquals("5", handler.collapseToRanges(listOf(5)))
+    }
+
+    @Test
+    fun collapseToRangesConsecutiveLines() {
+        val handler = createHandler()
+        assertEquals("1-5", handler.collapseToRanges(listOf(1, 2, 3, 4, 5)))
+    }
+
+    @Test
+    fun collapseToRangesMixed() {
+        val handler = createHandler()
+        assertEquals("1-3, 7, 10-12", handler.collapseToRanges(listOf(1, 2, 3, 7, 10, 11, 12)))
+    }
+
+    // --- detail parameter ---
+
+    @Test
+    fun toolsCallWithInvalidDetailReturnsError() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 11)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "get_coverage_for_file")
+                put("arguments", buildJsonObject {
+                    put("file_path", "src/Foo.php")
+                    put("detail", "invalid")
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        val result = response["result"]!!.jsonObject
+
+        assertTrue(result["isError"]?.jsonPrimitive?.boolean == true)
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("Invalid argument 'detail'"))
+    }
+
+    @Test
+    fun toolsCallWithDetailParameterAccepted() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 12)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "get_coverage_for_file")
+                put("arguments", buildJsonObject {
+                    put("file_path", "src/Foo.php")
+                    put("detail", "detailed")
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        assertNull(response["error"])
+
+        val result = response["result"]!!.jsonObject
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("No project"))
+    }
+
+    // --- list_files tool ---
+
+    @Test
+    fun listFilesMissingPathReturnsToolError() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 20)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "list_files")
+                put("arguments", buildJsonObject {})
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        val result = response["result"]!!.jsonObject
+
+        assertTrue(result["isError"]?.jsonPrimitive?.boolean == true)
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("path"))
+    }
+
+    @Test
+    fun listFilesInvalidSortReturnsToolError() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 21)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "list_files")
+                put("arguments", buildJsonObject {
+                    put("path", "src")
+                    put("sort", "invalid")
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        val result = response["result"]!!.jsonObject
+
+        assertTrue(result["isError"]?.jsonPrimitive?.boolean == true)
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("Invalid argument 'sort'"))
+    }
+
+    @Test
+    fun listFilesNegativeOffsetReturnsToolError() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 22)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "list_files")
+                put("arguments", buildJsonObject {
+                    put("path", "src")
+                    put("offset", -1)
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        val result = response["result"]!!.jsonObject
+
+        assertTrue(result["isError"]?.jsonPrimitive?.boolean == true)
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("offset"))
+    }
+
+    @Test
+    fun listFilesNoProjectReturnsNoProject() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 23)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "list_files")
+                put("arguments", buildJsonObject {
+                    put("path", "src")
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        assertNull(response["error"])
+
+        val result = response["result"]!!.jsonObject
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("No project"))
+    }
+
+    @Test
+    fun listFilesDefaultsToCoverageAscSort() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 24)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "list_files")
+                put("arguments", buildJsonObject {
+                    put("path", "")
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        assertNull(response["error"])
+
+        val result = response["result"]!!.jsonObject
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("No project"))
     }
 }

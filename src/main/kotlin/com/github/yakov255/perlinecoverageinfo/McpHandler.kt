@@ -22,8 +22,9 @@ class McpHandler(private val project: Project?) {
         private const val PROTOCOL_VERSION = "2025-03-26"
         private const val SERVER_NAME = "per-line-coverage-info"
         private const val SERVER_VERSION = "1.0.0"
+        private const val PAGE_SIZE = 50
 
-        private val TOOL_DESCRIPTOR = buildJsonObject {
+        private val GET_COVERAGE_DESCRIPTOR = buildJsonObject {
             put("name", "get_coverage_for_file")
             put("description", "Returns per-line code coverage for a file in the currently open PhpStorm project. " +
                 "Shows which tests cover each line. Coverage must already be loaded in the IDE " +
@@ -35,8 +36,42 @@ class McpHandler(private val project: Project?) {
                         put("type", "string")
                         put("description", "Path to the file relative to the project root (e.g. src/Service/Foo.php)")
                     })
+                    put("detail", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Output detail level: 'summary' (default) — covered/uncovered line ranges and statistics only; 'detailed' — test names per covered line")
+                        put("enum", buildJsonArray { add("summary"); add("detailed") })
+                    })
                 })
                 put("required", buildJsonArray { add("file_path") })
+            })
+        }
+
+        private val LIST_FILES_DESCRIPTOR = buildJsonObject {
+            put("name", "list_files")
+            put("description", "Lists files with coverage data under a directory. Returns file paths with " +
+                "coverage statistics (covered/total lines, percentage). Use this to discover files that need tests.")
+            put("inputSchema", buildJsonObject {
+                put("type", "object")
+                put("properties", buildJsonObject {
+                    put("path", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Directory path relative to the project root (e.g. 'src/Service/'). Use '' for root.")
+                    })
+                    put("recursive", buildJsonObject {
+                        put("type", "boolean")
+                        put("description", "Include files in subdirectories (default: false — only direct children)")
+                    })
+                    put("sort", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Sort order: 'coverage_asc' (default) — lowest coverage first; 'name' — alphabetical by path")
+                        put("enum", buildJsonArray { add("coverage_asc"); add("name") })
+                    })
+                    put("offset", buildJsonObject {
+                        put("type", "integer")
+                        put("description", "Pagination offset (default: 0). Use with page size of $PAGE_SIZE to iterate through results.")
+                    })
+                })
+                put("required", buildJsonArray { add("path") })
             })
         }
     }
@@ -100,7 +135,10 @@ class McpHandler(private val project: Project?) {
 
     private fun handleToolsList(id: JsonElement): String {
         val result = buildJsonObject {
-            put("tools", buildJsonArray { add(TOOL_DESCRIPTOR) })
+            put("tools", buildJsonArray {
+                add(GET_COVERAGE_DESCRIPTOR)
+                add(LIST_FILES_DESCRIPTOR)
+            })
         }
         return jsonRpcResult(id, result)
     }
@@ -109,19 +147,52 @@ class McpHandler(private val project: Project?) {
         val toolName = params?.get("name")?.jsonPrimitive?.contentOrNull
             ?: return jsonRpcError(id, -32602, "Invalid params: missing tool name")
 
-        if (toolName != "get_coverage_for_file") {
-            return toolErrorResult(id, "Unknown tool: $toolName")
+        return when (toolName) {
+            "get_coverage_for_file" -> handleGetCoverageForFile(id, params)
+            "list_files" -> handleListFiles(id, params)
+            else -> toolErrorResult(id, "Unknown tool: $toolName")
+        }
+    }
+
+    private fun handleGetCoverageForFile(id: JsonElement, params: JsonObject?): String {
+        val arguments = params?.get("arguments")?.jsonObject ?: return toolErrorResult(id, "Missing arguments")
+        val filePath = arguments["file_path"]?.jsonPrimitive?.contentOrNull
+            ?: return toolErrorResult(id, "Missing required argument: file_path")
+        val detail = arguments["detail"]?.jsonPrimitive?.contentOrNull ?: "summary"
+
+        if (detail !in listOf("summary", "detailed")) {
+            return toolErrorResult(id, "Invalid argument 'detail': must be 'summary' or 'detailed'")
         }
 
-        val arguments = params["arguments"]?.jsonObject
-        val filePath = arguments?.get("file_path")?.jsonPrimitive?.contentOrNull
-            ?: return toolErrorResult(id, "Missing required argument: file_path")
-
         return try {
-            val text = getCoverageForFile(filePath)
+            val text = getCoverageForFile(filePath, detail)
             toolSuccessResult(id, text)
         } catch (e: Exception) {
             log?.warn("MCP tool error for file $filePath", e)
+            toolErrorResult(id, "Error: ${e.message}")
+        }
+    }
+
+    private fun handleListFiles(id: JsonElement, params: JsonObject?): String {
+        val arguments = params?.get("arguments")?.jsonObject ?: return toolErrorResult(id, "Missing arguments")
+        val path = arguments["path"]?.jsonPrimitive?.contentOrNull
+            ?: return toolErrorResult(id, "Missing required argument: path")
+        val recursive = arguments["recursive"]?.jsonPrimitive?.booleanOrNull ?: false
+        val sort = arguments["sort"]?.jsonPrimitive?.contentOrNull ?: "coverage_asc"
+        val offset = arguments["offset"]?.jsonPrimitive?.intOrNull ?: 0
+
+        if (sort !in listOf("coverage_asc", "name")) {
+            return toolErrorResult(id, "Invalid argument 'sort': must be 'coverage_asc' or 'name'")
+        }
+        if (offset < 0) {
+            return toolErrorResult(id, "Invalid argument 'offset': must be >= 0")
+        }
+
+        return try {
+            val text = listCoverageFiles(path, recursive, sort, offset)
+            toolSuccessResult(id, text)
+        } catch (e: Exception) {
+            log?.warn("MCP tool error for list_files path=$path", e)
             toolErrorResult(id, "Error: ${e.message}")
         }
     }
@@ -130,10 +201,7 @@ class McpHandler(private val project: Project?) {
         return jsonRpcResult(id, buildJsonObject {})
     }
 
-    /**
-     * Core tool logic: look up coverage for [filePath] and format it as human-readable text.
-     */
-    internal fun getCoverageForFile(filePath: String): String {
+    internal fun getCoverageForFile(filePath: String, detail: String = "summary"): String {
         if (project == null) {
             return "No project context available."
         }
@@ -147,8 +215,6 @@ class McpHandler(private val project: Project?) {
         val candidates = mutableListOf<String>()
         project.basePath?.let { basePath ->
             val absoluteFile = java.io.File(basePath, filePath)
-            // Primary: git-relative path (canonical format in .covt — relative to git root).
-            // When the project is opened in a sub-directory of the repo this produces the correct key.
             dataService.gitRoot?.let { gitRoot ->
                 try {
                     candidates.add(
@@ -172,17 +238,129 @@ class McpHandler(private val project: Project?) {
 
         val sb = StringBuilder()
         sb.appendLine("Coverage for $filePath (commit ${commitHash.take(8)}, $coveredCount/$totalLines lines covered, $uncoveredCount uncovered)")
-        sb.appendLine()
 
-        for ((lineNumber, tests) in coverageLines.entries.sortedBy { it.key }) {
-            if (tests.isNotEmpty()) {
-                sb.appendLine("Line $lineNumber: covered — tests: ${tests.joinToString(", ") { "\"$it\"" }}")
-            } else {
-                sb.appendLine("Line $lineNumber: not covered")
+        if (detail == "summary") {
+            sb.appendLine()
+            val coveredLines = coverageLines.entries
+                .filter { it.value.isNotEmpty() }
+                .sortedBy { it.key }
+                .map { it.key }
+            val uncoveredLines = coverageLines.entries
+                .filter { it.value.isEmpty() }
+                .sortedBy { it.key }
+                .map { it.key }
+            sb.appendLine("Covered: ${collapseToRanges(coveredLines)}")
+            sb.append("Uncovered: ${collapseToRanges(uncoveredLines)}")
+        } else {
+            sb.appendLine()
+            for ((lineNumber, tests) in coverageLines.entries.sortedBy { it.key }) {
+                if (tests.isNotEmpty()) {
+                    sb.appendLine("$lineNumber: ${tests.joinToString(", ")}")
+                } else {
+                    sb.appendLine("$lineNumber: —")
+                }
             }
         }
 
         return sb.toString().trimEnd()
+    }
+
+    internal fun listCoverageFiles(
+        dirPath: String,
+        recursive: Boolean = false,
+        sort: String = "coverage_asc",
+        offset: Int = 0,
+    ): String {
+        if (project == null) {
+            return "No project context available."
+        }
+        val dataService = CoverageDataService.getInstance(project)
+
+        if (!dataService.hasData()) {
+            return "No coverage data is currently loaded in the IDE. " +
+                "Load coverage first (Fetch from GitLab or load a local .covt file)."
+        }
+
+        val allFiles = dataService.allFiles()
+        if (allFiles.isEmpty()) {
+            return "No files with coverage data."
+        }
+
+        val prefix = dirPath.trim('/')
+        val filtered = allFiles
+            .filter { path ->
+                if (prefix.isEmpty()) return@filter true
+                if (!path.startsWith(prefix)) return@filter false
+                val rest = path.substring(prefix.length)
+                rest.isEmpty() || rest.startsWith("/")
+            }
+            .filter { path ->
+                if (prefix.isEmpty()) return@filter true
+                val rest = path.substring(prefix.length).removePrefix("/")
+                if (rest.isEmpty()) return@filter false
+                if (recursive) return@filter true
+                !rest.contains("/")
+            }
+            .mapNotNull { path ->
+                val coverage = dataService.getCoverage(path) ?: return@mapNotNull null
+                val total = coverage.size
+                val covered = coverage.count { (_, tests) -> tests.isNotEmpty() }
+                FileCoverageInfo(path, total, covered)
+            }
+
+        val sorted = when (sort) {
+            "name" -> filtered.sortedBy { it.path }
+            else -> filtered.sortedWith(compareBy({ it.covered.toDouble() / it.total }, { it.path }))
+        }
+
+        val totalFiles = sorted.size
+        val page = sorted.drop(offset).take(PAGE_SIZE)
+
+        val sb = StringBuilder()
+
+        val displayPath = if (prefix.isEmpty()) "/" else "$prefix/"
+        sb.appendLine("Files in $displayPath (${totalFiles} file${if (totalFiles != 1) "s" else ""} with coverage, commit ${(dataService.coverageCommitHash ?: "unknown").take(8)})")
+        sb.appendLine()
+
+        if (page.isEmpty()) {
+            sb.append("No files found on this page.")
+            return sb.toString()
+        }
+
+        for (f in page) {
+            val pct = if (f.total > 0) f.covered * 100 / f.total else 0
+            val relativePath = if (prefix.isEmpty()) f.path else f.path.removePrefix("$prefix/").removePrefix("/")
+            val marker = if (pct == 0) "  ←" else ""
+            sb.appendLine("  $relativePath  ${f.covered}/${f.total}  ${pct}%${marker}")
+        }
+
+        if (totalFiles > offset + PAGE_SIZE) {
+            val nextOffset = offset + PAGE_SIZE
+            sb.appendLine()
+            sb.append("... and ${totalFiles - nextOffset} more files. Use offset=$nextOffset to see the next page.")
+        }
+
+        return sb.toString().trimEnd()
+    }
+
+    private data class FileCoverageInfo(val path: String, val total: Int, val covered: Int)
+
+    internal fun collapseToRanges(lineNumbers: List<Int>): String {
+        if (lineNumbers.isEmpty()) return "none"
+        val ranges = mutableListOf<String>()
+        var rangeStart = lineNumbers[0]
+        var rangeEnd = rangeStart
+        for (i in 1 until lineNumbers.size) {
+            if (lineNumbers[i] == rangeEnd + 1) {
+                rangeEnd = lineNumbers[i]
+            } else {
+                ranges.add(if (rangeStart == rangeEnd) "$rangeStart" else "$rangeStart-$rangeEnd")
+                rangeStart = lineNumbers[i]
+                rangeEnd = rangeStart
+            }
+        }
+        ranges.add(if (rangeStart == rangeEnd) "$rangeStart" else "$rangeStart-$rangeEnd")
+        return ranges.joinToString(", ")
     }
 
     // --- JSON-RPC helpers ---
