@@ -8,7 +8,6 @@ import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
-import java.awt.Color
 import java.io.File
 import java.nio.file.Paths
 
@@ -16,12 +15,6 @@ object CoverageHighlighter {
 
     private const val COVERAGE_LAYER = HighlighterLayer.LAST + 1
     val COVERAGE_HIGHLIGHTER_KEY = Key.create<Boolean>("PER_LINE_COVERAGE_HIGHLIGHTER")
-
-    // Background colours for the line strip. Alpha is low so the editor's own
-    // syntax highlighting remains readable on top.
-    private val BG_COVERED = Color(100, 180, 120, 60)
-    private val BG_UNCOVERED = Color(210, 110, 110, 60)
-    private val BG_FEATURE = Color(80, 140, 220, 90)
 
     fun applyToOpenEditors(project: Project) {
         val dataService = CoverageDataService.getInstance(project)
@@ -75,12 +68,11 @@ object CoverageHighlighter {
 
             val baselineTests = baselineLines?.get(lineNumber) ?: emptyList()
             val category = categorizeLine(tests, baselineTests, hasBaseline)
-            val bg = backgroundFor(category)
             val startOffset = document.getLineStartOffset(line)
             val endOffset = document.getLineEndOffset(line)
             val highlighter = markupModel.addRangeHighlighter(
                 startOffset, endOffset, COVERAGE_LAYER,
-                TextAttributes(null, bg, null, null, 0),
+                TextAttributes(null, null, null, null, 0),
                 HighlighterTargetArea.LINES_IN_RANGE
             )
             highlighter.lineMarkerRenderer = CoverageGutterRenderer(
@@ -110,12 +102,6 @@ object CoverageHighlighter {
         if (primary.isEmpty()) return CoverageCategory.UNCOVERED
         if (!hasBaseline) return CoverageCategory.COVERED
         return if (baseline.isEmpty()) CoverageCategory.FEATURE_ONLY else CoverageCategory.COVERED
-    }
-
-    private fun backgroundFor(category: CoverageCategory): Color = when (category) {
-        CoverageCategory.UNCOVERED -> BG_UNCOVERED
-        CoverageCategory.FEATURE_ONLY -> BG_FEATURE
-        CoverageCategory.COVERED -> BG_COVERED
     }
 
     fun clearCoverageHighlighters(editor: Editor) {
