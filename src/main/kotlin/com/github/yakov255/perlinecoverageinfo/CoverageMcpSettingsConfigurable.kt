@@ -16,6 +16,8 @@ import javax.swing.*
 /**
  * Project-level settings UI for the MCP server.
  * Accessible at Settings → Tools → GitLab Coverage → MCP Server.
+ *
+ * Settings are stored at the application level (shared across projects).
  */
 class CoverageMcpSettingsConfigurable(private val project: Project) : Configurable {
 
@@ -79,7 +81,7 @@ class CoverageMcpSettingsConfigurable(private val project: Project) : Configurab
     }
 
     private fun buildSnippet(): String {
-        val port = portField.text.trim().toIntOrNull() ?: CoverageMcpSettings.getInstance(project).mcpPort
+        val port = portField.text.trim().toIntOrNull() ?: CoverageMcpAppSettings.getInstance().mcpPort
         return """{
   "mcpServers": {
     "coverage": {
@@ -109,10 +111,10 @@ class CoverageMcpSettingsConfigurable(private val project: Project) : Configurab
     }
 
     private fun updateStatusLabel() {
-        val mcpServer = McpServer.getInstance(project)
+        val mcpServer = McpServerManager.getInstance()
         statusLabel.text = when {
             mcpServer.isRunning -> "Running on http://127.0.0.1:${mcpServer.boundPort}/mcp"
-            !CoverageMcpSettings.getInstance(project).mcpEnabled -> "Disabled"
+            !CoverageMcpAppSettings.getInstance().mcpEnabled -> "Disabled"
             else -> "Stopped"
         }
     }
@@ -123,23 +125,23 @@ class CoverageMcpSettingsConfigurable(private val project: Project) : Configurab
     }
 
     override fun isModified(): Boolean {
-        val settings = CoverageMcpSettings.getInstance(project)
+        val settings = CoverageMcpAppSettings.getInstance()
         return enabledCheckbox.isSelected != settings.mcpEnabled ||
             portField.text.trim() != settings.mcpPort.toString()
     }
 
     override fun apply() {
-        val settings = CoverageMcpSettings.getInstance(project)
+        val settings = CoverageMcpAppSettings.getInstance()
         val newEnabled = enabledCheckbox.isSelected
         val newPort = portField.text.trim().toIntOrNull() ?: settings.mcpPort
         settings.mcpEnabled = newEnabled
         settings.mcpPort = newPort
-        McpServer.getInstance(project).restart(newPort, newEnabled)
+        McpServerManager.getInstance().restart(newPort, newEnabled)
         updateStatusLabel()
     }
 
     override fun reset() {
-        val settings = CoverageMcpSettings.getInstance(project)
+        val settings = CoverageMcpAppSettings.getInstance()
         enabledCheckbox.isSelected = settings.mcpEnabled
         portField.text = settings.mcpPort.toString()
         updateStatusLabel()

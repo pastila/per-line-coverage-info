@@ -25,10 +25,10 @@
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageCacheService"/>
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.AffectedTestsService"/>
-        <projectService
-            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageMcpSettings"/>
-        <projectService
-            serviceImplementation="com.github.yakov255.perlinecoverageinfo.McpServer"/>
+        <applicationService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageMcpAppSettings"/>
+        <applicationService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.McpServerManager"/>
         <applicationService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.GitHubUpdateCheckSettings"/>
         <applicationService

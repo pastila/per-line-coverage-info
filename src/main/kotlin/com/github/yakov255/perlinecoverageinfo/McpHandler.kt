@@ -9,10 +9,10 @@ import kotlinx.serialization.json.*
  * Handles `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
  * No HTTP — takes a JSON string and returns a JSON string.
  *
- * @param project the IntelliJ project. Pass null only in unit tests
- *   (tool calls that need coverage data will return an error).
+ * @param projectLookup function to resolve a project by its absolute base path.
+ *   Pass `{ null }` in unit tests that don't need coverage data.
  */
-class McpHandler(private val project: Project?) {
+class McpHandler(private val projectLookup: (String) -> Project?) {
 
     private val log: CoverageLog? by lazy {
         try { CoverageLog.get(McpHandler::class.java) } catch (_: Throwable) { null }
@@ -26,12 +26,15 @@ class McpHandler(private val project: Project?) {
 
         private val GET_COVERAGE_DESCRIPTOR = buildJsonObject {
             put("name", "get_coverage_for_file")
-            put("description", "Returns per-line code coverage for a file in the currently open PhpStorm project. " +
-                "Shows which tests cover each line. Coverage must already be loaded in the IDE " +
-                "(via GitLab fetch or local .covt file).")
+            put("description", "Returns per-line code coverage for a file. " +
+                "Required parameter 'project' — absolute path to the project root directory.")
             put("inputSchema", buildJsonObject {
                 put("type", "object")
                 put("properties", buildJsonObject {
+                    put("project", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Required. Absolute path to the project root (e.g. /home/user/projects/my-app)")
+                    })
                     put("file_path", buildJsonObject {
                         put("type", "string")
                         put("description", "Path to the file relative to the project root (e.g. src/Service/Foo.php)")
@@ -42,17 +45,21 @@ class McpHandler(private val project: Project?) {
                         put("enum", buildJsonArray { add("summary"); add("detailed") })
                     })
                 })
-                put("required", buildJsonArray { add("file_path") })
+                put("required", buildJsonArray { add("project"); add("file_path") })
             })
         }
 
         private val LIST_FILES_DESCRIPTOR = buildJsonObject {
             put("name", "list_files")
-            put("description", "Lists files with coverage data under a directory. Returns file paths with " +
-                "coverage statistics (covered/total lines, percentage). Use this to discover files that need tests.")
+            put("description", "Lists files with coverage data under a directory. " +
+                "Required parameter 'project' — absolute path to the project root directory.")
             put("inputSchema", buildJsonObject {
                 put("type", "object")
                 put("properties", buildJsonObject {
+                    put("project", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Required. Absolute path to the project root (e.g. /home/user/projects/my-app)")
+                    })
                     put("path", buildJsonObject {
                         put("type", "string")
                         put("description", "Directory path relative to the project root (e.g. 'src/Service/'). Use '' for root.")
@@ -70,8 +77,13 @@ class McpHandler(private val project: Project?) {
                         put("type", "integer")
                         put("description", "Pagination offset (default: 0). Use with page size of $PAGE_SIZE to iterate through results.")
                     })
+                    put("coverage", buildJsonObject {
+                        put("type", "string")
+                        put("description", "Filter by coverage level: 'all' (default) — all files; 'uncovered' — files with 0% coverage; 'fully_covered' — files with 100% coverage.")
+                        put("enum", buildJsonArray { add("all"); add("uncovered"); add("fully_covered") })
+                    })
                 })
-                put("required", buildJsonArray { add("path") })
+                put("required", buildJsonArray { add("project"); add("path") })
             })
         }
     }
@@ -90,7 +102,6 @@ class McpHandler(private val project: Project?) {
                 return jsonRpcError(id, -32600, "Invalid Request: missing method")
             }
 
-            // Notifications have no id — no response expected
             if (id == null || id is JsonNull) {
                 handleNotification(method)
                 return null
@@ -156,6 +167,8 @@ class McpHandler(private val project: Project?) {
 
     private fun handleGetCoverageForFile(id: JsonElement, params: JsonObject?): String {
         val arguments = params?.get("arguments")?.jsonObject ?: return toolErrorResult(id, "Missing arguments")
+        val projectBasePath = arguments["project"]?.jsonPrimitive?.contentOrNull
+            ?: return toolErrorResult(id, "Missing required argument: project.\nPlease provide the 'project' parameter with the absolute path to the project root directory.")
         val filePath = arguments["file_path"]?.jsonPrimitive?.contentOrNull
             ?: return toolErrorResult(id, "Missing required argument: file_path")
         val detail = arguments["detail"]?.jsonPrimitive?.contentOrNull ?: "summary"
@@ -164,8 +177,11 @@ class McpHandler(private val project: Project?) {
             return toolErrorResult(id, "Invalid argument 'detail': must be 'summary' or 'detailed'")
         }
 
+        val project = projectLookup(projectBasePath)
+            ?: return toolErrorResult(id, "No project found for path: $projectBasePath.\nProvide the absolute path to the project root directory.")
+
         return try {
-            val text = getCoverageForFile(filePath, detail)
+            val text = getCoverageForFile(project, filePath, detail)
             toolSuccessResult(id, text)
         } catch (e: Exception) {
             log?.warn("MCP tool error for file $filePath", e)
@@ -175,11 +191,14 @@ class McpHandler(private val project: Project?) {
 
     private fun handleListFiles(id: JsonElement, params: JsonObject?): String {
         val arguments = params?.get("arguments")?.jsonObject ?: return toolErrorResult(id, "Missing arguments")
+        val projectBasePath = arguments["project"]?.jsonPrimitive?.contentOrNull
+            ?: return toolErrorResult(id, "Missing required argument: project.\nPlease provide the 'project' parameter with the absolute path to the project root directory.")
         val path = arguments["path"]?.jsonPrimitive?.contentOrNull
             ?: return toolErrorResult(id, "Missing required argument: path")
         val recursive = arguments["recursive"]?.jsonPrimitive?.booleanOrNull ?: false
         val sort = arguments["sort"]?.jsonPrimitive?.contentOrNull ?: "coverage_asc"
         val offset = arguments["offset"]?.jsonPrimitive?.intOrNull ?: 0
+        val coverage = arguments["coverage"]?.jsonPrimitive?.contentOrNull ?: "all"
 
         if (sort !in listOf("coverage_asc", "name")) {
             return toolErrorResult(id, "Invalid argument 'sort': must be 'coverage_asc' or 'name'")
@@ -187,9 +206,15 @@ class McpHandler(private val project: Project?) {
         if (offset < 0) {
             return toolErrorResult(id, "Invalid argument 'offset': must be >= 0")
         }
+        if (coverage !in listOf("all", "uncovered", "fully_covered")) {
+            return toolErrorResult(id, "Invalid argument 'coverage': must be 'all', 'uncovered', or 'fully_covered'")
+        }
+
+        val project = projectLookup(projectBasePath)
+            ?: return toolErrorResult(id, "No project found for path: $projectBasePath.\nProvide the absolute path to the project root directory.")
 
         return try {
-            val text = listCoverageFiles(path, recursive, sort, offset)
+            val text = listCoverageFiles(project, path, recursive, sort, offset, coverage)
             toolSuccessResult(id, text)
         } catch (e: Exception) {
             log?.warn("MCP tool error for list_files path=$path", e)
@@ -201,10 +226,7 @@ class McpHandler(private val project: Project?) {
         return jsonRpcResult(id, buildJsonObject {})
     }
 
-    internal fun getCoverageForFile(filePath: String, detail: String = "summary"): String {
-        if (project == null) {
-            return "No project context available."
-        }
+    internal fun getCoverageForFile(project: Project, filePath: String, detail: String = "summary"): String {
         val dataService = CoverageDataService.getInstance(project)
 
         if (!dataService.hasData()) {
@@ -266,14 +288,13 @@ class McpHandler(private val project: Project?) {
     }
 
     internal fun listCoverageFiles(
+        project: Project,
         dirPath: String,
         recursive: Boolean = false,
         sort: String = "coverage_asc",
         offset: Int = 0,
+        coverage: String = "all",
     ): String {
-        if (project == null) {
-            return "No project context available."
-        }
         val dataService = CoverageDataService.getInstance(project)
 
         if (!dataService.hasData()) {
@@ -306,6 +327,13 @@ class McpHandler(private val project: Project?) {
                 val total = coverage.size
                 val covered = coverage.count { (_, tests) -> tests.isNotEmpty() }
                 FileCoverageInfo(path, total, covered)
+            }
+            .filter { file ->
+                when (coverage) {
+                    "uncovered" -> file.covered == 0
+                    "fully_covered" -> file.covered == file.total && file.total > 0
+                    else -> true
+                }
             }
 
         val sorted = when (sort) {

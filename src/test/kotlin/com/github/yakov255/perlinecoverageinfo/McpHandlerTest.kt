@@ -9,12 +9,13 @@ import org.junit.Test
  *
  * These tests exercise the protocol layer — request parsing, method routing,
  * and response structure — without requiring a live Project or CoverageDataService.
- * The handler is constructed with a null project; tool-call tests that need coverage
- * data are expected to produce a controlled error path.
+ * The handler is constructed with a lookup that always returns null; tool-call tests
+ * that need coverage data either expect a "project not found" error or pass through
+ * to the no-coverage-data path.
  */
 class McpHandlerTest {
 
-    private fun createHandler(): McpHandler = McpHandler(null)
+    private fun createHandler(): McpHandler = McpHandler { null }
 
     // --- initialize ---
 
@@ -70,6 +71,7 @@ class McpHandlerTest {
 
         assertEquals(2, tools.size)
 
+        // get_coverage_for_file schema
         val getCoverageTool = tools[0].jsonObject
         assertEquals("get_coverage_for_file", getCoverageTool["name"]?.jsonPrimitive?.content)
         assertNotNull(getCoverageTool["description"])
@@ -77,27 +79,35 @@ class McpHandlerTest {
 
         val getSchema = getCoverageTool["inputSchema"]!!.jsonObject
         assertEquals("object", getSchema["type"]?.jsonPrimitive?.content)
-        assertNotNull(getSchema["properties"]?.jsonObject?.get("file_path"))
-        assertNotNull(getSchema["properties"]?.jsonObject?.get("detail"))
-        val required = getSchema["required"]!!.jsonArray
-        assertTrue(required.any { it.jsonPrimitive.content == "file_path" })
+        val getProps = getSchema["properties"]!!.jsonObject
+        assertNotNull(getProps["project"])
+        assertNotNull(getProps["file_path"])
+        assertNotNull(getProps["detail"])
+        val getRequired = getSchema["required"]!!.jsonArray
+        assertTrue(getRequired.any { it.jsonPrimitive.content == "project" })
+        assertTrue(getRequired.any { it.jsonPrimitive.content == "file_path" })
 
-        val detailSchema = getSchema["properties"]!!.jsonObject["detail"]!!.jsonObject
+        val detailSchema = getProps["detail"]!!.jsonObject
         assertEquals("string", detailSchema["type"]?.jsonPrimitive?.content)
         val detailEnum = detailSchema["enum"]!!.jsonArray
         assertTrue(detailEnum.map { it.jsonPrimitive.content }.containsAll(listOf("summary", "detailed")))
 
+        // list_files schema
         val listFilesTool = tools[1].jsonObject
         assertEquals("list_files", listFilesTool["name"]?.jsonPrimitive?.content)
         assertNotNull(listFilesTool["description"])
         assertNotNull(listFilesTool["inputSchema"])
 
         val listSchema = listFilesTool["inputSchema"]!!.jsonObject
-        assertNotNull(listSchema["properties"]?.jsonObject?.get("path"))
-        assertNotNull(listSchema["properties"]?.jsonObject?.get("recursive"))
-        assertNotNull(listSchema["properties"]?.jsonObject?.get("sort"))
-        assertNotNull(listSchema["properties"]?.jsonObject?.get("offset"))
+        val listProps = listSchema["properties"]!!.jsonObject
+        assertNotNull(listProps["project"])
+        assertNotNull(listProps["path"])
+        assertNotNull(listProps["recursive"])
+        assertNotNull(listProps["sort"])
+        assertNotNull(listProps["offset"])
+        assertNotNull(listProps["coverage"])
         val listRequired = listSchema["required"]!!.jsonArray
+        assertTrue(listRequired.any { it.jsonPrimitive.content == "project" })
         assertTrue(listRequired.any { it.jsonPrimitive.content == "path" })
     }
 
@@ -192,10 +202,10 @@ class McpHandlerTest {
         assertTrue(content[0].jsonObject["text"]?.jsonPrimitive?.content?.contains("Unknown tool") == true)
     }
 
-    // --- tools/call with missing file_path ---
+    // --- tools/call with missing project (required) ---
 
     @Test
-    fun toolsCallMissingFilePathReturnsToolError() {
+    fun toolsCallMissingProjectReturnsToolError() {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
@@ -203,7 +213,35 @@ class McpHandlerTest {
             put("method", "tools/call")
             put("params", buildJsonObject {
                 put("name", "get_coverage_for_file")
-                put("arguments", buildJsonObject {})
+                put("arguments", buildJsonObject {
+                    put("file_path", "src/Service/Foo.php")
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        val result = response["result"]!!.jsonObject
+
+        assertTrue(result["isError"]?.jsonPrimitive?.boolean == true)
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("Missing required argument: project"))
+    }
+
+    // --- tools/call with missing file_path ---
+
+    @Test
+    fun toolsCallMissingFilePathReturnsToolError() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 9)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "get_coverage_for_file")
+                put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
+                })
             })
         }.toString()
 
@@ -216,10 +254,10 @@ class McpHandlerTest {
         assertTrue(text.contains("file_path"))
     }
 
-    // --- ping ---
+    // --- tools/call with project that doesn't resolve ---
 
     @Test
-    fun toolsCallWithFilePathButNoProjectReturnsToolContent() {
+    fun toolsCallUnrecognizedProjectReturnsToolError() {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
@@ -228,6 +266,7 @@ class McpHandlerTest {
             put("params", buildJsonObject {
                 put("name", "get_coverage_for_file")
                 put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
                     put("file_path", "src/Service/Foo.php")
                 })
             })
@@ -241,7 +280,24 @@ class McpHandlerTest {
         val content = result["content"]!!.jsonArray
         assertEquals(1, content.size)
         val text = content[0].jsonObject["text"]?.jsonPrimitive?.content!!
-        assertTrue("Should mention no project context", text.contains("No project"))
+        assertTrue("Should mention no project found", text.contains("No project found for path"))
+    }
+
+    // --- ping ---
+
+    @Test
+    fun pingReturnsEmptyResult() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 11)
+            put("method", "ping")
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        assertNull(response["error"])
+        assertNotNull(response["result"])
     }
 
     // --- malformed JSON ---
@@ -288,11 +344,12 @@ class McpHandlerTest {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
-            put("id", 11)
+            put("id", 12)
             put("method", "tools/call")
             put("params", buildJsonObject {
                 put("name", "get_coverage_for_file")
                 put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
                     put("file_path", "src/Foo.php")
                     put("detail", "invalid")
                 })
@@ -309,15 +366,16 @@ class McpHandlerTest {
     }
 
     @Test
-    fun toolsCallWithDetailParameterAccepted() {
+    fun toolsCallWithDetailParameterAcceptsSummary() {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
-            put("id", 12)
+            put("id", 13)
             put("method", "tools/call")
             put("params", buildJsonObject {
                 put("name", "get_coverage_for_file")
                 put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
                     put("file_path", "src/Foo.php")
                     put("detail", "detailed")
                 })
@@ -330,13 +388,13 @@ class McpHandlerTest {
 
         val result = response["result"]!!.jsonObject
         val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
-        assertTrue(text.contains("No project"))
+        assertTrue(text.contains("No project found for path"))
     }
 
     // --- list_files tool ---
 
     @Test
-    fun listFilesMissingPathReturnsToolError() {
+    fun listFilesMissingProjectReturnsToolError() {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
@@ -344,7 +402,33 @@ class McpHandlerTest {
             put("method", "tools/call")
             put("params", buildJsonObject {
                 put("name", "list_files")
-                put("arguments", buildJsonObject {})
+                put("arguments", buildJsonObject {
+                    put("path", "src")
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        val result = response["result"]!!.jsonObject
+
+        assertTrue(result["isError"]?.jsonPrimitive?.boolean == true)
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("project"))
+    }
+
+    @Test
+    fun listFilesMissingPathReturnsToolError() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 21)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "list_files")
+                put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
+                })
             })
         }.toString()
 
@@ -362,11 +446,12 @@ class McpHandlerTest {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
-            put("id", 21)
+            put("id", 22)
             put("method", "tools/call")
             put("params", buildJsonObject {
                 put("name", "list_files")
                 put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
                     put("path", "src")
                     put("sort", "invalid")
                 })
@@ -387,11 +472,12 @@ class McpHandlerTest {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
-            put("id", 22)
+            put("id", 23)
             put("method", "tools/call")
             put("params", buildJsonObject {
                 put("name", "list_files")
                 put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
                     put("path", "src")
                     put("offset", -1)
                 })
@@ -408,15 +494,16 @@ class McpHandlerTest {
     }
 
     @Test
-    fun listFilesNoProjectReturnsNoProject() {
+    fun listFilesUnrecognizedProjectReturnsNoProject() {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
-            put("id", 23)
+            put("id", 24)
             put("method", "tools/call")
             put("params", buildJsonObject {
                 put("name", "list_files")
                 put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
                     put("path", "src")
                 })
             })
@@ -428,7 +515,7 @@ class McpHandlerTest {
 
         val result = response["result"]!!.jsonObject
         val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
-        assertTrue(text.contains("No project"))
+        assertTrue(text.contains("No project found for path"))
     }
 
     @Test
@@ -436,11 +523,12 @@ class McpHandlerTest {
         val handler = createHandler()
         val request = buildJsonObject {
             put("jsonrpc", "2.0")
-            put("id", 24)
+            put("id", 25)
             put("method", "tools/call")
             put("params", buildJsonObject {
                 put("name", "list_files")
                 put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
                     put("path", "")
                 })
             })
@@ -452,6 +540,31 @@ class McpHandlerTest {
 
         val result = response["result"]!!.jsonObject
         val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
-        assertTrue(text.contains("No project"))
+        assertTrue(text.contains("No project found for path"))
+    }
+
+    @Test
+    fun listFilesInvalidCoverageReturnsToolError() {
+        val handler = createHandler()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", 26)
+            put("method", "tools/call")
+            put("params", buildJsonObject {
+                put("name", "list_files")
+                put("arguments", buildJsonObject {
+                    put("project", "/home/user/test-project")
+                    put("path", "src")
+                    put("coverage", "invalid")
+                })
+            })
+        }.toString()
+
+        val responseJson = handler.handle(request)!!
+        val response = Json.parseToJsonElement(responseJson).jsonObject
+        val result = response["result"]!!.jsonObject
+        assertTrue(result["isError"]?.jsonPrimitive?.boolean == true)
+        val text = result["content"]!!.jsonArray[0].jsonObject["text"]?.jsonPrimitive?.content!!
+        assertTrue(text.contains("coverage"))
     }
 }
