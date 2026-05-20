@@ -50,6 +50,22 @@ class CoverageDataService(private val project: Project) {
     var isStale: Boolean = false
         private set
 
+    /** The merge-base between HEAD and the coverage branch at the time coverage was loaded. */
+    var mergeBaseHash: String? = null
+        private set
+
+    /** The HEAD commit hash at the time coverage was loaded. */
+    var headHash: String? = null
+        private set
+
+    /** How many commits the primary coverage is behind HEAD (null if unknown). */
+    var primaryBehindBy: Int? = null
+        private set
+
+    /** How many commits the baseline coverage is behind merge-base (null if unknown). */
+    var baselineBehindBy: Int? = null
+        private set
+
     fun setCoverage(filePath: String, lines: Map<Int, List<String>>) {
         data[filePath] = lines
     }
@@ -88,6 +104,19 @@ class CoverageDataService(private val project: Project) {
         if (reader != null) {
             log.info("Coverage: baseline reader set with ${reader.allFilePaths.size} files (commit ${commitHash?.take(8)})")
         }
+        notifyChanged()
+    }
+
+    fun setWarningContext(
+        headHash: String?,
+        mergeBaseHash: String?,
+        primaryBehindBy: Int?,
+        baselineBehindBy: Int?,
+    ) {
+        this.headHash = headHash
+        this.mergeBaseHash = mergeBaseHash
+        this.primaryBehindBy = primaryBehindBy
+        this.baselineBehindBy = baselineBehindBy
         notifyChanged()
     }
 
@@ -130,6 +159,10 @@ class CoverageDataService(private val project: Project) {
         coverageCommitHash = null
         gitRoot = null
         isStale = false
+        mergeBaseHash = null
+        headHash = null
+        primaryBehindBy = null
+        baselineBehindBy = null
         LineMappingService.getInstance(project).clear()
         notifyChanged()
     }

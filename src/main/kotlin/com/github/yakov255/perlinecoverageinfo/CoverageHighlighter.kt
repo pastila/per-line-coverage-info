@@ -60,6 +60,7 @@ object CoverageHighlighter {
 
         clearCoverageHighlighters(editor)
 
+        val warnings = CoverageWarningService.getInstance(project).getWarnings()
         val markupModel = editor.markupModel
 
         for (line in 0 until document.lineCount) {
@@ -81,6 +82,7 @@ object CoverageHighlighter {
                 baselineTests = baselineTests,
                 hasBaseline = hasBaseline,
                 category = category,
+                warnings = warnings,
             )
             highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
         }

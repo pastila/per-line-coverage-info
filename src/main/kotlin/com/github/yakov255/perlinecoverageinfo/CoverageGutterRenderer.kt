@@ -28,6 +28,7 @@ class CoverageGutterRenderer(
     private val baselineTests: List<String> = emptyList(),
     private val hasBaseline: Boolean = false,
     private val category: CoverageCategory = if (tests.isNotEmpty()) CoverageCategory.COVERED else CoverageCategory.UNCOVERED,
+    private val warnings: CoverageWarnings? = null,
 ) : FillingLineMarkerRenderer, ActiveGutterRenderer {
 
     private val featureOnlyCount: Int
@@ -62,10 +63,15 @@ class CoverageGutterRenderer(
     }
 
     override fun getTooltipText(): String {
-        if (tests.isEmpty()) return "Line $lineNumber: not covered"
-        val newCount = featureOnlyCount
-        val suffix = if (newCount > 0) " ($newCount new on this branch)" else ""
-        return "Line $lineNumber covered by ${tests.size} test(s)$suffix"
+        val base = if (tests.isEmpty()) {
+            "Line $lineNumber: not covered"
+        } else {
+            val newCount = featureOnlyCount
+            val suffix = if (newCount > 0) " ($newCount new on this branch)" else ""
+            "Line $lineNumber covered by ${tests.size} test(s)$suffix"
+        }
+        val warningText = warnings?.formatPlain()
+        return if (!warningText.isNullOrEmpty()) "$base\n\n⚠ $warningText" else base
     }
 
     override fun canDoAction(editor: Editor, e: MouseEvent): Boolean {
@@ -86,10 +92,12 @@ class CoverageGutterRenderer(
     }
 
     override fun getAccessibleName(): String {
-        if (tests.isEmpty()) return "Line $lineNumber not covered"
-        val newCount = featureOnlyCount
-        val suffix = if (newCount > 0) " ($newCount new on this branch)" else ""
-        return "Line $lineNumber covered by ${tests.size} tests$suffix"
+        val base = if (tests.isEmpty()) "Line $lineNumber not covered" else {
+            val newCount = featureOnlyCount
+            val suffix = if (newCount > 0) " ($newCount new on this branch)" else ""
+            "Line $lineNumber covered by ${tests.size} tests$suffix"
+        }
+        val warningText = warnings?.formatPlain()
+        return if (!warningText.isNullOrEmpty()) "$base. ⚠ $warningText" else base
     }
 }
-

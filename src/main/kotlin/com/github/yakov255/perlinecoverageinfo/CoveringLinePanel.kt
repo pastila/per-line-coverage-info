@@ -13,7 +13,9 @@ import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.ui.components.JBLabel
 import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.Color
 import java.awt.Cursor
+import java.awt.FlowLayout
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
 import javax.swing.JPanel
@@ -27,6 +29,8 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
     enum class TestFilter { BOTH, MASTER_ONLY, FEATURE_ONLY }
 
     private val titleLabel = JBLabel("No line selected")
+    private val warningPanel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2))
+    private val warningLabel = JBLabel()
     private val testTree = TestTreeView(project)
     private var currentLineNumber: Int = 0
     private var currentFilePath: String = ""
@@ -90,7 +94,16 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
         top.add(titleLabel, BorderLayout.CENTER)
 
         add(top, BorderLayout.NORTH)
-        add(testTree.component, BorderLayout.CENTER)
+
+        warningPanel.add(JBLabel(AllIcons.General.Warning))
+        warningPanel.add(warningLabel)
+        warningLabel.foreground = Color(0xCC7832)
+        warningPanel.isVisible = false
+
+        val center = JPanel(BorderLayout())
+        center.add(warningPanel, BorderLayout.NORTH)
+        center.add(testTree.component, BorderLayout.CENTER)
+        add(center, BorderLayout.CENTER)
 
         testTree.setEmptyMessage("No tests covering this line")
     }
@@ -130,7 +143,19 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
             "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — ${displayed.size} test(s)$newSuffix$commitInfo</html>"
         }
 
+        updateWarning()
+
         testTree.setTests(displayed)
+    }
+
+    private fun updateWarning() {
+        val warnings = CoverageWarningService.getInstance(project).getWarnings()
+        if (warnings.hasAny) {
+            warningLabel.text = "<html>${warnings.formatHtml()}</html>"
+            warningPanel.isVisible = true
+        } else {
+            warningPanel.isVisible = false
+        }
     }
 
     private fun computeDisplayedTests(): List<String> =

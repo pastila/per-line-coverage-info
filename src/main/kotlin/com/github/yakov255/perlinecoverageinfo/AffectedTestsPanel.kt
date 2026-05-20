@@ -1,12 +1,16 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.icons.AllIcons
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.components.JBLabel
 import java.awt.BorderLayout
+import java.awt.Color
+import java.awt.FlowLayout
 import java.awt.event.KeyEvent
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -21,6 +25,8 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     private val log = CoverageLog.get(AffectedTestsPanel::class.java)
 
     private val testTree = TestTreeView(project)
+    private val warningPanel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2))
+    private val warningLabel = JBLabel()
     private val affectedFilesPane = AffectedFilesPane(
         project,
         onCheckedFilesChanged = ::onAffectedFilesCheckedChanged,
@@ -36,10 +42,23 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         splitter.firstComponent = affectedFilesPane.component
         splitter.secondComponent = testTree.component
 
+        warningPanel.add(JBLabel(AllIcons.General.Warning))
+        warningPanel.add(warningLabel)
+        warningLabel.foreground = Color(0xCC7832)
+        warningPanel.isVisible = false
+
+        add(warningPanel, BorderLayout.NORTH)
         add(splitter, BorderLayout.CENTER)
 
         testTree.setEmptyMessage("No affected tests")
         testTree.setStatusText("Click \"Refresh\" to start.")
+
+        updateWarning()
+
+        project.messageBus.connect().subscribe(
+            CoverageDataService.COVERAGE_CHANGED_TOPIC,
+            CoverageChangeListener { updateWarning() },
+        )
 
         registerKeyboardAction(
             { lastDiffMode?.let { findAffectedTests(it) } },
@@ -51,6 +70,16 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
     private fun refreshAction() {
         val mode = lastDiffMode ?: ChangedLinesAnalyzer.DiffMode.WORKING_TREE
         findAffectedTests(mode)
+    }
+
+    private fun updateWarning() {
+        val warnings = CoverageWarningService.getInstance(project).getWarnings()
+        if (warnings.hasAny) {
+            warningLabel.text = "<html>${warnings.formatHtml()}</html>"
+            warningPanel.isVisible = true
+        } else {
+            warningPanel.isVisible = false
+        }
     }
 
     private fun onAffectedFilesCheckedChanged() {

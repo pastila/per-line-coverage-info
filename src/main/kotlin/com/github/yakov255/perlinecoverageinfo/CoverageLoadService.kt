@@ -77,7 +77,10 @@ class CoverageLoadService(private val project: Project) {
                 log.info("Coverage: offline-first pinned — commit ${pinned.take(8)}, alreadyLoaded=$alreadyLoaded")
                 if (!alreadyLoaded) {
                     val root = findGitRoot()
-                    if (root != null) dataService.setCoverageContext(pinned, root, stale = false)
+                    if (root != null) {
+                        dataService.setCoverageContext(pinned, root, stale = false)
+                        computeAndStoreWarningContext(root)
+                    }
                     dataService.setCov4Reader(reader)
                     cache.updateLastUsed(pinned)
                     ApplicationManager.getApplication().invokeLater {
@@ -105,6 +108,7 @@ class CoverageLoadService(private val project: Project) {
                         log.info("Coverage: offline-first hit — commit ${cachedCommit.take(8)}, alreadyLoaded=$alreadyLoaded")
                         if (!alreadyLoaded) {
                             dataService.setCoverageContext(cachedCommit, gitRoot, stale = true)
+                            computeAndStoreWarningContext(gitRoot)
                             dataService.setCov4Reader(reader)
                             cache.updateLastUsed(cachedCommit)
                             ApplicationManager.getApplication().invokeLater {
@@ -137,6 +141,7 @@ class CoverageLoadService(private val project: Project) {
                 log.info("Coverage: offline-first fallback — commit ${latestArtifact.commitHash.take(8)}, alreadyLoaded=$alreadyLoaded")
                 if (!alreadyLoaded) {
                     dataService.setCoverageContext(latestArtifact.commitHash, gitRoot, stale = true)
+                    computeAndStoreWarningContext(gitRoot)
                     dataService.setCov4Reader(reader)
                     cache.updateLastUsed(latestArtifact.commitHash)
                     ApplicationManager.getApplication().invokeLater {
@@ -223,6 +228,7 @@ class CoverageLoadService(private val project: Project) {
                     if (dataService.coverageCommitHash == resolved.commitHash && dataService.hasData()) {
                         log.info("Coverage: commit ${resolved.commitHash.take(8)} already loaded, skipping reader swap")
                         dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
+                        computeAndStoreWarningContext(resolved.gitRoot)
                         loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.7)
                         return
                     }
@@ -232,6 +238,7 @@ class CoverageLoadService(private val project: Project) {
                         log.info("Coverage: loaded primary from COV4 cache (commit ${resolved.commitHash})")
                         cache.updateLastUsed(resolved.commitHash)
                         dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
+                        computeAndStoreWarningContext(resolved.gitRoot)
                         dataService.setCov4Reader(reader)
 
                         loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.7)
@@ -258,6 +265,7 @@ class CoverageLoadService(private val project: Project) {
                         // can populate alongside it before we trigger highlight refresh.
                         val dataService = CoverageDataService.getInstance(project)
                         dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
+                        computeAndStoreWarningContext(result.resolved.gitRoot)
                         dataService.setCov4Reader(freshReader)
                         loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.85)
                         applyCoverageFromReader(freshReader, result.resolved, result.artifactCount)
@@ -470,6 +478,7 @@ class CoverageLoadService(private val project: Project) {
         val previousCommit = dataService.coverageCommitHash
 
         dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
+        computeAndStoreWarningContext(result.resolved.gitRoot)
         dataService.setCoverageAll(result.coverage)
 
         log.info("Coverage: loaded coverage for ${result.coverage.size} files from ${result.artifactCount} coverage artifacts at commit ${result.resolved.commitHash}")
@@ -493,6 +502,7 @@ class CoverageLoadService(private val project: Project) {
         val previousCommit = dataService.coverageCommitHash
 
         dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot, stale = false)
+        computeAndStoreWarningContext(resolved.gitRoot)
         dataService.setCov4Reader(reader)
 
         log.info("Coverage: loaded coverage via reader for ${reader.allFilePaths.size} files from $artifactCount coverage artifacts at commit ${resolved.commitHash}")
@@ -626,12 +636,18 @@ class CoverageLoadService(private val project: Project) {
 
                     val reader = cache.get(hash)
                     if (reader != null) {
-                        if (gitRoot != null) dataService.setCoverageContext(hash, gitRoot, stale = false)
+                        if (gitRoot != null) {
+                            dataService.setCoverageContext(hash, gitRoot, stale = false)
+                            computeAndStoreWarningContext(gitRoot)
+                        }
                         dataService.setCov4Reader(reader)
                         cache.updateLastUsed(hash)
                     } else {
                         log.warn("Coverage: failed to reopen freshly-written .cov4 for local file, falling back to in-memory map")
-                        if (gitRoot != null) dataService.setCoverageContext(hash, gitRoot, stale = false)
+                        if (gitRoot != null) {
+                            dataService.setCoverageContext(hash, gitRoot, stale = false)
+                            computeAndStoreWarningContext(gitRoot)
+                        }
                         dataService.setCoverageAll(coverage)
                     }
 
@@ -679,6 +695,7 @@ class CoverageLoadService(private val project: Project) {
 
             if (gitRoot != null) {
                 dataService.setCoverageContext(commitHash, gitRoot, stale = false)
+                computeAndStoreWarningContext(gitRoot)
             } else {
                 log.warn("Coverage: loadFromCache — could not determine git root; coverage context not updated")
             }
@@ -702,6 +719,37 @@ class CoverageLoadService(private val project: Project) {
         val gitRootPath = CoverageResolver.runGitCommand(projectDir, "rev-parse", "--show-toplevel")
             ?: return null
         return File(gitRootPath)
+    }
+
+    /** Computes all warning-context fields (HEAD, merge-base, behind-counts) and stores them. */
+    private fun computeAndStoreWarningContext(gitRoot: File) {
+        val dataService = CoverageDataService.getInstance(project)
+        val coverageBranch = CoverageApiSettings.getInstance().coverageBranch.trim()
+        val headHash = CoverageResolver.runGitCommand(gitRoot, "rev-parse", "HEAD")
+        val mergeBase = if (coverageBranch.isNotEmpty()) {
+            CoverageResolver.runGitCommand(gitRoot, "merge-base", "HEAD", coverageBranch)
+                ?: CoverageResolver.runGitCommand(gitRoot, "merge-base", "HEAD", "origin/$coverageBranch")
+        } else null
+
+        val primaryBehindBy = if (headHash != null && dataService.coverageCommitHash != null && headHash != dataService.coverageCommitHash) {
+            countBehind(gitRoot, dataService.coverageCommitHash!!, headHash)
+        } else null
+
+        val baselineBehindBy = if (mergeBase != null && dataService.baselineCommitHash != null && mergeBase != dataService.baselineCommitHash) {
+            countBehind(gitRoot, dataService.baselineCommitHash!!, mergeBase)
+        } else null
+
+        dataService.setWarningContext(headHash, mergeBase, primaryBehindBy, baselineBehindBy)
+        if (mergeBase != null) {
+            log.info("Coverage: stored warning context — head=${headHash?.take(8)}, mergeBase=${mergeBase.take(8)}, primaryBehindBy=$primaryBehindBy, baselineBehindBy=$baselineBehindBy")
+        } else {
+            log.info("Coverage: stored warning context — head=${headHash?.take(8)}, mergeBase=null")
+        }
+    }
+
+    private fun countBehind(gitRoot: File, actual: String, expected: String): Int? {
+        val output = CoverageResolver.runGitCommand(gitRoot, "rev-list", "--count", "$actual..$expected")
+        return output?.trim()?.toIntOrNull()
     }
 
     /** Walks up from [dir] to find the nearest `.git` directory. */
