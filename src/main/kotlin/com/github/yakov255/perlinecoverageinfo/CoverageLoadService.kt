@@ -480,11 +480,11 @@ class CoverageLoadService(private val project: Project) {
                 val existingFileMap = mergedCoverage.getOrPut(filePath) { mutableMapOf() }
                 for ((lineNum, testNames) in lineMap) {
                     val existingTests = existingFileMap.getOrPut(lineNum) { mutableListOf() }
-                    for (testName in testNames) {
-                        if (testName !in existingTests) {
-                            existingTests.add(testName)
-                        }
-                    }
+                    val unionSet = mutableSetOf<String>()
+                    unionSet.addAll(existingTests)
+                    unionSet.addAll(testNames)
+                    existingTests.clear()
+                    existingTests.addAll(unionSet)
                 }
             }
         }
