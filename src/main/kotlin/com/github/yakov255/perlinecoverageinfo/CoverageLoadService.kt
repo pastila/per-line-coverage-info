@@ -12,6 +12,9 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.GZIPInputStream
 
 /**
@@ -364,34 +367,75 @@ class CoverageLoadService(private val project: Project) {
 
         log.info("Coverage: found ${artifactJobs.size} jobs with artifacts in pipeline ${resolved.pipelineId}")
 
-        indicator.text = "Downloading coverage artifacts..."
-        indicator.fraction = fractionStart + (fractionEnd - fractionStart) * 0.15
+        if (indicator.isCanceled) {
+            throw CoverageApiException(
+                "Coverage loading was cancelled",
+                kind = CoverageErrorKind.NO_DATA,
+            )
+        }
 
-        val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
         val totalJobs = artifactJobs.size
+        val span = fractionEnd - fractionStart
+        indicator.text = "Downloading coverage artifacts..."
+        indicator.fraction = fractionStart + span * 0.15
 
-        for ((index, job) in artifactJobs.withIndex()) {
-            indicator.text = "Downloading artifact from job '${job.name}'... (${index + 1}/$totalJobs)"
-            val span = fractionEnd - fractionStart
-            indicator.fraction = fractionStart + span * (0.15 + 0.8 * (index.toDouble() / totalJobs))
-
-            if (indicator.isCanceled) {
-                throw CoverageApiException(
-                    "Coverage loading was cancelled",
-                    kind = CoverageErrorKind.NO_DATA,
-                )
-            }
-
-            val covtBytes = gitLabClient.downloadSingleArtifactFile(
+        val progressCount = AtomicInteger(0)
+        val futures = artifactJobs.map { job ->
+            gitLabClient.downloadSingleArtifactFileAsync(
                 settings.gitlabProjectId,
                 job.id,
                 "coverage-reports/coverage.covt.gz",
+            ).thenApply { covtBytes ->
+                log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
+                val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
+                log.info("Coverage: parsed ${parsed.size} files from job ${job.name}")
+
+                val done = progressCount.incrementAndGet()
+                val text = "Downloading artifact from job '${job.name}'... ($done/$totalJobs)"
+                val fraction = fractionStart + span * (0.15 + 0.8 * (done.toDouble() / totalJobs))
+                ApplicationManager.getApplication().invokeLater {
+                    indicator.text = text
+                    indicator.fraction = fraction
+                }
+
+                parsed
+            }
+        }
+
+        try {
+            CompletableFuture.allOf(*futures.toTypedArray()).join()
+        } catch (e: CompletionException) {
+            futures.forEach { it.cancel(true) }
+            val cause = e.cause ?: e
+            if (cause is CoverageApiException) throw cause
+            throw CoverageApiException(
+                "Failed to download coverage artifacts",
+                cause,
+                kind = CoverageErrorKind.NETWORK,
             )
-            log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
+        }
 
-            val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
-            log.info("Coverage: parsed ${parsed.size} files from job ${job.name}")
+        if (indicator.isCanceled) {
+            futures.forEach { it.cancel(true) }
+            throw CoverageApiException(
+                "Coverage loading was cancelled",
+                kind = CoverageErrorKind.NO_DATA,
+            )
+        }
 
+        val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
+        for (future in futures) {
+            val parsed = try {
+                future.join()
+            } catch (e: CompletionException) {
+                val cause = e.cause ?: e
+                if (cause is CoverageApiException) throw cause
+                throw CoverageApiException(
+                    "Failed to download coverage artifacts",
+                    cause,
+                    kind = CoverageErrorKind.NETWORK,
+                )
+            }
             for ((filePath, lineMap) in parsed) {
                 val existingFileMap = mergedCoverage.getOrPut(filePath) { mutableMapOf() }
                 for ((lineNum, testNames) in lineMap) {
