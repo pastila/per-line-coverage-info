@@ -10,7 +10,7 @@ data class WarningDetail(
     val actual: String,
     val behindBy: Int?,
 ) {
-    private fun formatBehind(): String = behindBy?.let { " ($it commit(s) behind)" } ?: ""
+    private fun formatBehind(): String = behindBy?.takeIf { it > 0 }?.let { " ($it commit(s) behind)" } ?: ""
 
     fun formatPrimaryText(): String =
         "Feature coverage is from $actual, not HEAD ($expected)${formatBehind()}"
@@ -88,10 +88,13 @@ class CoverageWarningService(private val project: Project) {
         val head = dataService.headHash ?: return null
         if (coverageCommit == head) return null
 
+        val behindBy = dataService.primaryBehindBy
+        if (behindBy != null && behindBy <= 0) return null
+
         return WarningDetail(
             expected = head.take(8),
             actual = coverageCommit.take(8),
-            behindBy = dataService.primaryBehindBy,
+            behindBy = behindBy,
         )
     }
 
@@ -101,10 +104,13 @@ class CoverageWarningService(private val project: Project) {
         val mergeBase = dataService.mergeBaseHash ?: return null
         if (baselineCommit == mergeBase) return null
 
+        val behindBy = dataService.baselineBehindBy
+        if (behindBy != null && behindBy <= 0) return null
+
         return WarningDetail(
             expected = mergeBase.take(8),
             actual = baselineCommit.take(8),
-            behindBy = dataService.baselineBehindBy,
+            behindBy = behindBy,
         )
     }
 

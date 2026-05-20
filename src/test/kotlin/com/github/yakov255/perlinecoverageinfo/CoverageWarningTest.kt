@@ -62,9 +62,21 @@ class CoverageWarningTest {
     }
 
     @Test
+    fun `WarningDetail formatPrimaryText with behindBy 0 omits suffix`() {
+        val d = WarningDetail("abc12345", "def67890", 0)
+        assertEquals("Feature coverage is from def67890, not HEAD (abc12345)", d.formatPrimaryText())
+    }
+
+    @Test
     fun `WarningDetail formatBaselineText with behindBy`() {
         val d = WarningDetail("abc12345", "def67890", 5)
         assertEquals("Baseline coverage is from def67890, not merge-base (abc12345) (5 commit(s) behind)", d.formatBaselineText())
+    }
+
+    @Test
+    fun `WarningDetail formatBaselineText with behindBy 0 omits suffix`() {
+        val d = WarningDetail("abc12345", "def67890", 0)
+        assertEquals("Baseline coverage is from def67890, not merge-base (abc12345)", d.formatBaselineText())
     }
 
     @Test
@@ -74,8 +86,20 @@ class CoverageWarningTest {
     }
 
     @Test
+    fun `WarningDetail formatPrimaryHtml with behindBy 0 omits suffix`() {
+        val d = WarningDetail("abc12345", "def67890", 0)
+        assertEquals("Feature coverage is from <b>def67890</b>, not HEAD (<b>abc12345</b>)", d.formatPrimaryHtml())
+    }
+
+    @Test
     fun `WarningDetail formatBaselineHtml without behindBy`() {
         val d = WarningDetail("abc12345", "def67890", null)
+        assertEquals("Baseline coverage is from <b>def67890</b>, not merge-base (<b>abc12345</b>)", d.formatBaselineHtml())
+    }
+
+    @Test
+    fun `WarningDetail formatBaselineHtml with behindBy 0 omits suffix`() {
+        val d = WarningDetail("abc12345", "def67890", 0)
         assertEquals("Baseline coverage is from <b>def67890</b>, not merge-base (<b>abc12345</b>)", d.formatBaselineHtml())
     }
 

@@ -776,11 +776,13 @@ class CoverageLoadService(private val project: Project) {
         } else null
 
         val primaryBehindBy = if (headHash != null && dataService.coverageCommitHash != null && headHash != dataService.coverageCommitHash) {
-            countBehind(gitRoot, dataService.coverageCommitHash!!, headHash)
+            val count = countBehind(gitRoot, dataService.coverageCommitHash!!, headHash)
+            if (count != null && count > 0) count else null
         } else null
 
         val baselineBehindBy = if (mergeBase != null && dataService.baselineCommitHash != null && mergeBase != dataService.baselineCommitHash) {
-            countBehind(gitRoot, dataService.baselineCommitHash!!, mergeBase)
+            val count = countBehind(gitRoot, dataService.baselineCommitHash!!, mergeBase)
+            if (count != null && count > 0) count else null
         } else null
 
         dataService.setWarningContext(headHash, mergeBase, primaryBehindBy, baselineBehindBy)
