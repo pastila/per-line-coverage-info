@@ -33,6 +33,9 @@ class CoverageLoadService(private val project: Project) {
     @Volatile
     private var loadingCommitHash: String? = null
 
+    @Volatile
+    private var pendingReload = false
+
     /**
      * Validates that the plugin is enabled and GitLab settings are configured.
      * Returns an error message if invalid, null if OK.
@@ -61,7 +64,8 @@ class CoverageLoadService(private val project: Project) {
         log.info("Coverage: offline-first load started")
 
         if (loadingCommitHash != null) {
-            log.info("Coverage: load already in progress, skipping redundant loadOfflineFirst")
+            pendingReload = true
+            log.info("Coverage: load already in progress, will reload after completion")
             return
         }
 
@@ -187,7 +191,8 @@ class CoverageLoadService(private val project: Project) {
         }
 
         if (loadingCommitHash != null) {
-            log.info("Coverage: GitLab load already in progress (commit ${loadingCommitHash?.take(8)}), skipping")
+            pendingReload = true
+            log.info("Coverage: GitLab load already in progress, will reload after completion")
             onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
             return
         }
@@ -311,6 +316,13 @@ class CoverageLoadService(private val project: Project) {
                     onError?.let { ApplicationManager.getApplication().invokeLater { it(friendly) } }
                 } finally {
                     loadingCommitHash = null
+                    if (pendingReload) {
+                        pendingReload = false
+                        log.info("Coverage: pending reload detected, starting new load")
+                        ApplicationManager.getApplication().invokeLater {
+                            loadFromGitLab(showErrors = false)
+                        }
+                    }
                     onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
                 }
             }
