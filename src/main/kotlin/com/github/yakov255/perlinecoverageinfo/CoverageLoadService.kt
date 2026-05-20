@@ -15,6 +15,7 @@ import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.GZIPInputStream
 
 /**
@@ -388,18 +389,37 @@ class CoverageLoadService(private val project: Project) {
         indicator.fraction = fractionStart + span * 0.15
 
         val progressCount = AtomicInteger(0)
+        val batchStartTime = System.nanoTime()
+        val totalBytesReceived = AtomicLong(0)
         val futures = artifactJobs.map { job ->
+            var jobBytesReceived = 0L
+            val onProgress: (Long, Long) -> Unit = { received, total ->
+                val delta = received - jobBytesReceived
+                if (delta > 0) {
+                    jobBytesReceived = received
+                    val allBytes = totalBytesReceived.addAndGet(delta)
+                    val elapsedSec = (System.nanoTime() - batchStartTime) / 1_000_000_000.0
+                    val speed = if (elapsedSec > 0) allBytes / elapsedSec else 0.0
+                    val totalStr = if (total > 0) "/${formatBytes(total)}" else ""
+                    val text2 = "${job.name} — ${formatBytes(received)}$totalStr @ ${formatSpeed(speed)}"
+                    ApplicationManager.getApplication().invokeLater {
+                        indicator.text2 = text2
+                    }
+                }
+            }
+
             gitLabClient.downloadSingleArtifactFileAsync(
                 settings.gitlabProjectId,
                 job.id,
                 "coverage-reports/coverage.covt.gz",
+                onProgress,
             ).thenApply { covtBytes ->
                 log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
                 val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
                 log.info("Coverage: parsed ${parsed.size} files from job ${job.name}")
 
                 val done = progressCount.incrementAndGet()
-                val text = "Downloading artifact from job '${job.name}'... ($done/$totalJobs)"
+                val text = "Downloading artifacts... ($done/$totalJobs)"
                 val fraction = fractionStart + span * (0.15 + 0.8 * (done.toDouble() / totalJobs))
                 ApplicationManager.getApplication().invokeLater {
                     indicator.text = text
@@ -466,6 +486,18 @@ class CoverageLoadService(private val project: Project) {
             resolved = resolved,
             artifactCount = totalJobs,
         )
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024L * 1024 -> "${bytes / 1024} KB"
+        else -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    }
+
+    private fun formatSpeed(bytesPerSec: Double): String = when {
+        bytesPerSec < 1024 -> "%.0f B/s".format(bytesPerSec)
+        bytesPerSec < 1024.0 * 1024.0 -> "%.1f KB/s".format(bytesPerSec / 1024.0)
+        else -> "%.1f MB/s".format(bytesPerSec / (1024.0 * 1024.0))
     }
 
     /**

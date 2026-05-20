@@ -6,13 +6,21 @@ import java.net.URLEncoder
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
+import java.nio.ByteBuffer
 import java.time.Duration
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.CompletionStage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.Flow.Subscription
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.net.http.HttpResponse.BodyHandler
+import java.net.http.HttpResponse.BodyHandlers
+import java.net.http.HttpResponse.BodySubscriber
+import java.net.http.HttpResponse.BodySubscribers
+import java.net.http.HttpResponse.ResponseInfo
 
 class GitLabApiClient(baseUrl: String, private val privateToken: String) {
 
@@ -183,10 +191,56 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
     fun downloadSingleArtifactFile(projectId: Long, jobId: Long, artifactPath: String): ByteArray =
         makeRawRequest("/api/v4/projects/$projectId/jobs/$jobId/artifacts/${encode(artifactPath)}")
 
-    fun downloadSingleArtifactFileAsync(projectId: Long, jobId: Long, artifactPath: String): CompletableFuture<ByteArray> =
-        makeRawRequestAsync("/api/v4/projects/$projectId/jobs/$jobId/artifacts/${encode(artifactPath)}")
+    fun downloadSingleArtifactFileAsync(
+        projectId: Long,
+        jobId: Long,
+        artifactPath: String,
+        onProgress: ((received: Long, total: Long) -> Unit)? = null,
+    ): CompletableFuture<ByteArray> =
+        makeRawRequestAsync(
+            "/api/v4/projects/$projectId/jobs/$jobId/artifacts/${encode(artifactPath)}",
+            onProgress,
+        )
 
-    private fun makeRawRequestAsync(endpoint: String): CompletableFuture<ByteArray> {
+    /**
+     * A [BodySubscriber] that wraps the standard [BodySubscribers.ofByteArray]
+     * and reports progress via [onProgress] on every chunk.
+     */
+    private class ProgressBodySubscriber(
+        private val totalBytes: Long,
+        private val onProgress: (Long) -> Unit,
+    ) : BodySubscriber<ByteArray> {
+
+        private val delegate = BodySubscribers.ofByteArray()
+        private var received = 0L
+
+        override fun getBody(): CompletionStage<ByteArray> = delegate.body
+
+        override fun onSubscribe(subscription: Subscription) {
+            delegate.onSubscribe(subscription)
+        }
+
+        override fun onNext(items: List<ByteBuffer>) {
+            for (buf in items) {
+                received += buf.remaining().toLong()
+            }
+            onProgress(received)
+            delegate.onNext(items)
+        }
+
+        override fun onError(t: Throwable) {
+            delegate.onError(t)
+        }
+
+        override fun onComplete() {
+            delegate.onComplete()
+        }
+    }
+
+    private fun makeRawRequestAsync(
+        endpoint: String,
+        onProgress: ((received: Long, total: Long) -> Unit)? = null,
+    ): CompletableFuture<ByteArray> {
         val url = "${this.baseUrl}$endpoint"
 
         fun attempt(n: Int): CompletableFuture<ByteArray> {
@@ -197,7 +251,20 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                 .header("PRIVATE-TOKEN", privateToken)
                 .timeout(Duration.ofSeconds(30))
                 .build()
-            return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofByteArray())
+
+            val bodyHandler: BodyHandler<ByteArray> = if (onProgress != null) {
+                BodyHandler { responseInfo: ResponseInfo ->
+                    val total = responseInfo.headers()
+                        .firstValue("content-length")
+                        .map(String::toLong)
+                        .orElse(-1L)
+                    ProgressBodySubscriber(total) { received -> onProgress(received, total) }
+                }
+            } else {
+                BodyHandlers.ofByteArray()
+            }
+
+            return httpClient.sendAsync(request, bodyHandler)
                 .orTimeout(30, TimeUnit.SECONDS)
                 .thenApplyAsync({ response ->
                     log.info("GitLab API raw response: HTTP ${response.statusCode()} for $url (${response.body().size} bytes) (attempt $n)")
