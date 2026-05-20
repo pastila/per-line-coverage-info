@@ -31,6 +31,8 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
         lastKnownRevision = currentRevision
         log.info("Coverage: HEAD changed ${previous?.take(8) ?: "null"} → ${currentRevision.take(8)}, scheduling reload")
 
+        CoveragePipelinePoller.getInstance(project).stop()
+
         alarm.cancelAllRequests()
         alarm.addRequest({
             if (!project.isDisposed) {

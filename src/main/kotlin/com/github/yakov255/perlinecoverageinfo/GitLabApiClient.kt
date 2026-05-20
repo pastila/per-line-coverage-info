@@ -172,13 +172,14 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
     fun listPipelines(
         projectId: Long,
         ref: String,
-        status: String = "success",
+        status: String? = "success",
         perPage: Int = 100,
     ): List<GitLabPipeline> =
         makeRequest(
             "/api/v4/projects/$projectId/pipelines" +
-                "?ref=${encode(ref)}&status=${encode(status)}&per_page=$perPage" +
-                "&order_by=updated_at&sort=desc"
+                "?ref=${encode(ref)}" +
+                (status?.let { "&status=${encode(it)}" } ?: "") +
+                "&per_page=$perPage&order_by=updated_at&sort=desc"
         )
 
     fun listPipelineJobs(

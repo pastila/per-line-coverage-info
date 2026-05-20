@@ -324,6 +324,7 @@ class CoverageLoadService(private val project: Project) {
                         }
                     }
                     onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+                    CoveragePipelinePoller.getInstance(project).start()
                 }
             }
         })
