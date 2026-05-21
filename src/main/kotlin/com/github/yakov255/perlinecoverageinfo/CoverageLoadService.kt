@@ -118,14 +118,6 @@ class CoverageLoadService(private val project: Project) {
                             cache.updateLastUsed(cachedCommit)
                             ApplicationManager.getApplication().invokeLater {
                                 CoverageHighlighter.applyToOpenEditors(project)
-                                NotificationGroupManager.getInstance()
-                                    .getNotificationGroup("Coverage Notifications")
-                                    .createNotification(
-                                        "Showing cached coverage",
-                                        "Coverage from commit ${cachedCommit.take(8)}. Fetching fresh data…",
-                                        NotificationType.INFORMATION,
-                                    )
-                                    .notify(project)
                             }
                         }
                         // Always try to fetch fresh in background (errors are silent)
@@ -151,14 +143,6 @@ class CoverageLoadService(private val project: Project) {
                     cache.updateLastUsed(latestArtifact.commitHash)
                     ApplicationManager.getApplication().invokeLater {
                         CoverageHighlighter.applyToOpenEditors(project)
-                        NotificationGroupManager.getInstance()
-                            .getNotificationGroup("Coverage Notifications")
-                            .createNotification(
-                                "Showing cached coverage",
-                                "Coverage from commit ${latestArtifact.commitHash.take(8)} (may not match current code). Fetching fresh data…",
-                                NotificationType.WARNING,
-                            )
-                            .notify(project)
                     }
                 }
                 // Always try to fetch fresh from GitLab in background

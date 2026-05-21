@@ -1,7 +1,5 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.notification.NotificationGroupManager
-import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
@@ -153,16 +151,6 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
                 if (latestPipeline.sha != reportedFailureSha) {
                     reportedFailureSha = latestPipeline.sha
                     log.info("Coverage: pipeline poll — pipeline ${latestPipeline.id} (${latestPipeline.sha.take(8)}) is ${latestPipeline.status}")
-                    ApplicationManager.getApplication().invokeLater {
-                        NotificationGroupManager.getInstance()
-                            .getNotificationGroup("Coverage Notifications")
-                            .createNotification(
-                                "Pipeline failed",
-                                "Pipeline #${latestPipeline.id} for $branch is ${latestPipeline.status} — coverage unavailable",
-                                NotificationType.WARNING,
-                            )
-                            .notify(project)
-                    }
                 }
                 scheduleNext()
             }
