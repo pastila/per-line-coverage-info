@@ -14,11 +14,6 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
     private val log = CoverageLog.get(CoverageStartupActivity::class.java)
 
     override suspend fun execute(project: Project) {
-        // Initialize McpServerManager so it subscribes to project events
-        // and registers already-open projects. Without this explicit access
-        // the lazy app-level service would never start.
-        McpServerManager.getInstance()
-
         try {
             val loadService = CoverageLoadService.getInstance(project)
 

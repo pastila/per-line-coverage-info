@@ -5,7 +5,7 @@
 PhpStorm plugin that shows per-line PHP coverage inline in the editor. CI collects coverage via a custom PHP/Behat extension (`.covt` files), uploads to GitLab pipeline artifacts; the plugin downloads, caches locally as `.cov4`, and renders via gutter icons + line backgrounds. Clicking a covered line shows the tests that execute it; tests can be re-run from the popup.
 
 - **Plugin ID**: `com.github.yakov255.perlinecoverageinfo`
-- **Platform**: PhpStorm 2024.2.5+, depends on `com.jetbrains.php`, `gherkin`, optional `com.jetbrains.php.behat`, optional `Git4Idea`
+- **Platform**: IntelliJ IDEA Ultimate 2025.2+, depends on `com.intellij.modules.platform`, `com.intellij.mcpServer`, `com.jetbrains.php`, `gherkin`, optional `com.jetbrains.php.behat`, optional `Git4Idea`
 - **Language**: Kotlin, JVM 21 · **Build**: Gradle + IntelliJ Platform Gradle Plugin
 
 ## Project Layout
@@ -25,14 +25,11 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 |------|---------|
 | `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel |
 | `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; triggers `loadOfflineFirst()` for all open projects on Apply/OK if plugin enabled and configured |
-| `CoverageMcpSettings.kt` | Project-level MCP settings: port (17178), enabled flag |
-| `CoverageMcpSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage → MCP Server** |
 
 ### MCP server
 | File | Purpose |
 |------|---------|
-| `McpHandler.kt` | JSON-RPC 2.0 dispatcher; exposes `get_coverage_for_file` tool |
-| `McpServer.kt` | HTTP server on `127.0.0.1:<port>`, `POST /mcp`; lifecycle tied to project open/close |
+| `CoverageMcpToolset.kt` | JetBrains MCP framework toolset via `com.intellij.mcpServer`; exposes `get_coverage_for_file` and `list_files` tools |
 
 ### GitLab integration
 | File | Purpose |
@@ -148,6 +145,7 @@ On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks
 ```
 
 Tool: `get_coverage_for_file` — returns covered/uncovered lines with test names for any PHP file.
+Tool: `list_files` — lists files with coverage data under a directory.
 
 ## Build & Run
 

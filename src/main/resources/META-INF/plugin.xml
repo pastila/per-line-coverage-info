@@ -5,6 +5,7 @@
     <vendor>yakov255</vendor>
 
     <depends>com.intellij.modules.platform</depends>
+    <depends>com.intellij.mcpServer</depends>
     <depends>com.jetbrains.php</depends>
     <depends>gherkin</depends>
     <depends optional="true" config-file="behat-integration.xml">com.jetbrains.php.behat</depends>
@@ -26,10 +27,6 @@
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.AffectedTestsService"/>
         <applicationService
-            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageMcpAppSettings"/>
-        <applicationService
-            serviceImplementation="com.github.yakov255.perlinecoverageinfo.McpServerManager"/>
-        <applicationService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.GitHubUpdateCheckSettings"/>
         <applicationService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.GitHubUpdateCheckService"/>
@@ -38,11 +35,6 @@
             instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"
             id="coverage.api.settings"
             displayName="GitLab Coverage"/>
-        <projectConfigurable
-            parentId="coverage.api.settings"
-            instance="com.github.yakov255.perlinecoverageinfo.CoverageMcpSettingsConfigurable"
-            id="coverage.mcp.settings"
-            displayName="MCP Server"/>
         <editorFactoryListener
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageEditorListener"/>
         <toolWindow id="Coverage Tests"
@@ -56,6 +48,10 @@
                            key="notification.group.coverage"/>
         <postStartupActivity
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageStartupActivity"/>
+    </extensions>
+
+    <extensions defaultExtensionNs="com.intellij.mcpServer">
+        <mcpToolset implementation="com.github.yakov255.perlinecoverageinfo.CoverageMcpToolset"/>
     </extensions>
 
     <actions>
