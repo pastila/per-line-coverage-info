@@ -347,7 +347,8 @@ object BehatTestRunner {
             }
             val env = ExecutionEnvironmentBuilder.create(executor, settings).build(callback)
             runner.execute(env)
-        } catch (_: Throwable) {
+        } catch (e: Throwable) {
+            log.warn("BehatTestRunner: executeWithCallback failed: ${e.message}")
             onFinished(-1)
         }
     }

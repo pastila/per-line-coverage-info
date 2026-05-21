@@ -1,5 +1,6 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.io.File
 
 /**
@@ -11,6 +12,8 @@ import java.io.File
  * that need to re-run.
  */
 object ChangedLinesAnalyzer {
+
+    private val log = CoverageLog.get(ChangedLinesAnalyzer::class.java)
 
     enum class DiffMode {
         /** coverageCommit..HEAD — committed changes only. */
@@ -39,7 +42,12 @@ object ChangedLinesAnalyzer {
     fun analyze(gitRoot: File, coverageCommit: String, mode: DiffMode): List<FileChange> {
         val args = mutableListOf("diff", "--no-color", "-U0", "-M", coverageCommit)
         if (mode == DiffMode.COMMITTED) args.add("HEAD")
-        val raw = runGit(gitRoot, args) ?: return emptyList()
+        val output = runGit(gitRoot, args)
+        if (output == null) {
+            log.warn("ChangedLinesAnalyzer: git diff returned null, treating as no changes")
+            return emptyList()
+        }
+        val raw = output
         return parseUnifiedDiff(raw)
     }
 
@@ -153,7 +161,8 @@ object ChangedLinesAnalyzer {
             val output = process.inputStream.bufferedReader().readText()
             val exitCode = process.waitFor()
             if (exitCode == 0) output else null
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            log.warn("ChangedLinesAnalyzer: git diff command failed: ${e.message}")
             null
         }
     }

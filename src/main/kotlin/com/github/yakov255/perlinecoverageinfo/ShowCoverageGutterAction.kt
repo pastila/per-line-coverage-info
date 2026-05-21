@@ -7,8 +7,11 @@ import com.intellij.openapi.project.DumbAware
 
 class ShowCoverageGutterAction : AnAction(), DumbAware {
 
+    private val log = CoverageLog.get(ShowCoverageGutterAction::class.java)
+
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
+        log.info("ShowCoverageGutterAction: showing coverage gutter")
         CoverageGutterVisibilityService.getInstance(project).visible = true
         CoverageHighlighter.applyToOpenEditors(project)
     }

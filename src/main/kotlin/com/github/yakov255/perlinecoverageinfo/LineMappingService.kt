@@ -3,6 +3,7 @@ package com.github.yakov255.perlinecoverageinfo
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
+import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.io.File
 import java.nio.file.Paths
 
@@ -16,6 +17,8 @@ import java.nio.file.Paths
  */
 @Service(Service.Level.PROJECT)
 class LineMappingService(private val project: Project) {
+
+    private val log = CoverageLog.get(LineMappingService::class.java)
 
     /**
      * Per-file cached old content, keyed by (commitHash, relativePath).
@@ -79,6 +82,7 @@ class LineMappingService(private val project: Project) {
      * Clears all cached data (called when coverage data is reloaded).
      */
     fun clear() {
+        log.info("LineMappingService: clearing ${oldContentCache.size} cached entries")
         oldContentCache.clear()
     }
 
@@ -89,6 +93,7 @@ class LineMappingService(private val project: Project) {
      * keeping both the primary and the baseline commit warm in dual-coverage mode.
      */
     fun pruneToCommits(activeCommits: Set<String>) {
+        log.info("LineMappingService: pruning cache, keeping commits: $activeCommits")
         val it = oldContentCache.entries.iterator()
         while (it.hasNext()) {
             if (it.next().key.first !in activeCommits) it.remove()
@@ -121,7 +126,11 @@ class LineMappingService(private val project: Project) {
 
     private fun getOrFetchOldContent(relativePath: String, commitHash: String): String? {
         val dataService = CoverageDataService.getInstance(project)
-        val gitRoot = dataService.gitRoot ?: return null
+        val gitRoot = dataService.gitRoot
+        if (gitRoot == null) {
+            log.info("LineMappingService: gitRoot is null")
+            return null
+        }
 
         val key = commitHash to relativePath
         oldContentCache[key]?.let { return it }
@@ -129,7 +138,10 @@ class LineMappingService(private val project: Project) {
         val gitPath = toGitRelativePath(relativePath) ?: return null
         val oldContent = CoverageResolver.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
         if (oldContent != null) {
+            log.info("LineMappingService: git show succeeded for $commitHash:$gitPath (${oldContent.length} bytes)")
             oldContentCache[key] = oldContent
+        } else {
+            log.warn("LineMappingService: git show failed for $commitHash:$gitPath")
         }
         return oldContent
     }

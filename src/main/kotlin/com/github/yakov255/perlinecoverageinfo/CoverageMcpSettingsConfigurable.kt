@@ -8,6 +8,7 @@ import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
 import com.intellij.util.ui.UIUtil
+import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.awt.BorderLayout
 import java.awt.Toolkit
 import java.awt.datatransfer.StringSelection
@@ -20,6 +21,8 @@ import javax.swing.*
  * Settings are stored at the application level (shared across projects).
  */
 class CoverageMcpSettingsConfigurable(private val project: Project) : Configurable {
+
+    private val log = CoverageLog.get(CoverageMcpSettingsConfigurable::class.java)
 
     private val enabledCheckbox = JBCheckBox("Enable MCP server")
     private val portField = JBTextField(6)
@@ -138,9 +141,11 @@ class CoverageMcpSettingsConfigurable(private val project: Project) : Configurab
         settings.mcpPort = newPort
         McpServerManager.getInstance().restart(newPort, newEnabled)
         updateStatusLabel()
+        log.info("CoverageMcpSettingsConfigurable: applied MCP settings (port=$newPort, enabled=$newEnabled)")
     }
 
     override fun reset() {
+        log.info("CoverageMcpSettingsConfigurable: reset MCP settings")
         val settings = CoverageMcpAppSettings.getInstance()
         enabledCheckbox.isSelected = settings.mcpEnabled
         portField.text = settings.mcpPort.toString()

@@ -8,6 +8,7 @@ import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
+import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.io.File
 import java.nio.file.Paths
 
@@ -15,18 +16,26 @@ object CoverageHighlighter {
 
     private const val COVERAGE_LAYER = HighlighterLayer.LAST + 1
     val COVERAGE_HIGHLIGHTER_KEY = Key.create<Boolean>("PER_LINE_COVERAGE_HIGHLIGHTER")
+    private val log = CoverageLog.get(CoverageHighlighter::class.java)
 
     fun applyToOpenEditors(project: Project) {
         val dataService = CoverageDataService.getInstance(project)
-        if (!dataService.hasData()) return
+        if (!dataService.hasData()) {
+            log.info("CoverageHighlighter: no data, skipping applyToOpenEditors")
+            return
+        }
 
+        var count = 0
         for (editor in EditorFactory.getInstance().allEditors) {
             if (editor.project != project) continue
             applyToEditor(editor, project)
+            count++
         }
+        log.info("CoverageHighlighter: applied to $count editors")
     }
 
     fun clearAllEditors(project: Project) {
+        log.info("CoverageHighlighter: clearing all editors")
         for (editor in EditorFactory.getInstance().allEditors) {
             if (editor.project != project) continue
             clearCoverageHighlighters(editor)
@@ -35,21 +44,31 @@ object CoverageHighlighter {
 
     fun applyToEditor(editor: Editor, project: Project) {
         val dataService = CoverageDataService.getInstance(project)
-        if (!dataService.hasData()) return
+        if (!dataService.hasData()) {
+            log.info("CoverageHighlighter: no data, skipping editor highlight")
+            return
+        }
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
             clearCoverageHighlighters(editor)
             return
         }
 
         val document = editor.document
-        val virtualFile = FileDocumentManager.getInstance().getFile(document) ?: return
+        val virtualFile = FileDocumentManager.getInstance().getFile(document)
+        if (virtualFile == null) {
+            log.info("CoverageHighlighter: no virtual file for editor, skipping")
+            return
+        }
 
         val hasBaseline = dataService.hasBaseline()
 
         val lineMappingService = LineMappingService.getInstance(project)
         val coverageLines = lineMappingService.getMappedCoverage(virtualFile.path, document.text)
             ?: findCoverageForFile(virtualFile.path, project)
-            ?: return
+        if (coverageLines == null) {
+            log.info("CoverageHighlighter: no coverage found for file, skipping")
+            return
+        }
 
         val baselineLines: Map<Int, List<String>>? = if (hasBaseline) {
             lineMappingService.getMappedBaselineCoverage(virtualFile.path, document.text)

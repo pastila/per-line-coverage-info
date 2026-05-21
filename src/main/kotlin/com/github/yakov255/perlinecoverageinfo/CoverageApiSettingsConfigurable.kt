@@ -194,12 +194,19 @@ class CoverageApiSettingsConfigurable : Configurable {
 
     private fun triggerCoverageLoad() {
         val settings = CoverageApiSettings.getInstance()
-        if (!settings.enabled) return
-        if (settings.gitlabDomain.isBlank() || settings.bearerToken.isBlank() || settings.gitlabProjectId <= 0) return
+        if (!settings.enabled) {
+            log.info("CoverageApiSettingsConfigurable: plugin not enabled, skipping auto-load")
+            return
+        }
+        if (settings.gitlabDomain.isBlank() || settings.bearerToken.isBlank() || settings.gitlabProjectId <= 0) {
+            log.info("CoverageApiSettingsConfigurable: settings not configured, skipping auto-load")
+            return
+        }
 
         invokeLater {
             for (project in ProjectManager.getInstance().openProjects) {
                 if (!project.isDisposed) {
+                    log.info("CoverageApiSettingsConfigurable: triggering load for project ${project.name}")
                     CoverageLoadService.getInstance(project).loadOfflineFirst()
                 }
             }

@@ -75,6 +75,7 @@ class CoverageDataService(private val project: Project) {
      * Closes any existing COV4 reader.
      */
     fun setCoverageAll(allData: Map<String, Map<Int, List<String>>>) {
+        log.info("CoverageDataService: setCoverageAll — ${allData.size} files")
         closeCov4Reader()
         data.clear()
         data.putAll(allData)
@@ -151,6 +152,7 @@ class CoverageDataService(private val project: Project) {
     }
 
     fun clear() {
+        log.info("CoverageDataService: clearing — commit=${coverageCommitHash?.take(8)}, files=${if (data.isNotEmpty()) data.size else cov4Reader?.allFilePaths?.size}")
         closeCov4Reader()
         closeBaselineReader()
         baselineReader = null
@@ -170,6 +172,7 @@ class CoverageDataService(private val project: Project) {
     fun hasData(): Boolean = data.isNotEmpty() || cov4Reader != null
 
     fun setCoverageContext(commitHash: String, gitRoot: java.io.File, stale: Boolean = false) {
+        log.info("CoverageDataService: setCoverageContext — commit=${commitHash.take(8)}, stale=$stale, gitRoot=$gitRoot")
         this.coverageCommitHash = commitHash
         this.gitRoot = gitRoot
         this.isStale = stale

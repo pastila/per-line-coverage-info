@@ -1,6 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.openapi.project.Project
+import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.io.File
 
 data class ResolvedPipeline(
@@ -332,6 +333,8 @@ class CoverageResolver(
 
 
     companion object {
+        private val log = CoverageLog.get(CoverageResolver::class.java)
+
         fun runGitCommand(gitRoot: File, vararg args: String): String? {
             return try {
                 val process = ProcessBuilder("git", *args)
@@ -341,7 +344,8 @@ class CoverageResolver(
                 val output = process.inputStream.bufferedReader().readText().trim()
                 val exitCode = process.waitFor()
                 if (exitCode == 0 && output.isNotEmpty()) output else null
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                log.warn("CoverageResolver: git command failed: ${e.message}")
                 null
             }
         }

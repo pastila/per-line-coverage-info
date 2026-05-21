@@ -12,9 +12,11 @@ import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.GlobalSearchScope
 import org.jetbrains.plugins.cucumber.psi.GherkinFile
 import org.jetbrains.plugins.cucumber.psi.GherkinStepsHolder
+import com.github.yakov255.perlinecoverageinfo.CoverageLog
 
 internal object CoverageTestNavigator {
 
+    private val log = CoverageLog.get(CoverageTestNavigator::class.java)
     private val BEHAT_TEST_PATTERN = Regex("""^.+\.feature:\d+$""")
 
     /**
@@ -59,8 +61,13 @@ internal object CoverageTestNavigator {
 
         if (DumbService.isDumb(project)) return
 
+        log.info("CoverageTestNavigator: navigating to test: $testName")
         val methodName = testName.substringAfterLast("::", testName).substringAfterLast("\\", testName)
         val className = testName.substringBeforeLast("::", "").substringAfterLast("\\", "")
+
+        if (className.isEmpty()) {
+            log.warn("CoverageTestNavigator: empty class name in test: $testName")
+        }
 
         if (className.isNotEmpty()) {
             @Suppress("DEPRECATION")
@@ -79,18 +86,25 @@ internal object CoverageTestNavigator {
                     FileEditorManager.getInstance(project)
                         .openTextEditor(OpenFileDescriptor(project, vf, 0), true)
                 }
+            } else {
+                log.warn("CoverageTestNavigator: PHP file not found for class: $className")
             }
         }
     }
 
     fun navigateToBehatTest(project: Project, testName: String) {
+        log.info("CoverageTestNavigator: navigating to behat test: $testName")
         val rawFeaturePath = testName.substringBeforeLast(":", "")
         val featurePath = toProjectRelativeFeaturePath(rawFeaturePath, project)
         val lineStr = testName.substringAfterLast(":", "")
         val lineNumber = lineStr.toIntOrNull() ?: 0
 
         val projectDir = project.guessProjectDir() ?: return
-        val vf = VfsUtil.findRelativeFile(featurePath, projectDir) ?: return
+        val vf = VfsUtil.findRelativeFile(featurePath, projectDir)
+        if (vf == null) {
+            log.warn("CoverageTestNavigator: feature file not found: $featurePath")
+            return
+        }
 
         val line = if (lineNumber > 0) lineNumber - 1 else 0
         FileEditorManager.getInstance(project)

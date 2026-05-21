@@ -79,7 +79,10 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         }
 
         val gitRoot = findGitRoot()
-        if (gitRoot == null) { scheduleNext(); return }
+        if (gitRoot == null) {
+            log.warn("Coverage: pipeline poll — cannot find git root, retrying in ${POLL_INTERVAL_MS}ms")
+            scheduleNext(); return
+        }
 
         val branch = CoverageResolver.runGitCommand(gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
         if (branch.isNullOrBlank() || branch == "HEAD") {
@@ -92,10 +95,13 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         val remoteSha = try {
             CoverageResolver.runGitCommand(gitRoot, "ls-remote", "origin", "refs/heads/$branch")
                 ?.substringBefore('\t')
-        } catch (_: Exception) { null }
+        } catch (e: Exception) {
+            log.warn("Coverage: pipeline poll — git ls-remote failed: ${e.message}")
+            null
+        }
 
         if (remoteSha == null) {
-            // Couldn't contact remote — likely offline, keep polling
+            log.info("Coverage: pipeline poll — could not contact remote, retrying in ${POLL_INTERVAL_MS}ms")
             scheduleNext()
             return
         }
@@ -104,7 +110,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         val loadedSha = dataService.coverageCommitHash
 
         if (remoteSha == loadedSha) {
-            // Remote is at the same commit as our coverage — nothing new
+            log.info("Coverage: pipeline poll — remote at same commit as loaded coverage")
             scheduleNext()
             return
         }
@@ -130,7 +136,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         consecutiveErrors = 0
 
         if (latestPipeline == null) {
-            // No pipeline for this branch yet — wait for one to be created
+            log.info("Coverage: pipeline poll — no pipeline found on '$branch', retrying in ${POLL_INTERVAL_MS}ms")
             scheduleNext()
             return
         }
