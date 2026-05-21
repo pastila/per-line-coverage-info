@@ -464,8 +464,15 @@ class CoverageLoadService(private val project: Project) {
             )
         }
 
+        val totalFutures = futures.size
+        ApplicationManager.getApplication().invokeLater {
+            indicator.text = "Processing reports..."
+            indicator.text2 = ""
+            indicator.fraction = fractionStart + span * 0.95
+        }
+
         val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
-        for (future in futures) {
+        for ((futureIndex, future) in futures.withIndex()) {
             val parsed = try {
                 future.join()
             } catch (e: CompletionException) {
@@ -487,6 +494,10 @@ class CoverageLoadService(private val project: Project) {
                     existingTests.clear()
                     existingTests.addAll(unionSet)
                 }
+            }
+            val processFraction = fractionStart + span * (0.95 + 0.04 * ((futureIndex + 1).toDouble() / totalFutures))
+            ApplicationManager.getApplication().invokeLater {
+                indicator.fraction = processFraction
             }
         }
 
