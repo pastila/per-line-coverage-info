@@ -4,7 +4,11 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 <!-- Plugin description -->
-Per-Line Coverage Info is an IntelliJ IDEA plugin that integrates with external coverage APIs to display real-time per-line code coverage information directly in the editor. It provides visual indicators for covered and uncovered lines, enhancing code quality analysis.
+Shows per-line PHP test coverage inline in the editor. Downloads coverage artifacts
+from GitLab CI pipelines, caches them locally, and renders gutter icons and line backgrounds
+for covered, uncovered, and feature-only lines. Click any covered line to see which tests
+execute it — with one-click test re-run. Supports dual-coverage mode that highlights tests
+new on the feature branch versus the base branch.
 <!-- Plugin description end -->
 
 ## Table of Contents

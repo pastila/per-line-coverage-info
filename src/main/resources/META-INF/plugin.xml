@@ -1,7 +1,7 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
 <idea-plugin>
     <id>com.github.yakov255.perlinecoverageinfo</id>
-    <name>per-line-coverage-info</name>
+    <name>Per-Line Coverage Info</name>
     <vendor>yakov255</vendor>
 
     <depends>com.intellij.modules.platform</depends>
