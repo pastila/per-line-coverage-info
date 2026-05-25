@@ -256,7 +256,7 @@ class CoverageResolver(
             val jobs = gitLabClient.listPipelineJobs(projectId, pipelineId)
             jobs.any { job ->
                 job.status == "success"
-                    && job.artifactsFile != null
+                    && (job.artifactsFile != null || job.artifacts.isNotEmpty())
                     && job.name.contains("behat", ignoreCase = true)
             }
         } catch (e: Exception) {
