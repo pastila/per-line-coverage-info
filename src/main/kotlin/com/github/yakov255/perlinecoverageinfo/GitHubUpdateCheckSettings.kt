@@ -23,9 +23,9 @@ import com.intellij.util.xmlb.XmlSerializerUtil
 class GitHubUpdateCheckSettings : PersistentStateComponent<GitHubUpdateCheckSettings.State> {
 
     data class State(
-        var dontCheckAgain: Boolean = false,
-        var lastCheckedAtMs: Long = 0L,
-        var lastSeenVersion: String = "",
+        @Volatile var dontCheckAgain: Boolean = false,
+        @Volatile var lastCheckedAtMs: Long = 0L,
+        @Volatile var lastSeenVersion: String = "",
     )
 
     private var state = State()

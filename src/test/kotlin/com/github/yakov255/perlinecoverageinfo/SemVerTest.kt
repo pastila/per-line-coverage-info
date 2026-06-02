@@ -49,9 +49,8 @@ class SemVerTest {
 
     @Test
     fun `malformed versions fall back to lexicographic compare`() {
-        // Should not crash; returns *some* deterministic ordering.
-        SemVer.compare("garbage", "2.2.0")
-        SemVer.compare("2.2", "2.2.0") // 2-part still parsed (treated as 2.2.0)
+        assertTrue(SemVer.compare("garbage", "2.2.0") > 0)
+        assertEquals(0, SemVer.compare("2.2", "2.2.0"))
     }
 
     @Test

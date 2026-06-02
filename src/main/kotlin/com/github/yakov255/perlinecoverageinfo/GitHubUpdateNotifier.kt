@@ -50,7 +50,6 @@ object GitHubUpdateNotifier {
                 })
 
             notification.notify(project)
-            settings.lastSeenVersion = result.latestVersion
         }
     }
 }

@@ -4,6 +4,8 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.extensions.PluginId
 import com.intellij.ide.plugins.PluginManagerCore
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.net.URI
@@ -63,7 +65,7 @@ class GitHubUpdateCheckService {
      * Checks for updates honoring [GitHubUpdateCheckSettings.dontCheckAgain] and
      * the [throttleMs] minimum interval between API calls.
      */
-    fun checkForUpdate(
+    suspend fun checkForUpdate(
         throttleMs: Long = TimeUnit.HOURS.toMillis(24),
         nowMs: Long = System.currentTimeMillis(),
     ): Result {
@@ -75,12 +77,12 @@ class GitHubUpdateCheckService {
 
         return try {
             val release = fetchLatestRelease()
-            settings.lastCheckedAtMs = nowMs
             if (release == null) return Result.Failed("no release returned")
             val latestVersion = normalizeTag(release.tag_name)
             if (latestVersion.isEmpty()) return Result.Failed("empty tag_name")
 
             val cmp = SemVer.compare(latestVersion, currentVersion)
+            settings.lastCheckedAtMs = nowMs
             if (cmp <= 0) {
                 Result.UpToDate
             } else {
@@ -98,7 +100,7 @@ class GitHubUpdateCheckService {
         }
     }
 
-    private fun fetchLatestRelease(): GitHubReleaseDto? {
+    private suspend fun fetchLatestRelease(): GitHubReleaseDto? {
         val url = "https://api.github.com/repos/$REPO/releases/latest"
         log.debug("GitHub update check: GET $url")
         val request = HttpRequest.newBuilder()
@@ -108,7 +110,9 @@ class GitHubUpdateCheckService {
             .header("X-GitHub-Api-Version", "2022-11-28")
             .timeout(Duration.ofSeconds(10))
             .build()
-        val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        val response = withContext(Dispatchers.IO) {
+            httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+        }
         if (response.statusCode() != 200) {
             log.info("GitHub update check: HTTP ${response.statusCode()} from $url")
             return null
