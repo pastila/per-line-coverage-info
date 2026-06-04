@@ -5,6 +5,7 @@
 ## [Unreleased]
 
 ## [2.3.1]
+- Switch to standard IntelliJ custom plugin repository for updates
 - Pipeline polling for automatic coverage refresh
 - Show report merging progress in the progress bar
 - Show download speed and per-job byte progress in progress bar
