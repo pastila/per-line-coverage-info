@@ -162,7 +162,10 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
-     * Loads coverage from GitLab in a background task with progress indicator.
+     * Loads coverage from GitLab in two phases:
+     * 1. Resolution (silent, no progress indicator) — resolve pipeline, check cache
+     * 2. Download (visible, with progress) — only if artifacts need fetching
+     *
      * @param showErrors If true, shows error dialogs on failure. If false, errors are only logged and [onError] is called.
      * @param onComplete Called on the EDT when the task finishes (success or failure), so callers can refresh UI.
      * @param onError Called on the EDT with a short friendly message when the load fails. Ignored when [showErrors]=true.
@@ -194,86 +197,137 @@ class CoverageLoadService(private val project: Project) {
 
         loadingCommitHash = "" // sentinel — refined to actual commit after resolution
 
-        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Coverage from GitLab", true) {
+        // Phase 1: resolve pipeline and check cache — no progress indicator
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                resolvePhase(showErrors, onComplete, onError)
+            } catch (ex: Exception) {
+                log.warn("Coverage: unexpected error during resolve phase: ${ex.message}", ex)
+                if (showErrors) {
+                    val msg = "Failed to resolve coverage: ${ex.message}"
+                    ApplicationManager.getApplication().invokeLater {
+                        Messages.showErrorDialog(project, msg, "Coverage Error")
+                    }
+                }
+                finishLoad(onComplete)
+            }
+        }
+    }
+
+    /**
+     * Resolution phase: clears pinned, cleans cache, resolves pipeline, checks cache.
+     * If both primary and baseline are cached — applies silently.
+     * Otherwise starts [startDownloadTask] with progress indicator.
+     */
+    private fun resolvePhase(showErrors: Boolean, onComplete: (() -> Unit)?, onError: ((String) -> Unit)?) {
+        CoverageUserSelectionService.getInstance(project).pinnedCommitHash = null
+
+        CoverageCacheService.getInstance(project).cleanup()
+
+        val settings = CoverageApiSettings.getInstance()
+        val gitLabClient = GitLabApiClient(settings.gitlabBaseUrl, settings.bearerToken)
+        val resolver = CoverageResolver(gitLabClient, project)
+        val dual = resolver.resolveDual()
+        val resolved = dual.primary
+        loadingCommitHash = resolved.commitHash
+        log.info("Coverage: resolved primary pipeline ${resolved.pipelineId} at commit ${resolved.commitHash.take(8)}")
+        if (dual.baseline != null) {
+            log.info("Coverage: resolved baseline pipeline ${dual.baseline.pipelineId} at commit ${dual.baseline.commitHash.take(8)}")
+        } else {
+            log.info("Coverage: no baseline pipeline (single-coverage mode)")
+        }
+
+        val cache = CoverageCacheService.getInstance(project)
+        val dataService = CoverageDataService.getInstance(project)
+
+        // If the same commit is already loaded, skip the reader swap
+        if (dataService.coverageCommitHash == resolved.commitHash && dataService.hasData()) {
+            log.info("Coverage: commit ${resolved.commitHash.take(8)} already loaded, skipping reader swap")
+            dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
+            computeAndStoreWarningContext(resolved.gitRoot)
+            loadOrFetchBaseline(null, gitLabClient, cache, dual.baseline)
+            finishLoad(onComplete)
+            return
+        }
+
+        val primaryCached = cache.get(resolved.commitHash)
+        val baselineCached = dual.baseline?.let { cache.get(it.commitHash) }
+
+        if (primaryCached != null && baselineCached != null) {
+            // Both cached — apply silently, no progress shown
+            log.info("Coverage: primary and baseline both cached — applying silently")
+            cache.updateLastUsed(resolved.commitHash)
+            dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
+            computeAndStoreWarningContext(resolved.gitRoot)
+            dataService.setCov4Reader(primaryCached)
+            loadOrFetchBaseline(null, gitLabClient, cache, dual.baseline)
+            ApplicationManager.getApplication().invokeLater {
+                CoverageHighlighter.applyToOpenEditors(project)
+                notifyIfFallback(resolved)
+            }
+            finishLoad(onComplete)
+            return
+        }
+
+        // Phase 2: cache miss for primary or baseline — download with progress
+        startDownloadTask(gitLabClient, dual, cache, dataService, primaryCached, baselineCached, resolved,
+            showErrors, onComplete, onError)
+    }
+
+    /**
+     * Download phase: runs inside [Task.Backgroundable] so the user sees progress
+     * in the status bar while artifacts are being fetched.
+     */
+    private fun startDownloadTask(
+        gitLabClient: GitLabApiClient,
+        dual: DualResolved,
+        cache: CoverageCacheService,
+        dataService: CoverageDataService,
+        primaryCached: Cov4Reader?,
+        baselineCached: Cov4Reader?,
+        resolved: ResolvedPipeline,
+        showErrors: Boolean,
+        onComplete: (() -> Unit)?,
+        onError: ((String) -> Unit)?,
+    ) {
+        ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Downloading Coverage", true) {
             override fun run(indicator: ProgressIndicator) {
                 try {
-                    // User triggered a GitLab fetch — clear any manually pinned artifact
-                    // so auto-resolution takes over from now on.
-                    CoverageUserSelectionService.getInstance(project).pinnedCommitHash = null
+                    val wasStale = dataService.isStale
+                    val previousCommit = dataService.coverageCommitHash
 
-                    // Run cache cleanup in the background
-                    CoverageCacheService.getInstance(project).cleanup()
+                    if (primaryCached == null) {
+                        log.info("Coverage: cache miss — downloading primary artifacts for pipeline ${resolved.pipelineId}")
+                        val result = downloadArtifacts(indicator, gitLabClient, resolved,
+                            fractionStart = 0.0, fractionEnd = 0.6)
 
-                    indicator.text = "Resolving coverage pipeline..."
-                    indicator.fraction = 0.0
+                        cache.writeCov4(resolved.commitHash, resolved.pipelineId, result.coverage)
 
-                    val settings = CoverageApiSettings.getInstance()
-                    val gitLabClient = GitLabApiClient(settings.gitlabBaseUrl, settings.bearerToken)
-                    val resolver = CoverageResolver(gitLabClient, project)
-                    val dual = resolver.resolveDual()
-                    val resolved = dual.primary
-                    loadingCommitHash = resolved.commitHash
-                    log.info("Coverage: resolved primary pipeline ${resolved.pipelineId} at commit ${resolved.commitHash.take(8)}")
-                    if (dual.baseline != null) {
-                        log.info("Coverage: resolved baseline pipeline ${dual.baseline.pipelineId} at commit ${dual.baseline.commitHash.take(8)}")
+                        val freshReader = cache.get(resolved.commitHash)
+                        if (freshReader != null) {
+                            dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
+                            computeAndStoreWarningContext(result.resolved.gitRoot)
+                            dataService.setCov4Reader(freshReader)
+                        } else {
+                            log.warn("Coverage: failed to reopen freshly-written .cov4, falling back to in-memory map")
+                            dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
+                            computeAndStoreWarningContext(result.resolved.gitRoot)
+                            dataService.setCoverageAll(result.coverage)
+                        }
                     } else {
-                        log.info("Coverage: no baseline pipeline (single-coverage mode)")
-                    }
-
-                    // Check disk cache by commit hash
-                    val cache = CoverageCacheService.getInstance(project)
-                    val dataService = CoverageDataService.getInstance(project)
-
-                    // If the same commit is already loaded, skip the reader swap
-                    // and only refresh the baseline if necessary.
-                    if (dataService.coverageCommitHash == resolved.commitHash && dataService.hasData()) {
-                        log.info("Coverage: commit ${resolved.commitHash.take(8)} already loaded, skipping reader swap")
-                        dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
-                        computeAndStoreWarningContext(resolved.gitRoot)
-                        loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.7)
-                        return
-                    }
-
-                    val reader = cache.get(resolved.commitHash)
-                    if (reader != null) {
-                        log.info("Coverage: loaded primary from COV4 cache (commit ${resolved.commitHash})")
                         cache.updateLastUsed(resolved.commitHash)
                         dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
                         computeAndStoreWarningContext(resolved.gitRoot)
-                        dataService.setCov4Reader(reader)
-
-                        loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.7)
-
-                        ApplicationManager.getApplication().invokeLater {
-                            CoverageHighlighter.applyToOpenEditors(project)
-                            notifyIfFallback(resolved)
-                        }
-                        return
+                        dataService.setCov4Reader(primaryCached)
                     }
 
-                    log.info("Coverage: cache miss — downloading primary artifacts for pipeline ${resolved.pipelineId}")
-                    val result = downloadArtifacts(indicator, gitLabClient, resolved, fractionStart = 0.1, fractionEnd = 0.7)
+                    loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.6)
 
-                    // Write COV4 to cache, then drop the in-memory merged map and use a
-                    // reader-backed view of the freshly-written file. This keeps steady-state
-                    // memory bounded (only the Cov4Reader index + lazily-decoded files) and
-                    // unifies the post-load state with the cache-hit path above.
-                    cache.writeCov4(resolved.commitHash, resolved.pipelineId, result.coverage)
-
-                    val freshReader = cache.get(resolved.commitHash)
-                    if (freshReader != null) {
-                        // Stage the primary reader on the data service first so the baseline path
-                        // can populate alongside it before we trigger highlight refresh.
-                        val dataService = CoverageDataService.getInstance(project)
-                        dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
-                        computeAndStoreWarningContext(result.resolved.gitRoot)
-                        dataService.setCov4Reader(freshReader)
-                        loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.85)
-                        applyCoverageFromReader(freshReader, result.resolved, result.artifactCount)
-                    } else {
-                        log.warn("Coverage: failed to reopen freshly-written .cov4, falling back to in-memory map")
-                        applyCoverage(result)
-                        loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.85)
+                    log.info("Coverage: loaded coverage for commit ${resolved.commitHash.take(8)}")
+                    ApplicationManager.getApplication().invokeLater {
+                        CoverageHighlighter.applyToOpenEditors(project)
+                        notifyIfFallback(resolved)
+                        notifyRefreshedFromStale(wasStale, previousCommit, resolved)
                     }
                 } catch (ex: CoverageApiException) {
                     log.warn("Coverage: GitLab load failed (${ex.kind}): ${ex.userMessage}")
@@ -310,21 +364,26 @@ class CoverageLoadService(private val project: Project) {
                     }
                     onError?.let { ApplicationManager.getApplication().invokeLater { it(friendly) } }
                 } finally {
-                    loadingCommitHash = null
-                    if (pendingReload) {
-                        pendingReload = false
-                        log.info("Coverage: pending reload detected, starting new load")
-                        ApplicationManager.getApplication().invokeLater {
-                            loadFromGitLab(showErrors = false)
-                        }
-                    }
-                    onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
-                    if (CoverageGutterVisibilityService.getInstance(project).visible) {
-                        CoveragePipelinePoller.getInstance(project).start()
-                    }
+                    finishLoad(onComplete)
                 }
             }
         })
+    }
+
+    /** Resets loading state and handles pending reloads, callbacks, and poller start. */
+    private fun finishLoad(onComplete: (() -> Unit)?) {
+        loadingCommitHash = null
+        if (pendingReload) {
+            pendingReload = false
+            log.info("Coverage: pending reload detected, starting new load")
+            ApplicationManager.getApplication().invokeLater {
+                loadFromGitLab(showErrors = false)
+            }
+        }
+        onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+        if (CoverageGutterVisibilityService.getInstance(project).visible) {
+            CoveragePipelinePoller.getInstance(project).start()
+        }
     }
 
     /**
@@ -530,30 +589,6 @@ class CoverageLoadService(private val project: Project) {
         }
     }
 
-    /**
-     * Reader-backed counterpart to [applyCoverage]. Used right after a fresh
-     * download: the merged map is written to `.cov4`, reopened as a
-     * [Cov4Reader], and handed to [CoverageDataService] so the in-memory map
-     * can be garbage-collected.
-     */
-    private fun applyCoverageFromReader(reader: Cov4Reader, resolved: ResolvedPipeline, artifactCount: Int) {
-        val dataService = CoverageDataService.getInstance(project)
-        val wasStale = dataService.isStale
-        val previousCommit = dataService.coverageCommitHash
-
-        dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot, stale = false)
-        computeAndStoreWarningContext(resolved.gitRoot)
-        dataService.setCov4Reader(reader)
-
-        log.info("Coverage: loaded coverage via reader for ${reader.allFilePaths.size} files from $artifactCount coverage artifacts at commit ${resolved.commitHash}")
-
-        ApplicationManager.getApplication().invokeLater {
-            CoverageHighlighter.applyToOpenEditors(project)
-            notifyIfFallback(resolved)
-            notifyRefreshedFromStale(wasStale, previousCommit, resolved)
-        }
-    }
-
     private fun notifyRefreshedFromStale(
         wasStale: Boolean,
         previousCommit: String?,
@@ -573,36 +608,43 @@ class CoverageLoadService(private val project: Project) {
 
     /**
      * Resolves the baseline (master) coverage for dual-coverage mode and attaches it to
-     * [CoverageDataService]. Cache hits skip the download. Failures (missing artifacts,
-     * network errors) are logged and the data service is left without a baseline so
-     * single-coverage rendering remains functional.
+     * [CoverageDataService]. When [indicator] is non-null, shows progress and downloads
+     * baseline on cache miss. When [indicator] is null, only loads from cache silently
+     * (clears baseline on miss, returns false).
+     *
+     * @return true if baseline was applied or not needed; false if cache miss with silent mode
      */
     private fun loadOrFetchBaseline(
-        indicator: ProgressIndicator,
+        indicator: ProgressIndicator?,
         gitLabClient: GitLabApiClient,
         cache: CoverageCacheService,
         baseline: ResolvedPipeline?,
-        baseProgress: Double,
-    ) {
+        baseProgress: Double = 0.0,
+    ): Boolean {
         val dataService = CoverageDataService.getInstance(project)
         if (baseline == null) {
             dataService.clearBaseline()
-            return
+            return true
         }
         try {
-            indicator.text = "Loading baseline coverage…"
-            indicator.fraction = baseProgress
-
             val cached = cache.get(baseline.commitHash)
             if (cached != null) {
                 cache.updateLastUsed(baseline.commitHash)
                 dataService.setBaselineCov4Reader(cached, baseline.commitHash)
                 log.info("Coverage: baseline loaded from cache (commit ${baseline.commitHash.take(8)})")
-                indicator.fraction = 1.0
-                return
+                if (indicator != null) indicator.fraction = 1.0
+                return true
+            }
+
+            if (indicator == null) {
+                dataService.clearBaseline()
+                log.info("Coverage: baseline not in cache, clearing (will download next time)")
+                return false
             }
 
             log.info("Coverage: baseline cache miss — downloading artifacts for pipeline ${baseline.pipelineId}")
+            indicator.text = "Loading baseline coverage…"
+            indicator.fraction = baseProgress
             val result = downloadArtifacts(indicator, gitLabClient, baseline,
                 fractionStart = baseProgress,
                 fractionEnd = 1.0,
@@ -616,12 +658,15 @@ class CoverageLoadService(private val project: Project) {
                 log.warn("Coverage: failed to reopen freshly-written baseline .cov4")
                 dataService.clearBaseline()
             }
+            return true
         } catch (ex: CoverageApiException) {
             log.warn("Coverage: baseline load failed (${ex.kind}): ${ex.userMessage}")
             dataService.clearBaseline()
+            return false
         } catch (ex: Exception) {
             log.warn("Coverage: baseline load failed: ${ex.message}", ex)
             dataService.clearBaseline()
+            return false
         }
     }
 
