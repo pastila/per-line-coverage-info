@@ -42,8 +42,9 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | File | Purpose |
 |------|---------|
 | `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback), `loadFromGitLab()` (resolve → download → write COV4 → activate reader), `loadFromCache()` (manual selection) |
-| `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s) |
-| `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()` |
+| `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden |
+| `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; skipped when gutter hidden |
+| `CoveragePipelinePoller.kt` | Polls remote for new pipelines and auto-refreshes coverage; stopped/blocked when gutter hidden |
 | `LoadCoverageAction.kt` | Find Action: "Load Coverage from GitLab" |
 | `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz) |
 | `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" |
@@ -70,9 +71,9 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageHighlighter.kt` | Applies line-background highlighters and gutter renderers; classifies each line as `COVERED` (green) / `UNCOVERED` (red) / `FEATURE_ONLY` (blue) when baseline is present |
 | `CoverageGutterRenderer.kt` | Gutter strip coloured by `CoverageCategory`; tooltip shows count of feature-only tests; click opens "Covering Line" panel |
 | `CoverageEditorListener.kt` | Applies highlights on editor open; re-applies on document change (debounced 300 ms) |
-| `CoverageGutterVisibilityService.kt` | Persists gutter visible/hidden toggle across restarts |
+| `CoverageGutterVisibilityService.kt` | Persists gutter visible/hidden toggle across restarts; gates all loading activity when hidden |
 | `CoverageUserSelectionService.kt` | Persists pinned commit hash (user-selected artifact survives IDE restart) |
-| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Toggle coverage gutter project-wide |
+| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Toggle coverage gutter project-wide; hide also stops pipeline poller, show triggers `loadOfflineFirst()` |
 | `CoverageIcons.kt` | Green/red icon constants |
 
 ### Tests tool window
@@ -136,7 +137,7 @@ When the current branch has its own pipeline **and** the coverage branch (master
 
 ## Flow
 
-On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
+On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). **All auto-loading is skipped when gutter visibility is off** (`CoverageGutterVisibilityService.visible == false`) — no GitLab calls, no cache walks, no polling. On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
 
 ## MCP
 
@@ -165,5 +166,6 @@ Tool: `list_files` — lists files with coverage data under a directory.
 - **Threading**: network/parsing in `Task.Backgroundable`; UI updates via `invokeLater`.
 - **Errors**: throw `CoverageApiException(CoverageErrorKind.*)`. Auto-triggered callers only log (silent mode).
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
+- **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.
 - **Behat paths**: `BehatTestRunner.runMultiplePaths()` passes feature file paths as separate positional arguments (e.g. `file:1 file:2 file:3`), not as comma-separated lines with `--paths` option.
