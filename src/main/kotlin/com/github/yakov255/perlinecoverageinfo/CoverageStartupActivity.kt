@@ -26,12 +26,5 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
         } catch (ex: Exception) {
             log.warn("Coverage: unexpected error in startup activity", ex)
         }
-
-        try {
-            val result = GitHubUpdateCheckService.getInstance().checkForUpdate()
-            GitHubUpdateNotifier.notifyIfUpdateAvailable(project, result)
-        } catch (ex: Exception) {
-            log.warn("GitHub update check: unexpected error", ex)
-        }
     }
 }

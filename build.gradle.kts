@@ -144,6 +144,55 @@ tasks {
     publishPlugin {
         dependsOn(patchChangelog)
     }
+
+    val pluginId = providers.gradleProperty("pluginGroup")
+    val pluginName = providers.gradleProperty("pluginName")
+    val sinceBuild = providers.gradleProperty("pluginSinceBuild")
+    val untilBuild = providers.gradleProperty("pluginUntilBuild")
+    val repo = "https://github.com/yakov255/per-line-coverage-info"
+
+    register("generateUpdatePluginsXml") {
+        group = "distribution"
+        description = "Generates docs/updatePlugins.xml from CHANGELOG.md for GitHub Pages"
+
+        val docsDir = layout.projectDirectory.dir("docs")
+        val changelogFile = layout.projectDirectory.file("CHANGELOG.md")
+
+        inputs.file(changelogFile)
+        outputs.dir(docsDir)
+
+        doLast {
+            val text = changelogFile.asFile.readText()
+            val sections = text.split(Regex("(?m)^## "))
+
+            val xml = buildString {
+                appendLine("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                appendLine("<plugins>")
+                for (section in sections) {
+                    val headerMatch = Regex("""\[(\d[\w.-]*)\]""").find(section)
+                    if (headerMatch == null) continue
+                    val ver = headerMatch.groupValues[1].trim()
+                    val bodyLines = section.lines().drop(1).dropWhile { it.isBlank() }
+                    val rawNotes = bodyLines.joinToString("\n").trim()
+                    val htmlNotes = if (rawNotes.isNotBlank()) markdownToHTML(rawNotes) else ""
+
+                    appendLine("""    <plugin id="${pluginId.get()}" url="$repo/releases/download/$ver/per-line-coverage-info-$ver.zip" version="$ver">""")
+                    appendLine("        <name>${pluginName.get()}</name>")
+                    appendLine("        <vendor>yakov255</vendor>")
+                    appendLine("""        <idea-version since-build="${sinceBuild.get()}" until-build="${untilBuild.get()}"/>""")
+                    if (htmlNotes.isNotBlank()) {
+                        appendLine("        <change-notes><![CDATA[$htmlNotes]]></change-notes>")
+                    }
+                    appendLine("    </plugin>")
+                }
+                appendLine("</plugins>")
+            }
+
+            docsDir.asFile.mkdirs()
+            docsDir.file("updatePlugins.xml").asFile.writeText(xml)
+            logger.lifecycle("Generated docs/updatePlugins.xml with ${sections.count { Regex("""\[(\d[\w.-]*)\]""").containsMatchIn(it) }} version(s)")
+        }
+    }
 }
 
 intellijPlatformTesting {
