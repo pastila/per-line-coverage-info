@@ -20,6 +20,8 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
             val settingsError = loadService.validateSettings()
             if (settingsError != null) {
                 log.info("Coverage auto-load skipped: $settingsError")
+            } else if (!CoverageGutterVisibilityService.getInstance(project).visible) {
+                log.info("Coverage auto-load skipped: gutter visibility is off")
             } else {
                 loadService.loadOfflineFirst()
             }

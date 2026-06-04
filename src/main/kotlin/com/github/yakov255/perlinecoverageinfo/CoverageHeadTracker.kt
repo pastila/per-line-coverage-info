@@ -23,6 +23,11 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
     private var lastKnownRevision: String? = null
 
     override fun repositoryChanged(repository: GitRepository) {
+        if (!CoverageGutterVisibilityService.getInstance(project).visible) {
+            log.info("Coverage: HEAD change ignored — gutter visibility is off")
+            return
+        }
+
         val currentRevision = repository.currentRevision ?: return
         val previous = lastKnownRevision
 

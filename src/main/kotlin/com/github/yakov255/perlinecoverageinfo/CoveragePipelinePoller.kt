@@ -42,6 +42,10 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
      * reacts accordingly. It never stops itself — only [stop] or [dispose] ends it.
      */
     fun start() {
+        if (!CoverageGutterVisibilityService.getInstance(project).visible) {
+            log.info("Coverage: pipeline poll — gutter visibility off, won't start")
+            return
+        }
         if (started && targetBranch != null) return
         started = true
         ApplicationManager.getApplication().executeOnPooledThread { scheduleNext() }
@@ -70,6 +74,12 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
     private fun onPoll() {
         if (project.isDisposed) { stop(); return }
         if (!started) return
+
+        if (!CoverageGutterVisibilityService.getInstance(project).visible) {
+            log.info("Coverage: pipeline poll — gutter visibility off, stopping")
+            stop()
+            return
+        }
 
         val settings = CoverageApiSettings.getInstance()
         if (!settings.enabled) {

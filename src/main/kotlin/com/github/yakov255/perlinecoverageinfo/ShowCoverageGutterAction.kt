@@ -11,9 +11,13 @@ class ShowCoverageGutterAction : AnAction(), DumbAware {
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        log.info("ShowCoverageGutterAction: showing coverage gutter")
+        log.info("ShowCoverageGutterAction: showing coverage gutter, resuming activity")
         CoverageGutterVisibilityService.getInstance(project).visible = true
         CoverageHighlighter.applyToOpenEditors(project)
+        val loadService = CoverageLoadService.getInstance(project)
+        if (loadService.validateSettings() == null) {
+            loadService.loadOfflineFirst()
+        }
     }
 
     override fun update(e: AnActionEvent) {

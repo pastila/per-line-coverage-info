@@ -61,6 +61,11 @@ class CoverageLoadService(private val project: Project) {
      * If no cache is found, falls through to normal GitLab loading.
      */
     fun loadOfflineFirst() {
+        if (!CoverageGutterVisibilityService.getInstance(project).visible) {
+            log.info("Coverage: offline-first load skipped — gutter visibility is off")
+            return
+        }
+
         log.info("Coverage: offline-first load started")
 
         if (loadingCommitHash != null) {
@@ -170,6 +175,12 @@ class CoverageLoadService(private val project: Project) {
             } else {
                 log.info("Coverage auto-load skipped: $validationError")
             }
+            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            return
+        }
+
+        if (!CoverageGutterVisibilityService.getInstance(project).visible) {
+            log.info("Coverage: GitLab load skipped — gutter visibility is off")
             onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
             return
         }
@@ -308,7 +319,9 @@ class CoverageLoadService(private val project: Project) {
                         }
                     }
                     onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
-                    CoveragePipelinePoller.getInstance(project).start()
+                    if (CoverageGutterVisibilityService.getInstance(project).visible) {
+                        CoveragePipelinePoller.getInstance(project).start()
+                    }
                 }
             }
         })

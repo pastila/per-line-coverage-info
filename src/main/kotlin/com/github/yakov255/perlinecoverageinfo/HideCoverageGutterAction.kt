@@ -11,8 +11,9 @@ class HideCoverageGutterAction : AnAction(), DumbAware {
 
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
-        log.info("HideCoverageGutterAction: hiding coverage gutter")
+        log.info("HideCoverageGutterAction: hiding coverage gutter, stopping all activity")
         CoverageGutterVisibilityService.getInstance(project).visible = false
+        CoveragePipelinePoller.getInstance(project).stop()
         CoverageHighlighter.clearAllEditors(project)
     }
 
