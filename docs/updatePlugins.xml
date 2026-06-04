@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.5.0/per-line-coverage-info-2.5.0.zip" version="2.5.0">
+        <name>per-line-coverage-info</name>
+        <vendor>yakov255</vendor>
+        <idea-version since-build="251" until-build="261.*"/>
+        <change-notes><![CDATA[<ul><li>MCP: new <code>get_tests_at_line</code> tool with paginated test listing for a specific line</li><li>MCP: new <code>get_first_tests_at_lines</code> tool — quickly check which test covers each line</li><li>MCP: <code>get_coverage_for_file</code> now returns per-line content with pagination (<code>offset</code>/<code>limit</code>) and <code>coverage</code> filter</li><li>MCP: <code>list_files</code> gains <code>coverage</code> filter (<code>all</code>/<code>uncovered</code>/<code>fully_covered</code>)</li><li>Suppress progress indicator during pipeline resolution — only show status bar when actually downloading artifacts</li><li>Simplify loading pipeline: unified download flow, removed dead code (<code>refreshBaselineFromCache</code>, <code>applyCoverageFromReader</code>)</li><li>Fix double-close of <code>Cov4Reader</code> in post-download apply path</li></ul>]]></change-notes>
+    </plugin>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.4.0/per-line-coverage-info-2.4.0.zip" version="2.4.0">
+        <name>per-line-coverage-info</name>
+        <vendor>yakov255</vendor>
+        <idea-version since-build="251" until-build="261.*"/>
+        <change-notes><![CDATA[<ul><li>Stop all loading activity (GitLab downloads, pipeline polling, HEAD tracking, startup loading) when coverage gutter is hidden — resume when shown again</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.3.1/per-line-coverage-info-2.3.1.zip" version="2.3.1">
         <name>per-line-coverage-info</name>
         <vendor>yakov255</vendor>
         <idea-version since-build="251" until-build="261.*"/>
-        <change-notes><![CDATA[<ul><li>Pipeline polling for automatic coverage refresh</li><li>Show report merging progress in the progress bar</li><li>Show download speed and per-job byte progress in progress bar</li><li>Set-based deduplication when merging coverage reports</li><li>Queue reload when coverage load is triggered during an in-progress load</li><li>Suppress misleading &quot;0 commit(s) behind&quot; warning</li><li>Migrate MCP server to JetBrains MCP framework</li><li>Add detailed logging across coverage pipeline</li><li>Remove coverage status notification popups</li><li>Fix EDT violations: move I/O off EDT, sync LRU cache, wrap Swing subscribers</li><li>Fix &quot;no coverage&quot; display after refresh</li></ul>]]></change-notes>
+        <change-notes><![CDATA[<ul><li>Switch to standard IntelliJ custom plugin repository for updates</li><li>Pipeline polling for automatic coverage refresh</li><li>Show report merging progress in the progress bar</li><li>Show download speed and per-job byte progress in progress bar</li><li>Set-based deduplication when merging coverage reports</li><li>Queue reload when coverage load is triggered during an in-progress load</li><li>Suppress misleading &quot;0 commit(s) behind&quot; warning</li><li>Migrate MCP server to JetBrains MCP framework</li><li>Add detailed logging across coverage pipeline</li><li>Remove coverage status notification popups</li><li>Fix EDT violations: move I/O off EDT, sync LRU cache, wrap Swing subscribers</li><li>Fix &quot;no coverage&quot; display after refresh</li></ul>]]></change-notes>
     </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.3.0/per-line-coverage-info-2.3.0.zip" version="2.3.0">
         <name>per-line-coverage-info</name>

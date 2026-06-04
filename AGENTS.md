@@ -29,7 +29,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### MCP server
 | File | Purpose |
 |------|---------|
-| `CoverageMcpToolset.kt` | JetBrains MCP framework toolset via `com.intellij.mcpServer`; exposes `get_coverage_for_file` and `list_files` tools |
+| `CoverageMcpToolset.kt` | JetBrains MCP framework toolset via `com.intellij.mcpServer`; exposes `get_coverage_for_file`, `get_tests_at_line`, `get_first_tests_at_lines`, and `list_files` tools |
 
 ### GitLab integration
 | File | Purpose |
@@ -41,7 +41,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Loading pipeline
 | File | Purpose |
 |------|---------|
-| `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback), `loadFromGitLab()` (resolve → download → write COV4 → activate reader), `loadFromCache()` (manual selection) |
+| `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback), `loadFromGitLab()` (two-phase: silent resolve → visible download on cache miss), `loadFromCache()` (manual selection) |
 | `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden |
 | `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; skipped when gutter hidden |
 | `CoveragePipelinePoller.kt` | Polls remote for new pipelines and auto-refreshes coverage; stopped/blocked when gutter hidden |
@@ -168,7 +168,7 @@ Tool: `list_files` — lists files with coverage data under a directory.
 - **Paths**: canonical key is git-root-relative (e.g. `api/hotels/src/Foo.php`). `LineMappingService.toGitRelativePath` converts project-relative → git-relative. Feature paths in test names are also git-root-relative; strip with `CoverageTestNavigator.toProjectRelativeFeaturePath`.
 - **Line numbers**: 1-based throughout.
 - **Cache key**: commit hash (not pipeline ID).
-- **Threading**: network/parsing in `Task.Backgroundable`; UI updates via `invokeLater`.
+- **Threading**: pipeline resolve on pooled thread (silent); download in `Task.Backgroundable` (visible progress); UI updates via `invokeLater`.
 - **Errors**: throw `CoverageApiException(CoverageErrorKind.*)`. Auto-triggered callers only log (silent mode).
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.

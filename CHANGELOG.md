@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-06-05
+- MCP: new `get_tests_at_line` tool with paginated test listing for a specific line
+- MCP: new `get_first_tests_at_lines` tool — quickly check which test covers each line
+- MCP: `get_coverage_for_file` now returns per-line content with pagination (`offset`/`limit`) and `coverage` filter
+- MCP: `list_files` gains `coverage` filter (`all`/`uncovered`/`fully_covered`)
+- Suppress progress indicator during pipeline resolution — only show status bar when actually downloading artifacts
+- Simplify loading pipeline: unified download flow, removed dead code (`refreshBaselineFromCache`, `applyCoverageFromReader`)
+- Fix double-close of `Cov4Reader` in post-download apply path
+
 ## [2.4.0] - 2026-06-04
 - Stop all loading activity (GitLab downloads, pipeline polling, HEAD tracking, startup loading) when coverage gutter is hidden — resume when shown again
 
