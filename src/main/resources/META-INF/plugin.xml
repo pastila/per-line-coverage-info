@@ -12,6 +12,7 @@
     <depends optional="true" config-file="git-integration.xml">Git4Idea</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <updateSettingsProvider implementation="com.github.yakov255.perlinecoverageinfo.CustomRepoProvider"/>
         <errorHandler
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageErrorReporter"/>
         <projectService
