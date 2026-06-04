@@ -4,7 +4,10 @@
 
 ## [Unreleased]
 
-## [2.3.1]
+## [2.4.0] - 2026-06-04
+- Stop all loading activity (GitLab downloads, pipeline polling, HEAD tracking, startup loading) when coverage gutter is hidden — resume when shown again
+
+## [2.3.1] - 2026-06-04
 - Switch to standard IntelliJ custom plugin repository for updates
 - Pipeline polling for automatic coverage refresh
 - Show report merging progress in the progress bar
@@ -18,7 +21,7 @@
 - Fix EDT violations: move I/O off EDT, sync LRU cache, wrap Swing subscribers
 - Fix "no coverage" display after refresh
 
-## [2.3.0]
+## [2.3.0] - 2026-05-20
 - Dual coverage diff view: show only new coverage
 - MCP toolset: coverage access for LLM, list_files tool, detail parameter
 - Async coverage artifact download
@@ -32,7 +35,7 @@
 - Split affected tests and covered line tests
 - Download current branch coverage
 
-## [2.2.0]
+## [2.2.0] - 2026-04-14
 - Embedded MCP server for LLM coverage access
 - Auto-reload coverage on any HEAD change, not just branch switch
 - Move coverage actions from Tools menu to Artifacts panel
@@ -46,7 +49,7 @@
 - Fix path resolution
 - Many UI/UX improvements
 
-## [2.1.0]
+## [2.1.0] - 2026-04-09
 - Offline-first coverage loading
 - Replace raw .covt cache with indexed COV4 binary format
 - Add auto-refresh, disk cache, and local file loading
@@ -55,7 +58,7 @@
 - Reduce RAM on cache download
 - Improve cache handling
 
-## [2.0.0]
+## [2.0.0] - 2026-04-06
 - Migrate plugin from custom API to GitLab coverage artifacts
 - Three-tier merge-base resolution with GitLab API fallback
 - Show covered test count
@@ -64,6 +67,6 @@
 - Fix coverage artifact download to match real GitLab behavior
 - Improve error dialogs with detailed diagnostic info
 
-## [1.0.0]
+## [1.0.0] - 2026-04-01
 - Initial release
 - Basic per-line coverage display in editor gutter
