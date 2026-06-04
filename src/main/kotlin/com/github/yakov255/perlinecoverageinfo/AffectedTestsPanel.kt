@@ -57,7 +57,9 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         project.messageBus.connect().subscribe(
             CoverageDataService.COVERAGE_CHANGED_TOPIC,
-            CoverageChangeListener { updateWarning() },
+            CoverageChangeListener {
+                ApplicationManager.getApplication().invokeLater { updateWarning() }
+            },
         )
 
         registerKeyboardAction(

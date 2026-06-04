@@ -79,7 +79,9 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
 
         messageBusConnection.subscribe(
             CoverageDataService.COVERAGE_CHANGED_TOPIC,
-            CoverageChangeListener { refresh() },
+            CoverageChangeListener {
+                ApplicationManager.getApplication().invokeLater { refresh() }
+            },
         )
 
         refresh()

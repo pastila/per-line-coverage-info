@@ -1,5 +1,6 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.editor.markup.HighlighterLayer
@@ -42,6 +43,18 @@ object CoverageHighlighter {
         }
     }
 
+    /**
+     * Applies coverage highlights to a single editor asynchronously.
+     *
+     * Phase 1 (synchronous — any thread): captures a snapshot of the document text and
+     * relevant service state. This is fast (no I/O).
+     *
+     * Phase 2 (pooled thread): git show + Cov4Reader reads + line-mapping computation.
+     *
+     * Phase 3 (EDT via invokeLater): clears old highlighters and applies new ones.
+     * If the document text changed since the snapshot, the apply is skipped — a
+     * subsequent [CoverageDocumentListener] alarm will retrigger.
+     */
     fun applyToEditor(editor: Editor, project: Project) {
         val dataService = CoverageDataService.getInstance(project)
         if (!dataService.hasData()) {
@@ -60,50 +73,65 @@ object CoverageHighlighter {
             return
         }
 
-        val hasBaseline = dataService.hasBaseline()
+        val snapshot = HighlightSnapshot(
+            text = document.text,
+            lineCount = document.lineCount,
+            hasBaseline = dataService.hasBaseline(),
+            filePath = virtualFile.path,
+        )
 
-        val lineMappingService = LineMappingService.getInstance(project)
-        val coverageLines = lineMappingService.getMappedCoverage(virtualFile.path, document.text)
-            ?: findCoverageForFile(virtualFile.path, project)
-        if (coverageLines == null) {
-            log.info("CoverageHighlighter: no coverage found for file, skipping")
-            return
-        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val lineMappingService = LineMappingService.getInstance(project)
+            val coverageLines = lineMappingService.getMappedCoverage(snapshot.filePath, snapshot.text)
+                ?: findCoverageForFile(snapshot.filePath, project)
+            if (coverageLines == null) {
+                log.info("CoverageHighlighter: no coverage found for file, skipping")
+                return@executeOnPooledThread
+            }
 
-        val baselineLines: Map<Int, List<String>>? = if (hasBaseline) {
-            lineMappingService.getMappedBaselineCoverage(virtualFile.path, document.text)
-                ?: findBaselineCoverageForFile(virtualFile.path, project)
-        } else {
-            null
-        }
+            val baselineLines: Map<Int, List<String>>? = if (snapshot.hasBaseline) {
+                lineMappingService.getMappedBaselineCoverage(snapshot.filePath, snapshot.text)
+                    ?: findBaselineCoverageForFile(snapshot.filePath, project)
+            } else {
+                null
+            }
 
-        clearCoverageHighlighters(editor)
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed || editor.isDisposed) return@invokeLater
+                if (document.text != snapshot.text) {
+                    log.info("CoverageHighlighter: document changed during async work, skipping stale highlights")
+                    return@invokeLater
+                }
 
-        val warnings = CoverageWarningService.getInstance(project).getWarnings()
-        val markupModel = editor.markupModel
+                clearCoverageHighlighters(editor)
 
-        for (line in 0 until document.lineCount) {
-            val lineNumber = line + 1 // coverage data is 1-based
-            val tests = coverageLines[lineNumber] ?: continue
+                val warnings = CoverageWarningService.getInstance(project).getWarnings()
+                val markupModel = editor.markupModel
 
-            val baselineTests = baselineLines?.get(lineNumber) ?: emptyList()
-            val category = categorizeLine(tests, baselineTests, hasBaseline)
-            val startOffset = document.getLineStartOffset(line)
-            val endOffset = document.getLineEndOffset(line)
-            val highlighter = markupModel.addRangeHighlighter(
-                startOffset, endOffset, COVERAGE_LAYER,
-                TextAttributes(null, null, null, null, 0),
-                HighlighterTargetArea.LINES_IN_RANGE
-            )
-            highlighter.lineMarkerRenderer = CoverageGutterRenderer(
-                lineNumber = lineNumber,
-                tests = tests,
-                baselineTests = baselineTests,
-                hasBaseline = hasBaseline,
-                category = category,
-                warnings = warnings,
-            )
-            highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
+                for (line in 0 until snapshot.lineCount) {
+                    val lineNumber = line + 1
+                    val tests = coverageLines[lineNumber] ?: continue
+
+                    val baselineTests = baselineLines?.get(lineNumber) ?: emptyList()
+                    val category = categorizeLine(tests, baselineTests, snapshot.hasBaseline)
+                    val startOffset = document.getLineStartOffset(line)
+                    val endOffset = document.getLineEndOffset(line)
+                    val highlighter = markupModel.addRangeHighlighter(
+                        startOffset, endOffset, COVERAGE_LAYER,
+                        TextAttributes(null, null, null, null, 0),
+                        HighlighterTargetArea.LINES_IN_RANGE
+                    )
+                    highlighter.lineMarkerRenderer = CoverageGutterRenderer(
+                        lineNumber = lineNumber,
+                        tests = tests,
+                        baselineTests = baselineTests,
+                        hasBaseline = snapshot.hasBaseline,
+                        category = category,
+                        warnings = warnings,
+                    )
+                    highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
+                }
+            }
         }
     }
 
@@ -156,4 +184,15 @@ object CoverageHighlighter {
         null
     }
 }
+
+/**
+ * Snapshot of document state captured synchronously before async I/O work.
+ * Used to detect stale results when the document changes during background computation.
+ */
+private data class HighlightSnapshot(
+    val text: String,
+    val lineCount: Int,
+    val hasBaseline: Boolean,
+    val filePath: String,
+)
 

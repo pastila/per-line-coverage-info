@@ -82,8 +82,10 @@ class LineMappingService(private val project: Project) {
      * Clears all cached data (called when coverage data is reloaded).
      */
     fun clear() {
-        log.info("LineMappingService: clearing ${oldContentCache.size} cached entries")
-        oldContentCache.clear()
+        synchronized(oldContentCache) {
+            log.info("LineMappingService: clearing ${oldContentCache.size} cached entries")
+            oldContentCache.clear()
+        }
     }
 
     /**
@@ -93,10 +95,12 @@ class LineMappingService(private val project: Project) {
      * keeping both the primary and the baseline commit warm in dual-coverage mode.
      */
     fun pruneToCommits(activeCommits: Set<String>) {
-        log.info("LineMappingService: pruning cache, keeping commits: $activeCommits")
-        val it = oldContentCache.entries.iterator()
-        while (it.hasNext()) {
-            if (it.next().key.first !in activeCommits) it.remove()
+        synchronized(oldContentCache) {
+            log.info("LineMappingService: pruning cache, keeping commits: $activeCommits")
+            val it = oldContentCache.entries.iterator()
+            while (it.hasNext()) {
+                if (it.next().key.first !in activeCommits) it.remove()
+            }
         }
     }
 
@@ -133,13 +137,17 @@ class LineMappingService(private val project: Project) {
         }
 
         val key = commitHash to relativePath
-        oldContentCache[key]?.let { return it }
+        synchronized(oldContentCache) {
+            oldContentCache[key]?.let { return it }
+        }
 
         val gitPath = toGitRelativePath(relativePath) ?: return null
         val oldContent = CoverageResolver.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
         if (oldContent != null) {
             log.info("LineMappingService: git show succeeded for $commitHash:$gitPath (${oldContent.length} bytes)")
-            oldContentCache[key] = oldContent
+            synchronized(oldContentCache) {
+                oldContentCache[key] = oldContent
+            }
         } else {
             log.warn("LineMappingService: git show failed for $commitHash:$gitPath")
         }

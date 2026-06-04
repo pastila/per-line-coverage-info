@@ -207,7 +207,9 @@ class CoverageApiSettingsConfigurable : Configurable {
             for (project in ProjectManager.getInstance().openProjects) {
                 if (!project.isDisposed) {
                     log.info("CoverageApiSettingsConfigurable: triggering load for project ${project.name}")
-                    CoverageLoadService.getInstance(project).loadOfflineFirst()
+                    ApplicationManager.getApplication().executeOnPooledThread {
+                        CoverageLoadService.getInstance(project).loadOfflineFirst()
+                    }
                 }
             }
         }

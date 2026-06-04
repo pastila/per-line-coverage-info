@@ -3,6 +3,7 @@ package com.github.yakov255.perlinecoverageinfo
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.DumbAware
 
 class LoadCoverageAction : AnAction(), DumbAware {
@@ -27,6 +28,8 @@ class LoadCoverageAction : AnAction(), DumbAware {
             loadService.loadFromGitLab(showErrors = true)
             return
         }
-        loadService.loadOfflineFirst()
+        ApplicationManager.getApplication().executeOnPooledThread {
+            loadService.loadOfflineFirst()
+        }
     }
 }
