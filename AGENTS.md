@@ -145,7 +145,12 @@ On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks
 { "mcpServers": { "coverage": { "url": "http://localhost:17178/mcp" } } }
 ```
 
-Tool: `get_coverage_for_file` — returns covered/uncovered lines with test names for any PHP file.
+Tool: `get_coverage_for_file` — reads a file with per-line coverage markers. Each line includes content, line number, coverage flag, and count of covering tests. Supports `offset`/`limit` pagination and `coverage` filter (`all`/`covered`/`uncovered`). Does NOT return test names (use `get_tests_at_line` instead).
+
+Tool: `get_tests_at_line` — returns paginated test names for a specific line. Use `offset`/`limit` (default 5, max 100) to paginate through long test lists.
+
+Tool: `get_first_tests_at_lines` — returns the first covering test name for each of the given comma-separated line numbers. Useful for quickly checking which tests exercise which lines.
+
 Tool: `list_files` — lists files with coverage data under a directory.
 
 ## Build & Run

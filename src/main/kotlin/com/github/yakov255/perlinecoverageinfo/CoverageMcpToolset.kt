@@ -15,8 +15,10 @@ class CoverageMcpToolset : McpToolset {
 
     @McpTool
     @McpDescription(
-        "Returns per-line code coverage for a PHP file. " +
-        "Shows which lines are covered/uncovered and which tests cover each line. " +
+        "Reads a PHP file with per-line coverage markers. " +
+        "Each returned line includes the line number, content, coverage flag, and count of covering tests. " +
+        "Use coverage='uncovered' to see only uncovered lines (red in the IDE). " +
+        "Use offset and limit for pagination through the filtered result. " +
         "Required parameter 'project' — absolute path to the project root directory."
     )
     suspend fun get_coverage_for_file(
@@ -24,10 +26,21 @@ class CoverageMcpToolset : McpToolset {
         project: String? = null,
         @McpDescription("Path to the file relative to the project root (e.g. src/Service/Foo.php)")
         file_path: String,
-        @McpDescription("Output detail level: 'summary' (default) — covered/uncovered line ranges and statistics only; 'detailed' — test names per covered line")
-        detail: String = "summary",
+        @McpDescription("Pagination offset into the filtered result (default: 0)")
+        offset: Int = 0,
+        @McpDescription("Maximum lines to return (default: 100, max: 1000)")
+        limit: Int = 100,
+        @McpDescription("Filter by coverage: 'all' (default) — all lines; 'covered' — only covered lines; 'uncovered' — only uncovered lines")
+        coverage: String = "all",
     ): CoverageFileResult {
-        log.info("MCP tool: get_coverage_for_file file_path=$file_path detail=$detail")
+        log.info("MCP tool: get_coverage_for_file file_path=$file_path offset=$offset limit=$limit coverage=$coverage")
+
+        if (offset < 0) throw McpExpectedError("offset must be >= 0")
+        if (limit < 1 || limit > 1000) throw McpExpectedError("limit must be between 1 and 1000")
+        if (coverage !in listOf("all", "covered", "uncovered")) {
+            throw McpExpectedError("coverage must be 'all', 'covered', or 'uncovered'")
+        }
+
         val resolved = resolveProject(project)
         val dataService = CoverageDataService.getInstance(resolved)
 
@@ -36,10 +49,6 @@ class CoverageMcpToolset : McpToolset {
                 "No coverage data is currently loaded in the IDE. " +
                     "Load coverage first (Fetch from GitLab or load a local .covt file)."
             )
-        }
-
-        if (detail !in listOf("summary", "detailed")) {
-            throw McpExpectedError("Invalid argument 'detail': must be 'summary' or 'detailed'")
         }
 
         val candidates = mutableListOf<String>()
@@ -63,30 +72,181 @@ class CoverageMcpToolset : McpToolset {
                     "Available files with coverage: ${dataService.allFiles().size}"
             )
 
-        val commitHash = dataService.coverageCommitHash ?: "unknown"
-        val sortedLines = coverageLines.entries.sortedBy { it.key }
-        val coveredCount = sortedLines.count { (_, tests) -> tests.isNotEmpty() }
-        val totalLines = sortedLines.size
-        val uncoveredCount = totalLines - coveredCount
+        val basePath = resolved.basePath
+            ?: throw McpExpectedError("Project has no base path")
+        val file = File(basePath, file_path)
+        if (!file.exists() || !file.isFile) {
+            throw McpExpectedError("File not found: $file_path")
+        }
+        val allLines = file.readLines()
+        val totalLinesInFile = allLines.size
 
-        val coveredLineNumbers = sortedLines.filter { it.value.isNotEmpty() }.map { it.key }
-        val uncoveredLineNumbers = sortedLines.filter { it.value.isEmpty() }.map { it.key }
+        val allLineInfo = allLines.mapIndexed { index, content ->
+            val lineNumber = index + 1
+            val tests = coverageLines[lineNumber] ?: emptyList()
+            CoveredFileLine(
+                lineNumber = lineNumber,
+                content = content,
+                testCount = tests.size,
+                isCovered = tests.isNotEmpty(),
+            )
+        }
 
-        val linesMap = if (detail == "detailed") {
-            sortedLines.associate { (line, tests) ->
-                line to if (tests.isNotEmpty()) tests.joinToString(", ") else ""
-            }
-        } else null
+        val coveredLinesInFile = allLineInfo.count { it.isCovered }
+        val uncoveredLinesInFile = totalLinesInFile - coveredLinesInFile
+
+        val filtered = when (coverage) {
+            "covered" -> allLineInfo.filter { it.isCovered }
+            "uncovered" -> allLineInfo.filter { !it.isCovered }
+            else -> allLineInfo
+        }
+
+        val totalMatchingLines = filtered.size
+        val page = filtered.drop(offset).take(limit)
 
         return CoverageFileResult(
             file = file_path,
-            commitHash = commitHash.take(8),
-            coveredLines = coveredCount,
-            uncoveredLines = uncoveredCount,
-            totalLines = totalLines,
-            lines = linesMap,
-            coveredRanges = collapseToRanges(coveredLineNumbers),
-            uncoveredRanges = collapseToRanges(uncoveredLineNumbers),
+            commitHash = dataService.coverageCommitHash?.take(8),
+            totalLinesInFile = totalLinesInFile,
+            coveredLinesInFile = coveredLinesInFile,
+            uncoveredLinesInFile = uncoveredLinesInFile,
+            offset = offset,
+            limit = limit,
+            totalMatchingLines = totalMatchingLines,
+            lines = page,
+        )
+    }
+
+    @McpTool
+    @McpDescription(
+        "Returns test names that cover a specific line in a file. " +
+        "Use offset and limit for pagination through the test list (default: 5 tests per page). " +
+        "Required parameter 'project' — absolute path to the project root directory."
+    )
+    suspend fun get_tests_at_line(
+        @McpDescription("Required. Absolute path to the project root (e.g. /home/user/projects/my-app)")
+        project: String? = null,
+        @McpDescription("Path to the file relative to the project root (e.g. src/Service/Foo.php)")
+        file_path: String,
+        @McpDescription("Line number (1-based)")
+        line_number: Int,
+        @McpDescription("Pagination offset within the test list (default: 0)")
+        offset: Int = 0,
+        @McpDescription("Maximum test names to return (default: 5, max: 100)")
+        limit: Int = 5,
+    ): CoverageLineTestsResult {
+        log.info("MCP tool: get_tests_at_line file_path=$file_path line_number=$line_number offset=$offset limit=$limit")
+
+        if (line_number < 1) throw McpExpectedError("line_number must be >= 1")
+        if (offset < 0) throw McpExpectedError("offset must be >= 0")
+        if (limit < 1 || limit > 100) throw McpExpectedError("limit must be between 1 and 100")
+
+        val resolved = resolveProject(project)
+        val dataService = CoverageDataService.getInstance(resolved)
+
+        if (!dataService.hasData()) {
+            throw McpExpectedError(
+                "No coverage data is currently loaded in the IDE. " +
+                    "Load coverage first (Fetch from GitLab or load a local .covt file)."
+            )
+        }
+
+        val candidates = mutableListOf<String>()
+        resolved.basePath?.let { basePath ->
+            val absoluteFile = File(basePath, file_path)
+            dataService.gitRoot?.let { gitRoot ->
+                try {
+                    candidates.add(
+                        absoluteFile.relativeTo(gitRoot).path
+                            .replace(File.separatorChar, '/')
+                    )
+                } catch (_: IllegalArgumentException) { }
+            }
+        }
+        candidates.add(file_path)
+
+        val coverageLines = CoveragePathResolver.resolve(dataService, candidates)
+            ?: throw McpExpectedError("No coverage found for file: $file_path")
+
+        val tests = coverageLines[line_number] ?: emptyList()
+        val totalTests = tests.size
+        val page = tests.drop(offset).take(limit)
+
+        return CoverageLineTestsResult(
+            file = file_path,
+            lineNumber = line_number,
+            isCovered = totalTests > 0,
+            totalTests = totalTests,
+            offset = offset,
+            limit = limit,
+            tests = page,
+        )
+    }
+
+    @McpTool
+    @McpDescription(
+        "Returns the first covering test name for each of the given line numbers in a file. " +
+        "Useful for quickly checking which tests exercise which lines without fetching the full test list. " +
+        "Required parameter 'project' — absolute path to the project root directory."
+    )
+    suspend fun get_first_tests_at_lines(
+        @McpDescription("Required. Absolute path to the project root (e.g. /home/user/projects/my-app)")
+        project: String? = null,
+        @McpDescription("Path to the file relative to the project root (e.g. src/Service/Foo.php)")
+        file_path: String,
+        @McpDescription("Comma-separated list of 1-based line numbers, e.g. '1,5,12'")
+        line_numbers: String,
+    ): CoverageMultipleLinesResult {
+        log.info("MCP tool: get_first_tests_at_lines file_path=$file_path line_numbers=$line_numbers")
+
+        val resolved = resolveProject(project)
+        val dataService = CoverageDataService.getInstance(resolved)
+
+        if (!dataService.hasData()) {
+            throw McpExpectedError(
+                "No coverage data is currently loaded in the IDE. " +
+                    "Load coverage first (Fetch from GitLab or load a local .covt file)."
+            )
+        }
+
+        val parsedLineNumbers = line_numbers.split(",")
+            .mapNotNull { it.trim().toIntOrNull() }
+            .filter { it >= 1 }
+
+        if (parsedLineNumbers.isEmpty()) {
+            throw McpExpectedError("No valid line numbers provided. Use comma-separated integers, e.g. '1,5,12'")
+        }
+
+        val candidates = mutableListOf<String>()
+        resolved.basePath?.let { basePath ->
+            val absoluteFile = File(basePath, file_path)
+            dataService.gitRoot?.let { gitRoot ->
+                try {
+                    candidates.add(
+                        absoluteFile.relativeTo(gitRoot).path
+                            .replace(File.separatorChar, '/')
+                    )
+                } catch (_: IllegalArgumentException) { }
+            }
+        }
+        candidates.add(file_path)
+
+        val coverageLines = CoveragePathResolver.resolve(dataService, candidates)
+            ?: throw McpExpectedError("No coverage found for file: $file_path")
+
+        val lines = parsedLineNumbers.map { lineNumber ->
+            val tests = coverageLines[lineNumber] ?: emptyList()
+            CoveredLineFirstTest(
+                lineNumber = lineNumber,
+                isCovered = tests.isNotEmpty(),
+                totalTests = tests.size,
+                firstTest = tests.firstOrNull(),
+            )
+        }
+
+        return CoverageMultipleLinesResult(
+            file = file_path,
+            lines = lines,
         )
     }
 
@@ -218,24 +378,6 @@ class CoverageMcpToolset : McpToolset {
 
     companion object {
         internal const val PAGE_SIZE = 50
-
-        internal fun collapseToRanges(lineNumbers: List<Int>): String {
-            if (lineNumbers.isEmpty()) return ""
-            val ranges = mutableListOf<String>()
-            var rangeStart = lineNumbers[0]
-            var rangeEnd = rangeStart
-            for (i in 1 until lineNumbers.size) {
-                if (lineNumbers[i] == rangeEnd + 1) {
-                    rangeEnd = lineNumbers[i]
-                } else {
-                    ranges.add(if (rangeStart == rangeEnd) "$rangeStart" else "$rangeStart-$rangeEnd")
-                    rangeStart = lineNumbers[i]
-                    rangeEnd = rangeStart
-                }
-            }
-            ranges.add(if (rangeStart == rangeEnd) "$rangeStart" else "$rangeStart-$rangeEnd")
-            return ranges.joinToString(", ")
-        }
     }
 }
 
@@ -243,15 +385,46 @@ class CoverageMcpToolset : McpToolset {
 data class CoverageFileResult(
     val file: String,
     val commitHash: String? = null,
-    val coveredLines: Int = 0,
-    val uncoveredLines: Int = 0,
-    val totalLines: Int = 0,
-    /** Detailed per-line coverage: map of line number -> comma-separated test names. Null in summary mode. */
-    val lines: Map<Int, String>? = null,
-    /** Collapsed ranges of covered lines, e.g. "1-10, 12-16" */
-    val coveredRanges: String = "",
-    /** Collapsed ranges of uncovered lines, e.g. "11, 17-20" */
-    val uncoveredRanges: String = "",
+    val totalLinesInFile: Int = 0,
+    val coveredLinesInFile: Int = 0,
+    val uncoveredLinesInFile: Int = 0,
+    val offset: Int = 0,
+    val limit: Int = 0,
+    val totalMatchingLines: Int = 0,
+    val lines: List<CoveredFileLine> = emptyList(),
+)
+
+@Serializable
+data class CoveredFileLine(
+    val lineNumber: Int,
+    val content: String,
+    val testCount: Int,
+    val isCovered: Boolean,
+)
+
+@Serializable
+data class CoverageLineTestsResult(
+    val file: String,
+    val lineNumber: Int,
+    val isCovered: Boolean = false,
+    val totalTests: Int = 0,
+    val offset: Int = 0,
+    val limit: Int = 0,
+    val tests: List<String> = emptyList(),
+)
+
+@Serializable
+data class CoverageMultipleLinesResult(
+    val file: String,
+    val lines: List<CoveredLineFirstTest> = emptyList(),
+)
+
+@Serializable
+data class CoveredLineFirstTest(
+    val lineNumber: Int,
+    val isCovered: Boolean = false,
+    val totalTests: Int = 0,
+    val firstTest: String? = null,
 )
 
 @Serializable
