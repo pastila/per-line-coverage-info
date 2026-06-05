@@ -7,6 +7,7 @@ import com.intellij.mcpserver.annotations.McpTool
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 class CoverageMcpToolset : McpToolset {
@@ -35,17 +36,17 @@ class CoverageMcpToolset : McpToolset {
     ): CoverageFileResult {
         log.info("MCP tool: get_coverage_for_file file_path=$file_path offset=$offset limit=$limit coverage=$coverage")
 
-        if (offset < 0) throw McpExpectedError("offset must be >= 0")
-        if (limit < 1 || limit > 1000) throw McpExpectedError("limit must be between 1 and 1000")
+        if (offset < 0) throw mcpError("offset must be >= 0")
+        if (limit < 1 || limit > 1000) throw mcpError("limit must be between 1 and 1000")
         if (coverage !in listOf("all", "covered", "uncovered")) {
-            throw McpExpectedError("coverage must be 'all', 'covered', or 'uncovered'")
+            throw mcpError("coverage must be 'all', 'covered', or 'uncovered'")
         }
 
         val resolved = resolveProject(project)
         val dataService = CoverageDataService.getInstance(resolved)
 
         if (!dataService.hasData()) {
-            throw McpExpectedError(
+            throw mcpError(
                 "No coverage data is currently loaded in the IDE. " +
                     "Load coverage first (Fetch from GitLab or load a local .covt file)."
             )
@@ -66,17 +67,17 @@ class CoverageMcpToolset : McpToolset {
         candidates.add(file_path)
 
         val coverageLines = CoveragePathResolver.resolve(dataService, candidates)
-            ?: throw McpExpectedError(
+            ?: throw mcpError(
                 "No coverage found for file: $file_path\n" +
                     "The file may not be covered by any tests, or the path may not match.\n" +
                     "Available files with coverage: ${dataService.allFiles().size}"
             )
 
         val basePath = resolved.basePath
-            ?: throw McpExpectedError("Project has no base path")
+            ?: throw mcpError("Project has no base path")
         val file = File(basePath, file_path)
         if (!file.exists() || !file.isFile) {
-            throw McpExpectedError("File not found: $file_path")
+            throw mcpError("File not found: $file_path")
         }
         val allLines = file.readLines()
         val totalLinesInFile = allLines.size
@@ -137,15 +138,15 @@ class CoverageMcpToolset : McpToolset {
     ): CoverageLineTestsResult {
         log.info("MCP tool: get_tests_at_line file_path=$file_path line_number=$line_number offset=$offset limit=$limit")
 
-        if (line_number < 1) throw McpExpectedError("line_number must be >= 1")
-        if (offset < 0) throw McpExpectedError("offset must be >= 0")
-        if (limit < 1 || limit > 100) throw McpExpectedError("limit must be between 1 and 100")
+        if (line_number < 1) throw mcpError("line_number must be >= 1")
+        if (offset < 0) throw mcpError("offset must be >= 0")
+        if (limit < 1 || limit > 100) throw mcpError("limit must be between 1 and 100")
 
         val resolved = resolveProject(project)
         val dataService = CoverageDataService.getInstance(resolved)
 
         if (!dataService.hasData()) {
-            throw McpExpectedError(
+            throw mcpError(
                 "No coverage data is currently loaded in the IDE. " +
                     "Load coverage first (Fetch from GitLab or load a local .covt file)."
             )
@@ -166,7 +167,7 @@ class CoverageMcpToolset : McpToolset {
         candidates.add(file_path)
 
         val coverageLines = CoveragePathResolver.resolve(dataService, candidates)
-            ?: throw McpExpectedError("No coverage found for file: $file_path")
+            ?: throw mcpError("No coverage found for file: $file_path")
 
         val tests = coverageLines[line_number] ?: emptyList()
         val totalTests = tests.size
@@ -203,7 +204,7 @@ class CoverageMcpToolset : McpToolset {
         val dataService = CoverageDataService.getInstance(resolved)
 
         if (!dataService.hasData()) {
-            throw McpExpectedError(
+            throw mcpError(
                 "No coverage data is currently loaded in the IDE. " +
                     "Load coverage first (Fetch from GitLab or load a local .covt file)."
             )
@@ -214,7 +215,7 @@ class CoverageMcpToolset : McpToolset {
             .filter { it >= 1 }
 
         if (parsedLineNumbers.isEmpty()) {
-            throw McpExpectedError("No valid line numbers provided. Use comma-separated integers, e.g. '1,5,12'")
+            throw mcpError("No valid line numbers provided. Use comma-separated integers, e.g. '1,5,12'")
         }
 
         val candidates = mutableListOf<String>()
@@ -232,7 +233,7 @@ class CoverageMcpToolset : McpToolset {
         candidates.add(file_path)
 
         val coverageLines = CoveragePathResolver.resolve(dataService, candidates)
-            ?: throw McpExpectedError("No coverage found for file: $file_path")
+            ?: throw mcpError("No coverage found for file: $file_path")
 
         val lines = parsedLineNumbers.map { lineNumber ->
             val tests = coverageLines[lineNumber] ?: emptyList()
@@ -275,7 +276,7 @@ class CoverageMcpToolset : McpToolset {
         val dataService = CoverageDataService.getInstance(resolved)
 
         if (!dataService.hasData()) {
-            throw McpExpectedError(
+            throw mcpError(
                 "No coverage data is currently loaded in the IDE. " +
                     "Load coverage first (Fetch from GitLab or load a local .covt file)."
             )
@@ -283,17 +284,17 @@ class CoverageMcpToolset : McpToolset {
 
         val allFiles = dataService.allFiles()
         if (allFiles.isEmpty()) {
-            throw McpExpectedError("No files with coverage data.")
+            throw mcpError("No files with coverage data.")
         }
 
         if (sort !in listOf("coverage_asc", "name")) {
-            throw McpExpectedError("Invalid argument 'sort': must be 'coverage_asc' or 'name'")
+            throw mcpError("Invalid argument 'sort': must be 'coverage_asc' or 'name'")
         }
         if (offset < 0) {
-            throw McpExpectedError("Invalid argument 'offset': must be >= 0")
+            throw mcpError("Invalid argument 'offset': must be >= 0")
         }
         if (coverage !in listOf("all", "uncovered", "fully_covered")) {
-            throw McpExpectedError("Invalid argument 'coverage': must be 'all', 'uncovered', or 'fully_covered'")
+            throw mcpError("Invalid argument 'coverage': must be 'all', 'uncovered', or 'fully_covered'")
         }
 
         val prefix = path.trim('/')
@@ -371,7 +372,7 @@ class CoverageMcpToolset : McpToolset {
         } else {
             "No project path provided. "
         }
-        throw McpExpectedError(
+        throw mcpError(
             "Cannot determine the target project. $hint Open projects:\n$projectList",
         )
     }
@@ -379,6 +380,9 @@ class CoverageMcpToolset : McpToolset {
     companion object {
         internal const val PAGE_SIZE = 50
     }
+
+    private fun mcpError(message: String): Nothing =
+        throw McpExpectedError(message, JsonObject(emptyMap()))
 }
 
 @Serializable
