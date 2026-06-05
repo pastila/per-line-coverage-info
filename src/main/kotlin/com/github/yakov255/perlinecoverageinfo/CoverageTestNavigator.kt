@@ -70,21 +70,20 @@ internal object CoverageTestNavigator {
         }
 
         if (className.isNotEmpty()) {
-            @Suppress("DEPRECATION")
-            val files = FilenameIndex.getFilesByName(project, "$className.php", GlobalSearchScope.projectScope(project))
-            if (files.isNotEmpty()) {
-                val psiFile = files.first()
-                val vf = psiFile.virtualFile ?: return
+            val vFiles = FilenameIndex.getVirtualFilesByName("$className.php", false, GlobalSearchScope.projectScope(project))
+            if (vFiles.isNotEmpty()) {
+                val psiFile = PsiManager.getInstance(project).findFile(vFiles.first()) ?: return
+                val psiVf = psiFile.virtualFile ?: return
                 val document = psiFile.viewProvider.document ?: return
                 val text = document.text
                 val methodPattern = "function $methodName"
                 val offset = text.indexOf(methodPattern)
                 if (offset >= 0) {
                     FileEditorManager.getInstance(project)
-                        .openTextEditor(OpenFileDescriptor(project, vf, offset), true)
+                        .openTextEditor(OpenFileDescriptor(project, psiVf, offset), true)
                 } else {
                     FileEditorManager.getInstance(project)
-                        .openTextEditor(OpenFileDescriptor(project, vf, 0), true)
+                        .openTextEditor(OpenFileDescriptor(project, psiVf, 0), true)
                 }
             } else {
                 log.warn("CoverageTestNavigator: PHP file not found for class: $className")
@@ -118,9 +117,8 @@ internal object CoverageTestNavigator {
         val relPath = toProjectRelativeFeaturePath(featurePath, project)
         val projectDir = project.guessProjectDir() ?: return null
         val vf = VfsUtil.findRelativeFile(relPath, projectDir) ?: return null
-        @Suppress("DEPRECATION")
-        return ReadAction.compute<String?, RuntimeException> {
-            val psiFile = PsiManager.getInstance(project).findFile(vf) as? GherkinFile ?: return@compute null
+        return ReadAction.computeCancellable<String?, RuntimeException> {
+            val psiFile = PsiManager.getInstance(project).findFile(vf) as? GherkinFile ?: return@computeCancellable null
             findScenarioAtLine(psiFile, lineNumber)
         }
     }
