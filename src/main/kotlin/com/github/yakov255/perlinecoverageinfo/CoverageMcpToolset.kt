@@ -7,7 +7,6 @@ import com.intellij.mcpserver.annotations.McpTool
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonObject
 import java.io.File
 
 class CoverageMcpToolset : McpToolset {
@@ -382,7 +381,7 @@ class CoverageMcpToolset : McpToolset {
     }
 
     private fun mcpError(message: String): Nothing =
-        throw McpExpectedError(message, JsonObject(emptyMap()))
+        throw McpExpectedError(message)
 }
 
 @Serializable
