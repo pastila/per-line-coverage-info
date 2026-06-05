@@ -35,7 +35,7 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.opentest4j)
 
-    val kotlinxSerializationJsonVersion = "1.7.3"
+    val kotlinxSerializationJsonVersion = "1.8.1"
     compileOnly("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinxSerializationJsonVersion")
     testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:$kotlinxSerializationJsonVersion")
 
