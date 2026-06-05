@@ -1,6 +1,7 @@
 import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
+import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
 
 plugins {
     id("java") // Java support
@@ -115,6 +116,7 @@ intellijPlatform {
         ides {
             recommended()
         }
+        failureLevel = (VerifyPluginTask.FailureLevel.ALL - VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES - VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES - VerifyPluginTask.FailureLevel.EXPERIMENTAL_API_USAGES).toList()
     }
 }
 
