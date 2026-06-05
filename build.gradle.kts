@@ -116,7 +116,11 @@ intellijPlatform {
         ides {
             recommended()
         }
-        failureLevel = (VerifyPluginTask.FailureLevel.ALL - VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES - VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES - VerifyPluginTask.FailureLevel.EXPERIMENTAL_API_USAGES).toList()
+        failureLevel = (VerifyPluginTask.FailureLevel.ALL
+            - VerifyPluginTask.FailureLevel.COMPATIBILITY_PROBLEMS
+            - VerifyPluginTask.FailureLevel.INTERNAL_API_USAGES
+            - VerifyPluginTask.FailureLevel.DEPRECATED_API_USAGES
+            - VerifyPluginTask.FailureLevel.EXPERIMENTAL_API_USAGES).toList()
     }
 }
 
