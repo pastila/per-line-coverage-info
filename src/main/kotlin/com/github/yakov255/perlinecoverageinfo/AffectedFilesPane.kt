@@ -11,6 +11,7 @@ import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.ui.CheckboxTree
+import com.intellij.ui.CheckboxTreeBase
 import com.intellij.ui.CheckboxTreeListener
 import com.intellij.ui.CheckedTreeNode
 import com.intellij.ui.SimpleTextAttributes
@@ -42,7 +43,7 @@ internal class AffectedFilesPane(
     private var currentModel: AffectedTestsModel? = null
     private var syncPending = false
 
-    val filesTree: CheckboxTree = @Suppress("DEPRECATION") CheckboxTree(object : CheckboxTree.CheckboxTreeCellRenderer() {
+    val filesTree: CheckboxTree = CheckboxTree(object : CheckboxTree.CheckboxTreeCellRenderer() {
         override fun customizeRenderer(
             tree: JTree?, value: Any?, selected: Boolean,
             expanded: Boolean, leaf: Boolean, row: Int, hasFocus: Boolean
@@ -75,7 +76,7 @@ internal class AffectedFilesPane(
                 }
             }
         }
-    }, filesRoot)
+    }, filesRoot, CheckboxTreeBase.CheckPolicy(true, true, true, true))
 
     val component: JComponent
 

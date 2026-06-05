@@ -15,6 +15,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.ui.CheckboxTree
+import com.intellij.ui.CheckboxTreeBase
 import com.intellij.ui.CheckboxTreeListener
 import com.intellij.ui.CheckedTreeNode
 import com.intellij.ui.PopupHandler
@@ -58,7 +59,6 @@ internal class TestTreeView(private val project: Project) {
     private val rootNode = CheckedTreeNode("Tests")
     private val treeModel: DefaultTreeModel get() = tree.model as DefaultTreeModel
 
-    @Suppress("DEPRECATION")
     val tree: CheckboxTree = CheckboxTree(object : CheckboxTree.CheckboxTreeCellRenderer() {
         override fun customizeRenderer(
             tree: JTree?, value: Any?, selected: Boolean,
@@ -91,7 +91,7 @@ internal class TestTreeView(private val project: Project) {
                 else -> r.append(node.userObject?.toString() ?: "", SimpleTextAttributes.REGULAR_ATTRIBUTES)
             }
         }
-    }, rootNode)
+    }, rootNode, CheckboxTreeBase.CheckPolicy(true, true, true, true))
 
     private val scrollPane = JBScrollPane(tree)
     val component: JComponent
@@ -232,7 +232,7 @@ internal class TestTreeView(private val project: Project) {
         tree.addCheckboxTreeListener(object : CheckboxTreeListener {
             override fun nodeStateChanged(node: CheckedTreeNode) {
                 refreshCheckedCount()
-                toolbar.updateActionsImmediately()
+                toolbar.updateActionsAsync()
             }
         })
     }
