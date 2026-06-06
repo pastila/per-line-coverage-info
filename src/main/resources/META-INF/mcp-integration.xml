@@ -1,0 +1,5 @@
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij.mcpServer">
+        <mcpToolset implementation="com.github.yakov255.perlinecoverageinfo.CoverageMcpToolset"/>
+    </extensions>
+</idea-plugin>

@@ -5,7 +5,7 @@
     <vendor>yakov255</vendor>
 
     <depends>com.intellij.modules.platform</depends>
-    <depends>com.intellij.mcpServer</depends>
+    <depends optional="true" config-file="mcp-integration.xml">com.intellij.mcpServer</depends>
     <depends>com.jetbrains.php</depends>
     <depends>gherkin</depends>
     <depends optional="true" config-file="behat-integration.xml">com.jetbrains.php.behat</depends>
@@ -47,9 +47,6 @@
             implementation="com.github.yakov255.perlinecoverageinfo.CoverageStartupActivity"/>
     </extensions>
 
-    <extensions defaultExtensionNs="com.intellij.mcpServer">
-        <mcpToolset implementation="com.github.yakov255.perlinecoverageinfo.CoverageMcpToolset"/>
-    </extensions>
 
     <actions>
         <action id="LoadCoverageFromGitLab" class="com.github.yakov255.perlinecoverageinfo.LoadCoverageAction"
