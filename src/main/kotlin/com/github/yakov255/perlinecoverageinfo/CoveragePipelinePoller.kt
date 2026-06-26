@@ -28,10 +28,17 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
     @Volatile
     private var targetBranch: String? = null
 
+    @Volatile
+    private var polling = false
+
     private var consecutiveErrors = 0
 
     /** SHA of a failed pipeline we already notified about (don't re-notify). */
     private var reportedFailureSha: String? = null
+
+    private var gitLabClient: GitLabApiClient? = null
+    private var clientBaseUrl: String? = null
+    private var clientToken: String? = null
 
     /**
      * Starts or restarts the polling loop. Called after coverage loads, HEAD changes,
@@ -57,6 +64,9 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         targetBranch = null
         consecutiveErrors = 0
         reportedFailureSha = null
+        gitLabClient = null
+        clientBaseUrl = null
+        clientToken = null
         log.info("Coverage: pipeline polling stopped")
     }
 
@@ -75,6 +85,20 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         if (project.isDisposed) { stop(); return }
         if (!started) return
 
+        if (polling) {
+            log.info("Coverage: pipeline poll — previous poll still in progress, skipping")
+            scheduleNext()
+            return
+        }
+        polling = true
+        try {
+            doPoll()
+        } finally {
+            polling = false
+        }
+    }
+
+    private fun doPoll() {
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
             log.info("Coverage: pipeline poll — gutter visibility off, stopping")
             stop()
@@ -127,7 +151,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
 
         // Remote has a different commit — check if there's a pipeline
         val projectId = settings.gitlabProjectId
-        val client = GitLabApiClient(settings.gitlabBaseUrl, settings.bearerToken)
+        val client = getOrCreateClient(settings)
 
         val latestPipeline = try {
             client.listPipelines(projectId, branch, status = null, perPage = 1).firstOrNull()
@@ -179,6 +203,20 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
                 scheduleNext()
             }
         }
+    }
+
+    private fun getOrCreateClient(settings: CoverageApiSettings): GitLabApiClient {
+        val url = settings.gitlabBaseUrl
+        val token = settings.bearerToken
+        val existing = gitLabClient
+        if (existing != null && clientBaseUrl == url && clientToken == token) {
+            return existing
+        }
+        val newClient = GitLabApiClient(url, token)
+        gitLabClient = newClient
+        clientBaseUrl = url
+        clientToken = token
+        return newClient
     }
 
     private fun triggerLoad() {
