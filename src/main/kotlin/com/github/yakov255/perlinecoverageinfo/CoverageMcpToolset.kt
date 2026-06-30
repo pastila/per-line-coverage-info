@@ -381,7 +381,7 @@ class CoverageMcpToolset : McpToolset {
     }
 
     private fun mcpError(message: String): Nothing =
-        throw McpExpectedError(message)
+        throw McpExpectedError(message, null)
 }
 
 @Serializable
