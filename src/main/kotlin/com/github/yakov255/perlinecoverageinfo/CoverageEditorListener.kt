@@ -94,6 +94,6 @@ private class CoverageDocumentListener(
     }
 
     companion object {
-        private const val REHIGHLIGHT_DELAY_MS = 300
+        private const val REHIGHLIGHT_DELAY_MS = 1000
     }
 }

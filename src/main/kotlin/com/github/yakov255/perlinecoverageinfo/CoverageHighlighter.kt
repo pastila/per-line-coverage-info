@@ -1,5 +1,6 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -8,6 +9,7 @@ import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.io.File
@@ -17,6 +19,7 @@ object CoverageHighlighter {
 
     private const val COVERAGE_LAYER = HighlighterLayer.LAST + 1
     val COVERAGE_HIGHLIGHTER_KEY = Key.create<Boolean>("PER_LINE_COVERAGE_HIGHLIGHTER")
+    val COVERAGE_RENDERER_KEY = Key.create<FileCoverageRenderer>("PER_LINE_COVERAGE_RENDERER")
     private val log = CoverageLog.get(CoverageHighlighter::class.java)
 
     fun applyToOpenEditors(project: Project) {
@@ -80,6 +83,8 @@ object CoverageHighlighter {
             filePath = virtualFile.path,
         )
 
+        log.info("CoverageHighlighter: applyToEditor file=${virtualFile.path} lines=${document.lineCount} hasBaseline=${snapshot.hasBaseline}")
+
         ApplicationManager.getApplication().executeOnPooledThread {
             val lineMappingService = LineMappingService.getInstance(project)
             val coverageLines = lineMappingService.getMappedCoverage(snapshot.filePath, snapshot.text)
@@ -106,31 +111,26 @@ object CoverageHighlighter {
                 clearCoverageHighlighters(editor)
 
                 val warnings = CoverageWarningService.getInstance(project).getWarnings()
-                val markupModel = editor.markupModel
+                val renderer = FileCoverageRenderer(
+                    filePath = snapshot.filePath,
+                    project = project,
+                    coverageLines = coverageLines,
+                    baselineLines = baselineLines,
+                    hasBaseline = snapshot.hasBaseline,
+                    warnings = warnings,
+                )
 
-                for (line in 0 until snapshot.lineCount) {
-                    val lineNumber = line + 1
-                    val tests = coverageLines[lineNumber] ?: continue
+                val highlighter = editor.markupModel.addRangeHighlighter(
+                    0, document.textLength, COVERAGE_LAYER,
+                    TextAttributes(null, null, null, null, 0),
+                    HighlighterTargetArea.LINES_IN_RANGE
+                )
+                highlighter.lineMarkerRenderer = renderer
+                highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
+                highlighter.putUserData(COVERAGE_RENDERER_KEY, renderer)
 
-                    val baselineTests = baselineLines?.get(lineNumber) ?: emptyList()
-                    val category = categorizeLine(tests, baselineTests, snapshot.hasBaseline)
-                    val startOffset = document.getLineStartOffset(line)
-                    val endOffset = document.getLineEndOffset(line)
-                    val highlighter = markupModel.addRangeHighlighter(
-                        startOffset, endOffset, COVERAGE_LAYER,
-                        TextAttributes(null, null, null, null, 0),
-                        HighlighterTargetArea.LINES_IN_RANGE
-                    )
-                    highlighter.lineMarkerRenderer = CoverageGutterRenderer(
-                        lineNumber = lineNumber,
-                        tests = tests,
-                        baselineTests = baselineTests,
-                        hasBaseline = snapshot.hasBaseline,
-                        category = category,
-                        warnings = warnings,
-                    )
-                    highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
-                }
+                log.info("CoverageHighlighter: added single highlighter file=$snapshot.filePath lines=${coverageLines.size} docLen=${document.textLength}")
+                renderer.install(editor)
             }
         }
     }
@@ -157,7 +157,14 @@ object CoverageHighlighter {
         val toRemove = editor.markupModel.allHighlighters.filter {
             it.getUserData(COVERAGE_HIGHLIGHTER_KEY) == true
         }
+        if (toRemove.isNotEmpty()) {
+            log.info("CoverageHighlighter: removing ${toRemove.size} highlighters")
+        }
         for (h in toRemove) {
+            val renderer = h.getUserData(COVERAGE_RENDERER_KEY)
+            if (renderer != null) {
+                Disposer.dispose(renderer)
+            }
             editor.markupModel.removeHighlighter(h)
         }
     }
