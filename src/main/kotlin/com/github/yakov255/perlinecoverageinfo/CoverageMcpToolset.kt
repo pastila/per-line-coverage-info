@@ -425,8 +425,8 @@ data class CoverageMultipleLinesResult(
 @Serializable
 data class CoveredLineFirstTest(
     val lineNumber: Int,
-    val isCovered: Boolean = false,
-    val totalTests: Int = 0,
+    val isCovered: Boolean? = null,
+    val totalTests: Int? = null,
     val firstTest: String? = null,
 )
 

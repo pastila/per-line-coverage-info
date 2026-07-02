@@ -123,7 +123,7 @@ class CoverageMcpToolsetTest {
         val serialized = json.encodeToString(CoveredLineFirstTest.serializer(), line)
         val deserialized = json.decodeFromString(CoveredLineFirstTest.serializer(), serialized)
         assertEquals(5, deserialized.lineNumber)
-        assertTrue(deserialized.isCovered)
+        assertEquals(true, deserialized.isCovered)
         assertEquals(3, deserialized.totalTests)
         assertEquals("TestA", deserialized.firstTest)
     }
@@ -132,7 +132,7 @@ class CoverageMcpToolsetTest {
     fun coveredLineFirstTestUncovered() {
         val line = CoveredLineFirstTest(lineNumber = 10, isCovered = false, totalTests = 0, firstTest = null)
         assertNull(line.firstTest)
-        assertFalse(line.isCovered)
+        assertEquals(false, line.isCovered)
     }
 
     // --- CoverageMultipleLinesResult ---
