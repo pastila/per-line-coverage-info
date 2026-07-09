@@ -22,9 +22,10 @@ class ShowCoverageGutterAction : AnAction(), DumbAware {
 
     override fun update(e: AnActionEvent) {
         val project = e.project
-        // Show only when coverage data exists and highlights are currently hidden
+        // Show when the gutter is hidden, regardless of whether coverage data is
+        // currently loaded: loading is suppressed while hidden, so hasData() may
+        // be false even though the user just wants to turn the feature back on.
         e.presentation.isEnabledAndVisible = project != null &&
-            CoverageDataService.getInstance(project).hasData() &&
             !CoverageGutterVisibilityService.getInstance(project).visible
     }
 

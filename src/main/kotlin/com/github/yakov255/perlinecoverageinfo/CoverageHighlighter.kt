@@ -1,6 +1,5 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -9,7 +8,6 @@ import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.io.File
@@ -19,7 +17,6 @@ object CoverageHighlighter {
 
     private const val COVERAGE_LAYER = HighlighterLayer.LAST + 1
     val COVERAGE_HIGHLIGHTER_KEY = Key.create<Boolean>("PER_LINE_COVERAGE_HIGHLIGHTER")
-    val COVERAGE_RENDERER_KEY = Key.create<FileCoverageRenderer>("PER_LINE_COVERAGE_RENDERER")
     private val log = CoverageLog.get(CoverageHighlighter::class.java)
 
     fun applyToOpenEditors(project: Project) {
@@ -127,10 +124,8 @@ object CoverageHighlighter {
                 )
                 highlighter.lineMarkerRenderer = renderer
                 highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
-                highlighter.putUserData(COVERAGE_RENDERER_KEY, renderer)
 
                 log.info("CoverageHighlighter: added single highlighter file=$snapshot.filePath lines=${coverageLines.size} docLen=${document.textLength}")
-                renderer.install(editor)
             }
         }
     }
@@ -161,10 +156,6 @@ object CoverageHighlighter {
             log.info("CoverageHighlighter: removing ${toRemove.size} highlighters")
         }
         for (h in toRemove) {
-            val renderer = h.getUserData(COVERAGE_RENDERER_KEY)
-            if (renderer != null) {
-                Disposer.dispose(renderer)
-            }
             editor.markupModel.removeHighlighter(h)
         }
     }
