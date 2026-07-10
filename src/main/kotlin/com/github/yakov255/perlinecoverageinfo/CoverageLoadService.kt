@@ -260,7 +260,7 @@ class CoverageLoadService(private val project: Project) {
             dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
             computeAndStoreWarningContext(resolved.gitRoot)
             dataService.setCov4Reader(primaryCached)
-            loadOrFetchBaseline(null, gitLabClient, cache, dual.baseline)
+            loadOrFetchBaseline(null, gitLabClient, cache, dual.baseline, preloadedReader = baselineCached)
             ApplicationManager.getApplication().invokeLater {
                 CoverageHighlighter.applyToOpenEditors(project)
                 notifyIfFallback(resolved)
@@ -321,7 +321,7 @@ class CoverageLoadService(private val project: Project) {
                         dataService.setCov4Reader(primaryCached)
                     }
 
-                    loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, baseProgress = 0.6)
+                    loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, preloadedReader = baselineCached, baseProgress = 0.6)
 
                     log.info("Coverage: loaded coverage for commit ${resolved.commitHash.take(8)}")
                     ApplicationManager.getApplication().invokeLater {
@@ -619,6 +619,7 @@ class CoverageLoadService(private val project: Project) {
         gitLabClient: GitLabApiClient,
         cache: CoverageCacheService,
         baseline: ResolvedPipeline?,
+        preloadedReader: Cov4Reader? = null,
         baseProgress: Double = 0.0,
     ): Boolean {
         val dataService = CoverageDataService.getInstance(project)
@@ -627,7 +628,7 @@ class CoverageLoadService(private val project: Project) {
             return true
         }
         try {
-            val cached = cache.get(baseline.commitHash)
+            val cached = preloadedReader ?: cache.get(baseline.commitHash)
             if (cached != null) {
                 cache.updateLastUsed(baseline.commitHash)
                 dataService.setBaselineCov4Reader(cached, baseline.commitHash)
