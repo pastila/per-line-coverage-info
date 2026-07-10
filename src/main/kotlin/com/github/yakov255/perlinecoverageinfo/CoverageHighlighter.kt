@@ -9,7 +9,6 @@ import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Key
-import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.io.File
 import java.nio.file.Paths
 
@@ -17,12 +16,10 @@ object CoverageHighlighter {
 
     private const val COVERAGE_LAYER = HighlighterLayer.LAST + 1
     val COVERAGE_HIGHLIGHTER_KEY = Key.create<Boolean>("PER_LINE_COVERAGE_HIGHLIGHTER")
-    private val log = CoverageLog.get(CoverageHighlighter::class.java)
 
     fun applyToOpenEditors(project: Project) {
         val dataService = CoverageDataService.getInstance(project)
         if (!dataService.hasData()) {
-            log.info("CoverageHighlighter: no data, skipping applyToOpenEditors")
             return
         }
 
@@ -32,11 +29,9 @@ object CoverageHighlighter {
             applyToEditor(editor, project)
             count++
         }
-        log.info("CoverageHighlighter: applied to $count editors")
     }
 
     fun clearAllEditors(project: Project) {
-        log.info("CoverageHighlighter: clearing all editors")
         for (editor in EditorFactory.getInstance().allEditors) {
             if (editor.project != project) continue
             clearCoverageHighlighters(editor)
@@ -58,7 +53,6 @@ object CoverageHighlighter {
     fun applyToEditor(editor: Editor, project: Project) {
         val dataService = CoverageDataService.getInstance(project)
         if (!dataService.hasData()) {
-            log.info("CoverageHighlighter: no data, skipping editor highlight")
             return
         }
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
@@ -69,7 +63,6 @@ object CoverageHighlighter {
         val document = editor.document
         val virtualFile = FileDocumentManager.getInstance().getFile(document)
         if (virtualFile == null) {
-            log.info("CoverageHighlighter: no virtual file for editor, skipping")
             return
         }
 
@@ -80,14 +73,11 @@ object CoverageHighlighter {
             filePath = virtualFile.path,
         )
 
-        log.info("CoverageHighlighter: applyToEditor file=${virtualFile.path} lines=${document.lineCount} hasBaseline=${snapshot.hasBaseline}")
-
         ApplicationManager.getApplication().executeOnPooledThread {
             val lineMappingService = LineMappingService.getInstance(project)
             val coverageLines = lineMappingService.getMappedCoverage(snapshot.filePath, snapshot.text)
                 ?: findCoverageForFile(snapshot.filePath, project)
             if (coverageLines == null) {
-                log.info("CoverageHighlighter: no coverage found for file, skipping")
                 return@executeOnPooledThread
             }
 
@@ -101,7 +91,6 @@ object CoverageHighlighter {
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed || editor.isDisposed) return@invokeLater
                 if (document.text != snapshot.text) {
-                    log.info("CoverageHighlighter: document changed during async work, skipping stale highlights")
                     return@invokeLater
                 }
 
@@ -124,8 +113,6 @@ object CoverageHighlighter {
                 )
                 highlighter.lineMarkerRenderer = renderer
                 highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
-
-                log.info("CoverageHighlighter: added single highlighter file=$snapshot.filePath lines=${coverageLines.size} docLen=${document.textLength}")
             }
         }
     }
@@ -151,9 +138,6 @@ object CoverageHighlighter {
     fun clearCoverageHighlighters(editor: Editor) {
         val toRemove = editor.markupModel.allHighlighters.filter {
             it.getUserData(COVERAGE_HIGHLIGHTER_KEY) == true
-        }
-        if (toRemove.isNotEmpty()) {
-            log.info("CoverageHighlighter: removing ${toRemove.size} highlighters")
         }
         for (h in toRemove) {
             editor.markupModel.removeHighlighter(h)
