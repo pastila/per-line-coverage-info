@@ -18,6 +18,8 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
         var coverageBranch: String = "master",
         /** Whether the plugin is enabled for this IDE installation. */
         var enabled: Boolean = false,
+        /** Whether the first-run token prompt has been shown. */
+        var tokenPrompted: Boolean = false,
     )
 
     private var state = State()
@@ -51,6 +53,10 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
     var enabled: Boolean
         get() = state.enabled
         set(value) { state.enabled = value }
+
+    var tokenPrompted: Boolean
+        get() = state.tokenPrompted
+        set(value) { state.tokenPrompted = value }
 
     val gitlabBaseUrl: String
         get() = "https://${state.gitlabDomain.trimEnd('/')}"
