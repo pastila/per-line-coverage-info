@@ -34,7 +34,13 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
         if (previous == currentRevision) return
 
         lastKnownRevision = currentRevision
-        log.info("Coverage: HEAD changed ${previous?.take(8) ?: "null"} → ${currentRevision.take(8)}, scheduling reload")
+
+        if (previous == null) {
+            log.info("Coverage: initial HEAD = ${currentRevision.take(8)} — skipped (CoverageStartupActivity handles initial load)")
+            return
+        }
+
+        log.info("Coverage: HEAD changed ${previous.take(8)} → ${currentRevision.take(8)}, scheduling reload")
 
         CoveragePipelinePoller.getInstance(project).stop()
 
