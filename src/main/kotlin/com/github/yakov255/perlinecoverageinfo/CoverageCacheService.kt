@@ -104,6 +104,7 @@ class CoverageCacheService(private val project: Project) {
         pipelineId: Long,
         coverage: Map<String, Map<Int, List<String>>>,
         component: String,
+        branch: String? = null,
     ) {
         cleanup()
         val dir = cacheDir()
@@ -127,6 +128,7 @@ class CoverageCacheService(private val project: Project) {
             commitHash = commitHash,
             pipelineId = pipelineId,
             component = component,
+            branch = branch,
             timestampMs = now,
             totalFiles = totalFiles,
             totalLines = totalLines,
@@ -184,6 +186,7 @@ class CoverageCacheService(private val project: Project) {
                     totalLines = entry.totalLines,
                     coveredLines = entry.coveredLines,
                     lastUsedMs = entry.lastUsedMs,
+                    branch = entry.branch,
                 )
             }
     }
@@ -313,6 +316,7 @@ private data class CacheEntry(
     val coveredLines: Int = 0,
     val lastUsedMs: Long? = null,
     val component: String = "",
+    val branch: String? = null,
 )
 
 /**
@@ -329,6 +333,7 @@ data class ArtifactInfo(
     val coveredLines: Int,
     val lastUsedMs: Long? = null,
     val component: String,
+    val branch: String? = null,
 ) {
     /** Percentage of tracked lines covered by at least one test, or null for legacy entries. */
     val coveragePercent: Float?

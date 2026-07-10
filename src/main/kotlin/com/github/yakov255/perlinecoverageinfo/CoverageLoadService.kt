@@ -331,7 +331,7 @@ class CoverageLoadService(private val project: Project) {
                         }
 
                         for (cr in result.componentResults) {
-                            cache.writeCov4(result.resolved.commitHash, result.resolved.pipelineId, cr.coverage, component = cr.component)
+                            cache.writeCov4(result.resolved.commitHash, result.resolved.pipelineId, cr.coverage, component = cr.component, branch = cr.branch)
                         }
 
                         val freshReader = cache.get(result.resolved.commitHash, component)
@@ -634,12 +634,15 @@ class CoverageLoadService(private val project: Project) {
             lineMap.mapValues { (_, tests) -> tests.toList() }
         }
 
+        val headBranch = CoverageResolver.runGitCommand(resolved.gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
+
         return CoverageLoadResult(
             resolved = resolved,
             componentResults = listOf(ComponentCoverage(
                 coverage = finalCoverage,
                 component = artifactComponent,
                 artifactCount = totalJobs,
+                branch = headBranch,
             )),
         )
     }
@@ -747,7 +750,7 @@ class CoverageLoadService(private val project: Project) {
                 fractionEnd = 1.0,
             )
             val baselineComponent = result.componentResults.first().component
-            cache.writeCov4(baseline.commitHash, baseline.pipelineId, result.componentResults.first().coverage, component = baselineComponent)
+            cache.writeCov4(baseline.commitHash, baseline.pipelineId, result.componentResults.first().coverage, component = baselineComponent, branch = CoverageApiSettings.getInstance().coverageBranch)
             val freshReader = cache.get(baseline.commitHash, baselineComponent)
             if (freshReader != null) {
                 dataService.setBaselineCov4Reader(freshReader, baseline.commitHash)
@@ -1003,6 +1006,7 @@ data class ComponentCoverage(
     val coverage: Map<String, Map<Int, List<String>>>,
     val component: String,
     val artifactCount: Int,
+    val branch: String? = null,
 )
 
 data class CoverageLoadResult(
