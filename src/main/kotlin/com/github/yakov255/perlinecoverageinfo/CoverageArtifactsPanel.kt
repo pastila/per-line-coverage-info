@@ -96,6 +96,11 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         add(cardPanel, BorderLayout.CENTER)
         add(statusLabel, BorderLayout.SOUTH)
 
+        project.messageBus.connect().subscribe(
+            CoverageDataService.COVERAGE_CHANGED_TOPIC,
+            CoverageChangeListener { refreshData() },
+        )
+
         refreshData()
     }
 
@@ -218,7 +223,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         if (confirmed != Messages.YES) return
 
         val isActive = CoverageDataService.getInstance(project).coverageCommitHash == entry.commitHash
-        val deleted = CoverageCacheService.getInstance(project).deleteArtifact(entry.commitHash)
+        val deleted = CoverageCacheService.getInstance(project).deleteArtifact(entry.commitHash, entry.component)
 
         if (deleted && isActive) {
             doClearCoverage()
@@ -421,7 +426,7 @@ private class ArtifactsTableModel : AbstractTableModel() {
                 date = dateFormat.format(Date(entry.timestampMs)),
                 commit = entry.commitHash.take(8),
                 pipeline = if (entry.pipelineId == 0L) "local" else "#${entry.pipelineId}",
-                components = entry.component ?: "—",
+                components = entry.component.ifEmpty { "—" },
                 size = "%.2f MB".format(entry.fileSizeBytes / 1_000_000.0),
                 files = if (entry.totalFiles > 0) entry.totalFiles.toString() else "—",
                 coverage = entry.coveragePercent?.let { "%.1f%%".format(it) } ?: "—",

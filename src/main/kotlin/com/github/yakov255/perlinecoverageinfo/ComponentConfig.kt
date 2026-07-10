@@ -13,7 +13,7 @@ object ComponentConfig {
 
     private val COMPONENTS = listOf(
         ComponentEntry("api/avia", "test:behat:avia"),
-        ComponentEntry("core", "test:behat:raketa"),
+        ComponentEntry("raketa", "test:behat:raketa"),
         ComponentEntry("api/hotels", "test:behat:hotels"),
         ComponentEntry("api/transfer", "test:behat:transfer"),
         ComponentEntry("api/rail", "test:behat:rail"),
@@ -24,11 +24,26 @@ object ComponentConfig {
         ComponentEntry("api/bus", "test:behat:bus"),
     )
 
+    private val RAKETA = COMPONENTS.first { it.serviceDir == "raketa" }
+
+    /**
+     * Определяет компонент для проекта.
+     * - Корень репо → raketa
+     * - Вложенность в serviceDir → соответствующий компонент
+     * - Иначе → null
+     */
     fun detectComponent(projectBasePath: String, gitRoot: File): ComponentEntry? {
+        if (isAtGitRoot(projectBasePath, gitRoot)) {
+            log.info("ComponentConfig: project at git root — using raketa")
+            return RAKETA
+        }
+
         val gitRelative = runCatching {
             gitRoot.toPath().relativize(File(projectBasePath).toPath())
                 .toString().replace(File.separatorChar, '/')
-        }.getOrNull() ?: run {
+        }.getOrNull()
+
+        if (gitRelative == null) {
             log.info("ComponentConfig: cannot relativize $projectBasePath to git root $gitRoot")
             return null
         }
@@ -39,18 +54,17 @@ object ComponentConfig {
 
         if (matched != null) {
             log.info("ComponentConfig: detected component '${matched.serviceDir}' (gitRelative=$gitRelative)")
-        } else {
-            log.info("ComponentConfig: no component matched for gitRelative=$gitRelative")
+            return matched
         }
-        return matched
+
+        log.info("ComponentConfig: no component matched for gitRelative=$gitRelative")
+        return null
     }
 
-    fun isAtGitRoot(projectBasePath: String, gitRoot: File): Boolean {
-        val result = runCatching {
+    private fun isAtGitRoot(projectBasePath: String, gitRoot: File): Boolean {
+        return runCatching {
             File(projectBasePath).canonicalPath == gitRoot.canonicalPath
         }.getOrDefault(false)
-        log.info("ComponentConfig: isAtGitRoot=$result (project=$projectBasePath, gitRoot=$gitRoot)")
-        return result
     }
 
     fun allEntries(): List<ComponentEntry> = COMPONENTS
