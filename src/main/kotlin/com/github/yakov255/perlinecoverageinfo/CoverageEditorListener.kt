@@ -11,7 +11,6 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import com.intellij.util.Alarm
-import com.github.yakov255.perlinecoverageinfo.CoverageLog
 
 /**
  * Listens for new editors being opened and applies coverage highlights.
@@ -22,8 +21,6 @@ import com.github.yakov255.perlinecoverageinfo.CoverageLog
  */
 class CoverageEditorListener : EditorFactoryListener {
 
-    private val log = CoverageLog.get(CoverageEditorListener::class.java)
-
     companion object {
         private val COVERAGE_DOC_DISPOSABLE_KEY = Key.create<Disposable>("COVERAGE_DOC_DISPOSABLE")
     }
@@ -31,7 +28,6 @@ class CoverageEditorListener : EditorFactoryListener {
     override fun editorCreated(event: EditorFactoryEvent) {
         val editor = event.editor
         val project = editor.project ?: return
-        log.info("CoverageEditorListener: editor created")
         CoverageHighlighter.applyToEditor(editor, project)
         installDocumentListener(editor, project)
     }
@@ -48,13 +44,11 @@ class CoverageEditorListener : EditorFactoryListener {
     private fun installDocumentListener(editor: Editor, project: Project) {
         val dataService = CoverageDataService.getInstance(project)
         if (!dataService.hasData()) {
-            log.info("CoverageEditorListener: no data, skipping listener install")
             return
         }
 
         val virtualFile = FileDocumentManager.getInstance().getFile(editor.document)
         if (virtualFile == null) {
-            log.info("CoverageEditorListener: no virtual file, skipping listener install")
             return
         }
         val lineMappingService = LineMappingService.getInstance(project)
