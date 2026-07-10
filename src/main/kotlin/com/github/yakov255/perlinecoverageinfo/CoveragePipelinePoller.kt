@@ -144,7 +144,6 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         val loadedSha = dataService.coverageCommitHash
 
         if (remoteSha == loadedSha) {
-            log.info("Coverage: pipeline poll — remote at same commit as loaded coverage")
             scheduleNext()
             return
         }
