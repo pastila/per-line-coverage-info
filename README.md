@@ -63,7 +63,7 @@ CI (Behat with pcov) → .covt → GitLab Artifacts
 
 ## Скриншоты
 
-<!-- СЮДА -->
+![Main screenshot](screens/main.png)
 
 ## Установка
 
