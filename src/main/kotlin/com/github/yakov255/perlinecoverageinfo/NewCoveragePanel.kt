@@ -163,7 +163,6 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
             if (processed % 1000 == 0) {
                 indicator.text = "Scanning $processed / $total files"
                 indicator.fraction = processed.toDouble() / total
-                log.info("NewCoverage: processed $processed / $total")
             }
         }
 

@@ -144,12 +144,11 @@ class LineMappingService(private val project: Project) {
         val gitPath = toGitRelativePath(relativePath) ?: return null
         val oldContent = CoverageResolver.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
         if (oldContent != null) {
-            log.info("LineMappingService: git show succeeded for $commitHash:$gitPath (${oldContent.length} bytes)")
             synchronized(oldContentCache) {
                 oldContentCache[key] = oldContent
             }
         } else {
-            log.warn("LineMappingService: git show failed for $commitHash:$gitPath")
+            log.warn("LineMappingService: git show failed for $commitHash:$gitPath (gitRoot=${gitRoot.path})")
         }
         return oldContent
     }
