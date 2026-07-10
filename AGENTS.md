@@ -26,6 +26,11 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel |
 | `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; triggers `loadOfflineFirst()` for all open projects on Apply/OK if plugin enabled and configured |
 
+### Component configuration
+| File | Purpose |
+|------|---------|
+| `ComponentConfig.kt` | Hardcoded mapping from repository service directories to CI job prefixes (e.g. `api/avia` → `test:behat:avia`). `detectComponent()` returns the component for the current project root (root → `raketa`, subpath → matching component). |
+
 ### MCP server
 | File | Purpose |
 |------|---------|
@@ -41,7 +46,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Loading pipeline
 | File | Purpose |
 |------|---------|
-| `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback), `loadFromGitLab()` (two-phase: silent resolve → visible download on cache miss), `loadFromCache()` (manual selection) |
+| `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback → GitLab refresh), `loadFromGitLab()` (two-phase: silent resolve → visible download on cache miss). `downloadArtifacts()` filters by detected component, waits for running behat jobs (infinite, cancel via progress/branch switch), falls back to baseline pipeline on `NO_DATA`. `loadOrFetchBaseline()` accepts `preloadedReader` to avoid redundant `.cov4` opens. |
 | `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden |
 | `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; skipped when gutter hidden |
 | `CoveragePipelinePoller.kt` | Polls remote for new pipelines and auto-refreshes coverage; stopped/blocked when gutter hidden |
@@ -55,7 +60,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `BinaryCoverageParser.kt` | Parses `.covt` binary and CI artifact ZIPs → `Map<file, Map<line, List<test>>>` |
 | `Cov4Writer.kt` | Writes COV4 random-access cache file (spec: `coverage_storage_format_v4.md`) |
 | `Cov4Reader.kt` | Reads COV4 on demand (lazy per-file decoding); implements `Closeable` |
-| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<projectId>/`; key = commit hash; manages index, cleanup (7 days), last-used tracking |
+| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<projectId>/`; key = commit hash + component; files named `hash-component.cov4`; manages index, cleanup (7 days by `lastUsedMs`), last-used tracking. `CacheEntry` stores component and branch per artifact. |
 
 ### In-memory model
 | File | Purpose |
@@ -137,7 +142,11 @@ When the current branch has its own pipeline **and** the coverage branch (master
 
 ## Flow
 
-On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). **All auto-loading is skipped when gutter visibility is off** (`CoverageGutterVisibilityService.visible == false`) — no GitLab calls, no cache walks, no polling. On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
+On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). **All auto-loading is skipped when gutter visibility is off** (see below). GitLab requests are also skipped when the gutter is hidden.
+
+`CoverageLoadService` auto-detects the current component via `ComponentConfig.detectComponent()` (root → `raketa`, subpath → matching component, unknown → error). During download, the plugin filters CI jobs to only the detected component, waits for running jobs (infinite — cancelled only via progress bar or branch switch), and falls back to the baseline (master) pipeline when the current branch has no jobs for the component.
+
+Cache is stored per component (`~/.cache/coverage-plugin/<projectId>/<hash>-<component>.cov4`). Each artifact tracks which branch it was downloaded from. On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
 
 ## MCP
 
@@ -167,10 +176,15 @@ Tool: `list_files` — lists files with coverage data under a directory.
 - **Logging**: `private val log = CoverageLog.get(Foo::class.java)` — never `Logger.getInstance` directly.
 - **Paths**: canonical key is git-root-relative (e.g. `api/hotels/src/Foo.php`). `LineMappingService.toGitRelativePath` converts project-relative → git-relative. Feature paths in test names are also git-root-relative; strip with `CoverageTestNavigator.toProjectRelativeFeaturePath`.
 - **Line numbers**: 1-based throughout.
-- **Cache key**: commit hash (not pipeline ID).
+- **Cache key**: commit hash + component (not pipeline ID). Files: `<hash>-<component>.cov4`.
+- **Component**: `ComponentConfig.detectComponent()` maps project root → `raketa`, subdirectory → matching component. Only behat jobs for the detected component are downloaded.
+- **Waiting**: `downloadArtifacts()` waits indefinitely for running behat jobs; cancelled via progress bar (`indicator.isCanceled`) or branch switch (`pendingReload`).
+- **Fallback**: when the primary pipeline has no jobs for the component, `startDownloadTask()` falls back to the baseline (master) pipeline and clears the baseline reader.
+- **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.
 - **Threading**: pipeline resolve on pooled thread (silent); download in `Task.Backgroundable` (visible progress); UI updates via `invokeLater`.
 - **Errors**: throw `CoverageApiException(CoverageErrorKind.*)`. Auto-triggered callers only log (silent mode).
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.
+- **HEAD tracker**: `CoverageHeadTracker` skits the initial `null → revision` event to avoid duplicating `CoverageStartupActivity`.
 - **Behat paths**: `BehatTestRunner.runMultiplePaths()` passes feature file paths as separate positional arguments (e.g. `file:1 file:2 file:3`), not as comma-separated lines with `--paths` option.
