@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - name: Free Disk Space
+        run: |
+          sudo apt-get clean
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/hostedtoolcache
       - uses: actions/setup-java@v5
         with:
           distribution: zulu
@@ -31,6 +35,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Free Disk Space
+        run: |
+          sudo apt-get clean
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/hostedtoolcache
       - uses: actions/setup-java@v5
         with:
           distribution: zulu
