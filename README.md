@@ -1,7 +1,8 @@
-# Per-Line Coverage Info
+# Per-Line Coverage Info - Raketa Edition
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)](https://github.com/your-repo/per-line-coverage-info/actions)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+*Плагин разработан для Raketa (raketa.travel)
+
+Это плагин для PhpStorm, который показывает покрытие PHP тестами прямо в редакторе.
 
 <!-- Plugin description -->
 Shows per-line PHP test coverage inline in the editor. Downloads coverage artifacts
@@ -12,129 +13,90 @@ new on the feature branch versus the base branch.
 <!-- Plugin description end -->
 
 ## Table of Contents
-- [Overview](#overview)
-- [Features](#features)
-- [API Specification](#api-specification)
-- [Settings Configuration](#settings-configuration)
-- [Usage](#usage)
-- [Installation](#installation)
-- [Development](#development)
+- [Проблема](#проблема)
+- [Возможности](#возможности)
+- [Скриншоты](#скриншоты)
+- [Установка](#установка)
+- [Требования](#требования)
+- [Разработка](#разработка)
 
-## Overview
+## Проблема
 
-The Per-Line Coverage Info plugin fetches coverage data from a custom API and overlays it onto your code in the IntelliJ editor. This allows developers to see which lines of code have been executed during testing without running full coverage suites locally.
+В компании Raketa десятки микросервисов, каждый со своими Behat-тестами.
+CI гоняет тесты при каждом пуше, собирает coverage в `.covt`-файлы и
+загружает в GitLab pipeline artifacts. Чтобы понять, какие строки покрыты
+тестами, а какие нет — приходилось либо гонять тесты локально (долго),
+либо лезть в CI (неудобно).
 
-**Supported Languages:** Primarily designed for PHP, with potential support for other languages via API extensibility.
+**Per-Line Coverage Info** решает эту проблему:
 
-**Integration:** Seamlessly works with IntelliJ's built-in Coverage tool window, providing a unified view of coverage data.
+- Автоматически находит подходящий пайплайн в GitLab по текущей ветке
+- Скачивает coverage-артефакты (.covt.gz)
+- Кеширует на диске в бинарном формате (.cov4) для быстрого доступа
+- Рисует в gutter зелёные/красные/синие полоски напротив каждой строки
+- По клику на covered line — список тестов, которые её выполняют
+- Тесты можно запустить прямо из попапа (Run / Debug)
 
-## Features
+**Как это работает:**
 
-- **Custom API Coverage Data Fetching:** Pulls detailed coverage information from external services.
-- **Bearer Token Authentication:** Securely authenticates with APIs using bearer tokens.
-- **Per-Line Coverage Display:** Shows coverage status for each line with gutter icons and editor highlighting.
-- **IntelliJ Coverage Tool Window Integration:** Displays coverage summaries and navigates to uncovered lines.
-
-## API Specification
-
-The plugin expects coverage data in JSON format via a GET request to a configurable endpoint.
-
-### Response Format
-```json
-{
-  "files": {
-    "/path/to/file.php": {
-      "lines": {
-        "10": {"covered": true, "hits": 5},
-        "15": {"covered": false, "hits": 0}
-      }
-    },
-    "/path/to/another.php": {
-      "lines": {
-        "5": {"covered": true, "hits": 1}
-      }
-    }
-  }
-}
+```
+CI (Behat with pcov) → .covt → GitLab Artifacts
+                                       ↓
+                              PhpStorm Plugin
+                                       ↓
+                            .cov4 cache (local)
+                                       ↓
+                         gutter markers + line highlights
 ```
 
-- `files`: An object where keys are file paths and values are coverage objects.
-- `lines`: An object where keys are line numbers (strings) and values are coverage objects.
-- `covered`: Boolean indicating if the line was executed.
-- `hits`: Integer count of execution hits (optional, for detailed reporting).
+## Возможности
 
-### Authentication
-Requests include a Bearer token in the Authorization header: `Authorization: Bearer <token>`.
+- **Inline coverage** — gutter полоски и подсветка строк: 🟢 covered, 🔴 uncovered, 🔵 feature-only
+- **Per-line tests** — клик на covered line → панель "Covering Line" со списком тестов
+- **Run/Debug тестов** — одно кнопкой из попапа, без поиска feature-файла
+- **Dual-coverage mode** — сравнение покрытия ветки с master; синие линии = тесты, новые на ветке
+- **Affected by Changes** — таб, показывающий тесты, которые нужно перезапустить после изменений
+- **Компоненты** — фильтрация по микросервисам (api/avia, api/hotels, raketa и т.д.)
+- **Автообновление** — pipeline poller: появление нового пайплайна → авто-перезагрузка coverage
+- **Offline-first** — stale coverage из кеша моментально, свежее из GitLab в фоне
+- **Свой репозиторий** — автообновления плагина через GitHub Pages (без Marketplace)
 
-Example cURL request:
+## Скриншоты
+
+<!-- СЮДА -->
+
+## Установка
+
+### Option A — Custom Plugin Repository (автообновление с GitHub, рекомендуется)
+
+1. **Settings → Plugins**
+2. **⚙ (gear) → Manage Plugin Repositories…**
+3. Добавить URL: `https://yakov255.github.io/per-line-coverage-info/updatePlugins.xml`
+4. Открыть вкладку **Marketplace**, найти `per-line-coverage-info`, установить.
+
+Новые версии подхватываются автоматически — как из обычного Marketplace.
+
+### Option B — Установка из ZIP
+
+1. Скачать `.zip` с [releases page](https://github.com/yakov255/per-line-coverage-info/releases)
+2. **Settings → Plugins → ⚙ → Install Plugin from Disk…**
+3. Выбрать `.zip`, перезапустить IDE
+
+## Требования
+
+- IntelliJ IDEA Ultimate 2025.2+
+- PHP plugin
+- GitLab доступ (Personal Access Token с `read_api` и `read_repository`)
+
+## Разработка
+
 ```bash
-curl -X GET https://api.example.com/coverage \
-  -H "Authorization: Bearer your-token"
+./gradlew compileKotlin   # компиляция
+./gradlew test            # тесты
+./gradlew buildPlugin     # сборка .zip
+./gradlew runIde          # запуск тестовой IDE
 ```
 
-## Settings Configuration
+### Лицензия
 
-Access plugin settings via **File > Settings > Tools > Coverage API** (or **IntelliJ IDEA > Preferences > Tools > Coverage API** on macOS).
-
-### Fields
-- **API URL:** The endpoint for fetching coverage data (e.g., `https://api.example.com/coverage`).
-- **Bearer Token:** Your authentication token for the API.
-
-### Default Values
-- API URL: (empty)
-- Bearer Token: (empty)
-
-*Screenshots: The settings dialog shows input fields for API URL and Bearer Token, with placeholders and validation hints.*
-
-## Usage
-
-1. Configure the API URL and Bearer Token in settings.
-2. Open a PHP file in the editor.
-3. Coverage data loads automatically, displaying gutter icons (green check for covered, red X for uncovered).
-4. Use the Coverage tool window (**View > Tool Windows > Coverage**) to view summaries and navigate to specific lines.
-5. Editor highlights: Covered lines may have a subtle green background, uncovered lines a red tint.
-
-*Screenshots: Editor view with gutter icons and highlighted lines; Coverage tool window showing file coverage percentages.*
-
-## Installation
-
-### Option A — Custom Plugin Repository (auto-update from GitHub, recommended)
-
-This bypasses JetBrains Marketplace. The IDE will pick up new releases the same way it picks up Marketplace updates.
-
-1. Open **Settings → Plugins**.
-2. Click the **⚙ (gear)** icon → **Manage Plugin Repositories…**
-3. Add this URL:
-   ```
-   https://yakov255.github.io/per-line-coverage-info/updatePlugins.xml
-   ```
-4. Open the **Marketplace** tab, search for `per-line-coverage-info`, install. Future updates appear automatically.
-
-The plugin also performs an in-IDE GitHub Releases check at most once every 24 hours and shows a balloon notification with **Open Releases** and **Don't check again** actions when a newer version is published.
-
-### Option B — Manual install from a release zip
-
-1. Download the latest `per-line-coverage-info-*.zip` from the [releases page](https://github.com/yakov255/per-line-coverage-info/releases).
-2. In your IDE, go to **Settings → Plugins**.
-3. Click the gear icon → **Install Plugin from Disk…**
-4. Select the downloaded zip and restart the IDE.
-
-### Requirements
-- IntelliJ IDEA 2021.3 or later
-- PHP plugin installed (for PHP language support)
-
-## Development
-
-### Building and Running
-1. Clone the repository: `git clone https://github.com/your-repo/per-line-coverage-info.git`
-2. Open in IntelliJ IDEA.
-3. Run `./gradlew build` to build the plugin.
-4. For development, use `./gradlew runIde` to launch a test instance.
-
-### Contributing Guidelines
-- Fork the repository and create a feature branch.
-- Follow Kotlin coding standards.
-- Submit a pull request with a clear description of changes.
-
-### License
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT
