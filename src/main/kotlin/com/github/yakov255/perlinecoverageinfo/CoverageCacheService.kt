@@ -96,6 +96,7 @@ class CoverageCacheService(private val project: Project) {
      * Computes and persists coverage statistics (file count, line counts) into the cache index.
      */
     fun writeCov4(commitHash: String, pipelineId: Long, coverage: Map<String, Map<Int, List<String>>>) {
+        cleanup()
         val dir = cacheDir()
         dir.mkdirs()
         val cov4File = File(dir, "${commitHash}.cov4")
@@ -189,7 +190,7 @@ class CoverageCacheService(private val project: Project) {
         val dir = cacheDir()
         val index = readIndex() ?: CacheIndex(entries = emptyList())
         val cutoff = System.currentTimeMillis() - maxAgeDays * 24 * 60 * 60 * 1000L
-        val (freshEntries, expiredEntries) = index.entries.partition { it.timestampMs > cutoff }
+        val (freshEntries, expiredEntries) = index.entries.partition { (it.lastUsedMs ?: 0) > cutoff }
 
         // Try to delete each expired entry's file. Keep entries whose delete failed
         // so the next cleanup retries, and drop them from the index on success or
