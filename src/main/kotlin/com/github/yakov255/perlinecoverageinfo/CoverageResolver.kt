@@ -342,8 +342,14 @@ class CoverageResolver(
                     .redirectErrorStream(false)
                     .start()
                 val output = process.inputStream.bufferedReader().readText().trim()
+                val errorOutput = process.errorStream.bufferedReader().readText().trim()
                 val exitCode = process.waitFor()
-                if (exitCode == 0 && output.isNotEmpty()) output else null
+                if (exitCode == 0 && output.isNotEmpty()) {
+                    output
+                } else {
+                    log.warn("CoverageResolver: 'git ${args.joinToString(" ")}' failed (exit=$exitCode): $errorOutput")
+                    null
+                }
             } catch (e: Exception) {
                 log.warn("CoverageResolver: git command failed: ${e.message}")
                 null
