@@ -558,7 +558,12 @@ class CoverageLoadService(private val project: Project) {
             ).thenApply { covtBytes ->
                 log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
                 val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
-                log.info("Coverage: parsed ${parsed.size} files from job ${job.name}")
+                val normalized = if (artifactComponent == "raketa") {
+                    parsed.mapKeys { it.key.removePrefix("core/web/") }
+                } else {
+                    parsed
+                }
+                log.info("Coverage: parsed ${normalized.size} files from job ${job.name}")
 
                 val done = progressCount.incrementAndGet()
                 val text = "Downloading artifacts... ($done/$totalJobs)"
@@ -568,7 +573,7 @@ class CoverageLoadService(private val project: Project) {
                     indicator.fraction = fraction
                 }
 
-                parsed
+                normalized
             }
         }
 
