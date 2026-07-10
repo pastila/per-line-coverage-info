@@ -72,10 +72,11 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         private const val DATE_COL = 0
         private const val COMMIT_COL = 1
         private const val PIPELINE_COL = 2
-        private const val SIZE_COL = 3
-        private const val FILES_COL = 4
-        private const val COVERAGE_COL = 5
-        private const val LAST_USED_COL = 6
+        private const val COMPONENT_COL = 3
+        private const val SIZE_COL = 4
+        private const val FILES_COL = 5
+        private const val COVERAGE_COL = 6
+        private const val LAST_USED_COL = 7
     }
 
     init {
@@ -262,6 +263,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         table.columnModel.getColumn(DATE_COL).preferredWidth = 130
         table.columnModel.getColumn(COMMIT_COL).preferredWidth = 80
         table.columnModel.getColumn(PIPELINE_COL).preferredWidth = 75
+        table.columnModel.getColumn(COMPONENT_COL).preferredWidth = 100
         table.columnModel.getColumn(SIZE_COL).preferredWidth = 75
         table.columnModel.getColumn(FILES_COL).preferredWidth = 55
         table.columnModel.getColumn(COVERAGE_COL).preferredWidth = 80
@@ -403,6 +405,7 @@ private class ArtifactsTableModel : AbstractTableModel() {
         val date: String,
         val commit: String,
         val pipeline: String,
+        val components: String,
         val size: String,
         val files: String,
         val coverage: String,
@@ -418,6 +421,7 @@ private class ArtifactsTableModel : AbstractTableModel() {
                 date = dateFormat.format(Date(entry.timestampMs)),
                 commit = entry.commitHash.take(8),
                 pipeline = if (entry.pipelineId == 0L) "local" else "#${entry.pipelineId}",
+                components = entry.component ?: "—",
                 size = "%.2f MB".format(entry.fileSizeBytes / 1_000_000.0),
                 files = if (entry.totalFiles > 0) entry.totalFiles.toString() else "—",
                 coverage = entry.coveragePercent?.let { "%.1f%%".format(it) } ?: "—",
@@ -431,7 +435,7 @@ private class ArtifactsTableModel : AbstractTableModel() {
     fun getEntry(row: Int): ArtifactInfo? = rows.getOrNull(row)?.entry
 
     override fun getRowCount(): Int = rows.size
-    override fun getColumnCount(): Int = 7
+    override fun getColumnCount(): Int = 8
 
     override fun getValueAt(row: Int, col: Int): Any {
         val r = rows[row]
@@ -439,10 +443,11 @@ private class ArtifactsTableModel : AbstractTableModel() {
             0 -> r.date
             1 -> r.commit
             2 -> r.pipeline
-            3 -> r.size
-            4 -> r.files
-            5 -> r.coverage
-            6 -> r.lastUsed
+            3 -> r.components
+            4 -> r.size
+            5 -> r.files
+            6 -> r.coverage
+            7 -> r.lastUsed
             else -> ""
         }
     }
@@ -451,10 +456,11 @@ private class ArtifactsTableModel : AbstractTableModel() {
         0 -> "Скачан"
         1 -> "Коммит"
         2 -> "Pipeline"
-        3 -> "Размер"
-        4 -> "Файлы"
-        5 -> "Покрытие"
-        6 -> "Последнее использование"
+        3 -> "Компонент"
+        4 -> "Размер"
+        5 -> "Файлы"
+        6 -> "Покрытие"
+        7 -> "Последнее использование"
         else -> ""
     }
 

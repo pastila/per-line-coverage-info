@@ -107,20 +107,21 @@ class CoverageLoadService(private val project: Project) {
 
         // Try to find cached coverage matching a recent HEAD commit
         val gitRoot = findGitRoot()
+        val component = if (gitRoot != null) detectComponent(gitRoot) else null
         if (gitRoot != null) {
             val commits = getRecentCommits(gitRoot, 200)
             if (commits.isNotEmpty()) {
                 val cachedCommit = cache.findCachedCommit(commits)
                 if (cachedCommit != null) {
-                    val reader = cache.get(cachedCommit)
+                    val reader = cache.get(cachedCommit, component)
                     if (reader != null) {
                         val alreadyLoaded = dataService.coverageCommitHash == cachedCommit && dataService.hasData()
-                        log.info("Coverage: offline-first hit — commit ${cachedCommit.take(8)}, alreadyLoaded=$alreadyLoaded")
+                        log.info("Coverage: offline-first hit — commit ${cachedCommit.take(8)} (component=${component ?: "full"}), alreadyLoaded=$alreadyLoaded")
                         if (!alreadyLoaded) {
                             dataService.setCoverageContext(cachedCommit, gitRoot, stale = true)
                             computeAndStoreWarningContext(gitRoot)
                             dataService.setCov4Reader(reader)
-                            cache.updateLastUsed(cachedCommit)
+                            cache.updateLastUsed(cachedCommit, component)
                             ApplicationManager.getApplication().invokeLater {
                                 CoverageHighlighter.applyToOpenEditors(project)
                             }
@@ -135,17 +136,21 @@ class CoverageLoadService(private val project: Project) {
 
         // No exact commit match in git history — fall back to the most recently
         // cached artifact (same logic as CoverageResolver.fallback on the GitLab path).
-        val latestArtifact = cache.listArtifacts().firstOrNull()
+        val latestArtifact = if (component != null) {
+            cache.listArtifacts().firstOrNull { it.component == component }
+        } else {
+            cache.listArtifacts().firstOrNull { it.component == null }
+        }
         if (latestArtifact != null && gitRoot != null) {
-            val reader = cache.get(latestArtifact.commitHash)
+            val reader = cache.get(latestArtifact.commitHash, latestArtifact.component)
             if (reader != null) {
                 val alreadyLoaded = dataService.coverageCommitHash == latestArtifact.commitHash && dataService.hasData()
-                log.info("Coverage: offline-first fallback — commit ${latestArtifact.commitHash.take(8)}, alreadyLoaded=$alreadyLoaded")
+                log.info("Coverage: offline-first fallback — commit ${latestArtifact.commitHash.take(8)} (component=${latestArtifact.component ?: "full"}), alreadyLoaded=$alreadyLoaded")
                 if (!alreadyLoaded) {
                     dataService.setCoverageContext(latestArtifact.commitHash, gitRoot, stale = true)
                     computeAndStoreWarningContext(gitRoot)
                     dataService.setCov4Reader(reader)
-                    cache.updateLastUsed(latestArtifact.commitHash)
+                    cache.updateLastUsed(latestArtifact.commitHash, latestArtifact.component)
                     ApplicationManager.getApplication().invokeLater {
                         CoverageHighlighter.applyToOpenEditors(project)
                     }
@@ -239,6 +244,7 @@ class CoverageLoadService(private val project: Project) {
 
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
+        val component = detectComponent(resolved.gitRoot)
 
         // If the same commit is already loaded, skip the reader swap
         if (dataService.coverageCommitHash == resolved.commitHash && dataService.hasData()) {
@@ -250,13 +256,13 @@ class CoverageLoadService(private val project: Project) {
             return
         }
 
-        val primaryCached = cache.get(resolved.commitHash)
-        val baselineCached = dual.baseline?.let { cache.get(it.commitHash) }
+        val primaryCached = cache.get(resolved.commitHash, component)
+        val baselineCached = dual.baseline?.let { cache.get(it.commitHash, component) }
 
         if (primaryCached != null && baselineCached != null) {
             // Both cached — apply silently, no progress shown
-            log.info("Coverage: primary and baseline both cached — applying silently")
-            cache.updateLastUsed(resolved.commitHash)
+            log.info("Coverage: primary and baseline both cached — applying silently (component=${component ?: "full"})")
+            cache.updateLastUsed(resolved.commitHash, component)
             dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
             computeAndStoreWarningContext(resolved.gitRoot)
             dataService.setCov4Reader(primaryCached)
@@ -290,6 +296,8 @@ class CoverageLoadService(private val project: Project) {
         onComplete: (() -> Unit)?,
         onError: ((String) -> Unit)?,
     ) {
+        val component = detectComponent(resolved.gitRoot)
+
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Downloading Coverage", true) {
             override fun run(indicator: ProgressIndicator) {
                 try {
@@ -301,21 +309,25 @@ class CoverageLoadService(private val project: Project) {
                         val result = downloadArtifacts(indicator, gitLabClient, resolved,
                             fractionStart = 0.0, fractionEnd = 0.6)
 
-                        cache.writeCov4(resolved.commitHash, resolved.pipelineId, result.coverage)
+                        for (cr in result.componentResults) {
+                            cache.writeCov4(resolved.commitHash, resolved.pipelineId, cr.coverage, component = cr.component)
+                        }
 
-                        val freshReader = cache.get(resolved.commitHash)
+                        val freshReader = cache.get(resolved.commitHash, component)
                         if (freshReader != null) {
                             dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
                             computeAndStoreWarningContext(result.resolved.gitRoot)
                             dataService.setCov4Reader(freshReader)
                         } else {
                             log.warn("Coverage: failed to reopen freshly-written .cov4, falling back to in-memory map")
+                            val fallback = result.componentResults.firstOrNull { it.component == component }
+                                ?: result.componentResults.first()
                             dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
                             computeAndStoreWarningContext(result.resolved.gitRoot)
-                            dataService.setCoverageAll(result.coverage)
+                            dataService.setCoverageAll(fallback.coverage)
                         }
                     } else {
-                        cache.updateLastUsed(resolved.commitHash)
+                        cache.updateLastUsed(resolved.commitHash, component)
                         dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
                         computeAndStoreWarningContext(resolved.gitRoot)
                         dataService.setCov4Reader(primaryCached)
@@ -408,29 +420,60 @@ class CoverageLoadService(private val project: Project) {
                 && job.name.contains("behat", ignoreCase = true)
         }
 
-        if (artifactJobs.isEmpty()) {
-            val branchName = CoverageResolver.runGitCommand(resolved.gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
-            val branch = branchName ?: resolved.commitHash.take(8)
+        val component = ComponentConfig.detectComponent(
+            project.basePath ?: "",
+            resolved.gitRoot,
+        )
 
+        val (targetJobs, artifactComponent) = if (component != null) {
+            val filtered = artifactJobs.filter {
+                it.name.contains(component.jobPrefix, ignoreCase = true)
+            }
+            if (filtered.isEmpty()) {
+                throw CoverageApiException(
+                    "No coverage jobs for component '${component.serviceDir}' in pipeline #${resolved.pipelineId}.\n\n" +
+                        "Pipeline has ${jobs.size} job(s): ${jobs.joinToString(", ") { "${it.name} (${it.status})" }}",
+                    details = mapOf("pipelineId" to resolved.pipelineId.toString()),
+                    kind = CoverageErrorKind.NO_DATA,
+                )
+            }
+            log.info("Coverage: component '${component.serviceDir}' — ${filtered.size}/${artifactJobs.size} behat jobs match")
+            filtered to component.serviceDir
+        } else if (ComponentConfig.isAtGitRoot(project.basePath ?: "", resolved.gitRoot)) {
+            if (artifactJobs.isEmpty()) {
+                val branchName = CoverageResolver.runGitCommand(resolved.gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
+                val branch = branchName ?: resolved.commitHash.take(8)
+
+                throw CoverageApiException(
+                    buildString {
+                        appendLine("No jobs with downloadable artifacts found in pipeline #${resolved.pipelineId}.")
+                        appendLine()
+                        appendLine("Pipeline has ${jobs.size} job(s): ${jobs.joinToString(", ") { "${it.name} (${it.status})" }}")
+                        appendLine()
+                        append("Make sure the CI pipeline has successful behat jobs with coverage artifacts.")
+                    },
+                    details = mapOf(
+                        "pipelineId" to resolved.pipelineId.toString(),
+                        "totalJobs" to jobs.size.toString(),
+                        "jobNames" to jobs.joinToString(", ") { it.name },
+                        "expired" to jobs.any { it.artifacts.isNotEmpty() && it.artifactsFile == null }.toString(),
+                    ),
+                    kind = CoverageErrorKind.NO_DATA,
+                )
+            }
+
+            log.info("Coverage: found ${artifactJobs.size} jobs with artifacts in pipeline ${resolved.pipelineId}")
+            artifactJobs to null
+        } else {
             throw CoverageApiException(
-                buildString {
-                    appendLine("No jobs with downloadable artifacts found in pipeline #${resolved.pipelineId}.")
-                    appendLine()
-                    appendLine("Pipeline has ${jobs.size} job(s): ${jobs.joinToString(", ") { "${it.name} (${it.status})" }}")
-                    appendLine()
-                    append("Make sure the CI pipeline has successful behat jobs with coverage artifacts.")
-                },
-                details = mapOf(
-                    "pipelineId" to resolved.pipelineId.toString(),
-                    "totalJobs" to jobs.size.toString(),
-                    "jobNames" to jobs.joinToString(", ") { it.name },
-                    "expired" to jobs.any { it.artifacts.isNotEmpty() && it.artifactsFile == null }.toString(),
-                ),
+                "Project does not match any known component and is not at repository root.\n\n" +
+                    "Open the project at the repository root or inside a recognized component directory.\n" +
+                    "Recognized components: ${ComponentConfig.allEntries().joinToString(", ") { it.serviceDir }}\n\n" +
+                    "Pipeline has ${jobs.size} job(s): ${jobs.joinToString(", ") { "${it.name} (${it.status})" }}",
+                details = mapOf("pipelineId" to resolved.pipelineId.toString()),
                 kind = CoverageErrorKind.NO_DATA,
             )
         }
-
-        log.info("Coverage: found ${artifactJobs.size} jobs with artifacts in pipeline ${resolved.pipelineId}")
 
         if (indicator.isCanceled) {
             throw CoverageApiException(
@@ -439,7 +482,7 @@ class CoverageLoadService(private val project: Project) {
             )
         }
 
-        val totalJobs = artifactJobs.size
+        val totalJobs = targetJobs.size
         val span = fractionEnd - fractionStart
         indicator.text = "Downloading coverage artifacts..."
         indicator.fraction = fractionStart + span * 0.15
@@ -447,7 +490,7 @@ class CoverageLoadService(private val project: Project) {
         val progressCount = AtomicInteger(0)
         val batchStartTime = System.nanoTime()
         val totalBytesReceived = AtomicLong(0)
-        val futures = artifactJobs.map { job ->
+        val futures = targetJobs.map { job ->
             var jobBytesReceived = 0L
             val onProgress: (Long, Long) -> Unit = { received, total ->
                 val delta = received - jobBytesReceived
@@ -549,9 +592,12 @@ class CoverageLoadService(private val project: Project) {
         }
 
         return CoverageLoadResult(
-            coverage = finalCoverage,
             resolved = resolved,
-            artifactCount = totalJobs,
+            componentResults = listOf(ComponentCoverage(
+                coverage = finalCoverage,
+                component = artifactComponent,
+                artifactCount = totalJobs,
+            )),
         )
     }
 
@@ -575,12 +621,13 @@ class CoverageLoadService(private val project: Project) {
         val dataService = CoverageDataService.getInstance(project)
         val wasStale = dataService.isStale
         val previousCommit = dataService.coverageCommitHash
+        val fallback = result.componentResults.firstOrNull { it.component == null } ?: result.componentResults.first()
 
         dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
         computeAndStoreWarningContext(result.resolved.gitRoot)
-        dataService.setCoverageAll(result.coverage)
+        dataService.setCoverageAll(fallback.coverage)
 
-        log.info("Coverage: loaded coverage for ${result.coverage.size} files from ${result.artifactCount} coverage artifacts at commit ${result.resolved.commitHash}")
+        log.info("Coverage: loaded coverage for ${fallback.coverage.size} files from ${fallback.artifactCount} coverage artifacts at commit ${result.resolved.commitHash}")
 
         ApplicationManager.getApplication().invokeLater {
             CoverageHighlighter.applyToOpenEditors(project)
@@ -627,12 +674,13 @@ class CoverageLoadService(private val project: Project) {
             dataService.clearBaseline()
             return true
         }
+        val component = detectComponent(baseline.gitRoot)
         try {
-            val cached = preloadedReader ?: cache.get(baseline.commitHash)
+            val cached = preloadedReader ?: cache.get(baseline.commitHash, component)
             if (cached != null) {
-                cache.updateLastUsed(baseline.commitHash)
+                cache.updateLastUsed(baseline.commitHash, component)
                 dataService.setBaselineCov4Reader(cached, baseline.commitHash)
-                log.info("Coverage: baseline loaded from cache (commit ${baseline.commitHash.take(8)})")
+                log.info("Coverage: baseline loaded from cache (commit ${baseline.commitHash.take(8)}, component=${component ?: "full"})")
                 if (indicator != null) indicator.fraction = 1.0
                 return true
             }
@@ -650,8 +698,9 @@ class CoverageLoadService(private val project: Project) {
                 fractionStart = baseProgress,
                 fractionEnd = 1.0,
             )
-            cache.writeCov4(baseline.commitHash, baseline.pipelineId, result.coverage)
-            val freshReader = cache.get(baseline.commitHash)
+            val baselineComponent = result.componentResults.first().component
+            cache.writeCov4(baseline.commitHash, baseline.pipelineId, result.componentResults.first().coverage, component = baselineComponent)
+            val freshReader = cache.get(baseline.commitHash, baselineComponent)
             if (freshReader != null) {
                 dataService.setBaselineCov4Reader(freshReader, baseline.commitHash)
                 log.info("Coverage: baseline downloaded and attached (commit ${baseline.commitHash.take(8)})")
@@ -719,15 +768,16 @@ class CoverageLoadService(private val project: Project) {
 
                     val gitRoot = findGitRootFromFile(file.parentFile) ?: findGitRoot()
                     val dataService = CoverageDataService.getInstance(project)
+                    val component = if (gitRoot != null) detectComponent(gitRoot) else null
 
-                    val reader = cache.get(hash)
+                    val reader = cache.get(hash, component) ?: cache.get(hash)
                     if (reader != null) {
                         if (gitRoot != null) {
                             dataService.setCoverageContext(hash, gitRoot, stale = false)
                             computeAndStoreWarningContext(gitRoot)
                         }
                         dataService.setCov4Reader(reader)
-                        cache.updateLastUsed(hash)
+                        cache.updateLastUsed(hash, component)
                     } else {
                         log.warn("Coverage: failed to reopen freshly-written .cov4 for local file, falling back to in-memory map")
                         if (gitRoot != null) {
@@ -767,14 +817,15 @@ class CoverageLoadService(private val project: Project) {
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
         val gitRoot = findGitRoot()
+        val component = if (gitRoot != null) detectComponent(gitRoot) else null
 
         // Persist the user's explicit choice so it survives IDE restarts.
         CoverageUserSelectionService.getInstance(project).pinnedCommitHash = commitHash
 
         ApplicationManager.getApplication().executeOnPooledThread {
-            val reader = cache.get(commitHash)
+            val reader = cache.get(commitHash, component) ?: cache.get(commitHash)
             if (reader == null) {
-                log.warn("Coverage: loadFromCache — no .cov4 found for commit $commitHash")
+                log.warn("Coverage: loadFromCache — no .cov4 found for commit $commitHash (component=${component ?: "full"})")
                 onComplete?.let { ApplicationManager.getApplication().invokeLater(it) }
                 return@executeOnPooledThread
             }
@@ -785,9 +836,9 @@ class CoverageLoadService(private val project: Project) {
             } else {
                 log.warn("Coverage: loadFromCache — could not determine git root; coverage context not updated")
             }
-            cache.updateLastUsed(commitHash)
+            cache.updateLastUsed(commitHash, component)
             dataService.setCov4Reader(reader)
-            log.info("Coverage: loaded from cache for commit ${commitHash.take(8)} (${reader.allFilePaths.size} files)")
+            log.info("Coverage: loaded from cache for commit ${commitHash.take(8)} (component=${component ?: "full"}, ${reader.allFilePaths.size} files)")
 
             ApplicationManager.getApplication().invokeLater {
                 CoverageHighlighter.applyToOpenEditors(project)
@@ -859,6 +910,18 @@ class CoverageLoadService(private val project: Project) {
         return output.lines().filter { it.isNotBlank() }
     }
 
+    /** Detects the component for the current project, or null if at git root or unknown. */
+    private fun detectComponent(gitRoot: File): String? {
+        val basePath = project.basePath ?: return null
+        val entry = ComponentConfig.detectComponent(basePath, gitRoot)
+        if (entry != null) {
+            log.info("Coverage: detected component '${entry.serviceDir}'")
+            return entry.serviceDir
+        }
+        log.info("Coverage: no component detected for project at $basePath")
+        return null
+    }
+
     companion object {
         fun getInstance(project: Project): CoverageLoadService = project.service()
 
@@ -888,8 +951,13 @@ class CoverageLoadService(private val project: Project) {
     }
 }
 
-data class CoverageLoadResult(
+data class ComponentCoverage(
     val coverage: Map<String, Map<Int, List<String>>>,
-    val resolved: ResolvedPipeline,
+    val component: String?,
     val artifactCount: Int,
+)
+
+data class CoverageLoadResult(
+    val resolved: ResolvedPipeline,
+    val componentResults: List<ComponentCoverage>,
 )
