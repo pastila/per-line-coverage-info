@@ -15,8 +15,13 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.icons.AllIcons
 import java.awt.BorderLayout
+import java.awt.FlowLayout
 import java.text.SimpleDateFormat
 import java.util.Date
+import javax.swing.Box
+import javax.swing.DefaultComboBoxModel
+import javax.swing.JComboBox
+import javax.swing.JLabel
 import javax.swing.JPanel
 
 /**
@@ -31,8 +36,32 @@ class CoverageLogPanel(project: Project) : JPanel(BorderLayout()), Disposable {
         TextConsoleBuilderFactory.getInstance().createBuilder(project).console
     private val timestampFormat = SimpleDateFormat("HH:mm:ss.SSS")
 
+    private val allEntries = mutableListOf<CoverageLogService.LogEntry>()
+    private val componentNames = mutableSetOf<String>()
+    private val levelNames = mutableSetOf<String>()
+
+    private var selectedLevel: CoverageLogService.Level? = null
+    private var selectedComponent: String? = null
+
+    private val levelCombo = JComboBox<String>()
+    private val componentCombo = JComboBox<String>()
+    private var updatingCombo = false
+
     init {
         Disposer.register(this, consoleView)
+
+        val filterPanel = JPanel(FlowLayout(FlowLayout.LEFT, 5, 0))
+        levelCombo.addItem("All Levels")
+        levelCombo.addActionListener { onFilterChanged() }
+
+        componentCombo.addItem("All Components")
+        componentCombo.addActionListener { onFilterChanged() }
+
+        filterPanel.add(JLabel("Level:"))
+        filterPanel.add(levelCombo)
+        filterPanel.add(Box.createHorizontalStrut(10))
+        filterPanel.add(JLabel("Component:"))
+        filterPanel.add(componentCombo)
 
         val toolbar = ActionManager.getInstance().createActionToolbar(
             ActionPlaces.TOOLWINDOW_CONTENT,
@@ -41,19 +70,95 @@ class CoverageLogPanel(project: Project) : JPanel(BorderLayout()), Disposable {
         )
         toolbar.targetComponent = consoleView.component
 
+        add(filterPanel, BorderLayout.NORTH)
         add(toolbar.component, BorderLayout.WEST)
         add(consoleView.component, BorderLayout.CENTER)
 
-        // Backfill + live subscription, atomic so no entries are lost or duplicated.
-        // Both backfill and live entries go through invokeLater so ConsoleView is
-        // fully laid out before we print — printing into a not-yet-shown ConsoleView
-        // can silently discard output (startup logs in particular are at risk because
-        // the panel may be constructed while the component tree is still being built).
+        // Backfill is processed in bulk, then live entries arrive one by one.
         val backfill = CoverageLogService.getInstance().subscribe(this) { entry ->
-            ApplicationManager.getApplication().invokeLater { renderEntry(entry) }
+            ApplicationManager.getApplication().invokeLater { onNewEntry(entry) }
         }
         ApplicationManager.getApplication().invokeLater {
-            for (entry in backfill) renderEntry(entry)
+            for (entry in backfill) {
+                allEntries.add(entry)
+                componentNames.add(entry.loggerName)
+                levelNames.add(entry.level.name)
+            }
+            updateComponentCombo()
+            updateLevelCombo()
+            for (entry in allEntries) {
+                if (matchesFilter(entry)) renderEntry(entry)
+            }
+        }
+    }
+
+    private fun onNewEntry(entry: CoverageLogService.LogEntry) {
+        allEntries.add(entry)
+        if (componentNames.add(entry.loggerName)) {
+            updateComponentCombo()
+        }
+        if (levelNames.add(entry.level.name)) {
+            updateLevelCombo()
+        }
+        if (matchesFilter(entry)) {
+            renderEntry(entry)
+        }
+    }
+
+    private fun matchesFilter(entry: CoverageLogService.LogEntry): Boolean {
+        if (selectedLevel != null && entry.level != selectedLevel) return false
+        if (selectedComponent != null && entry.loggerName != selectedComponent) return false
+        return true
+    }
+
+    private fun onFilterChanged() {
+        if (updatingCombo) return
+        val levelItem = levelCombo.selectedItem as? String ?: return
+        selectedLevel = if (levelItem == "All Levels") null
+        else CoverageLogService.Level.valueOf(levelItem)
+
+        val compItem = componentCombo.selectedItem as? String ?: return
+        selectedComponent = if (compItem == "All Components") null else compItem
+
+        consoleView.clear()
+        for (entry in allEntries) {
+            if (matchesFilter(entry)) renderEntry(entry)
+        }
+    }
+
+    private fun updateComponentCombo() {
+        updatingCombo = true
+        try {
+            val prevSelected = componentCombo.selectedItem as? String
+            val model = DefaultComboBoxModel<String>()
+            model.addElement("All Components")
+            for (name in componentNames.sorted()) {
+                model.addElement(name)
+            }
+            componentCombo.model = model
+            if (prevSelected != null && (prevSelected == "All Components" || prevSelected in componentNames)) {
+                componentCombo.selectedItem = prevSelected
+            }
+        } finally {
+            updatingCombo = false
+        }
+    }
+
+    private fun updateLevelCombo() {
+        updatingCombo = true
+        try {
+            val prevSelected = levelCombo.selectedItem as? String
+            val model = DefaultComboBoxModel<String>()
+            model.addElement("All Levels")
+            for (name in levelNames.sorted()) {
+                model.addElement(name)
+            }
+            levelCombo.model = model
+            if (prevSelected != null && (prevSelected == "All Levels" || prevSelected in levelNames)) {
+                levelCombo.selectedItem = prevSelected
+            }
+        } finally {
+            updatingCombo = false
         }
     }
 
@@ -82,14 +187,17 @@ class CoverageLogPanel(project: Project) : JPanel(BorderLayout()), Disposable {
         return sw.toString()
     }
 
-    override fun dispose() {
-        // consoleView is disposed via the Disposer chain registered in init.
-    }
+    override fun dispose() {}
 
     private inner class ClearLogAction : AnAction("Clear Log", "Clear plugin log buffer", AllIcons.Actions.GC) {
         override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
         override fun actionPerformed(e: AnActionEvent) {
             CoverageLogService.getInstance().clear()
+            allEntries.clear()
+            componentNames.clear()
+            levelNames.clear()
+            componentCombo.model = DefaultComboBoxModel<String>().also { it.addElement("All Components") }
+            levelCombo.model = DefaultComboBoxModel<String>().also { it.addElement("All Levels") }
             consoleView.clear()
         }
     }
