@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-07-13
+- Show startup dialog to configure GitLab token when not set
+- Normalize raketta coverage paths: strip `core/web/` prefix when downloading artifacts
+- Replace coverage column with separate Покрыто/Не покрыто/Всего строк columns in artifacts table
+- Add pre-commit hook to auto-generate `docs/updatePlugins.xml`
+- Rewrite README for in-house Raketa usage
+
 ## [2.5.0] - 2026-06-05
 - MCP: new `get_tests_at_line` tool with paginated test listing for a specific line
 - MCP: new `get_first_tests_at_lines` tool — quickly check which test covers each line

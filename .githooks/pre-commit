@@ -3,6 +3,16 @@ set -e
 
 cd "$(git rev-parse --show-toplevel)"
 
+# Only check changelog when version is bumped
+if git diff --cached gradle.properties | grep -Eq '^[+-]pluginVersion\s*='; then
+    unreleased=$(awk '/^## \[Unreleased\]/{flag=1; next} /^## /{flag=0} flag && NF' CHANGELOG.md)
+    if [ -n "$unreleased" ]; then
+        echo "Error: [Unreleased] section in CHANGELOG.md has unreleased entries."
+        echo "Move them to a versioned section before bumping the version."
+        exit 1
+    fi
+fi
+
 ./gradlew generateUpdatePluginsXml -q
 
 git add docs/updatePlugins.xml
