@@ -39,7 +39,7 @@ jobs:
           echo "Asset: $ZIP"
 
           mkdir -p build/tmp
-          ./gradlew getChangelog --unreleased --no-header --quiet --console=plain --output-file=build/tmp/release_note.txt
+          ./gradlew getChangelog --version "$VERSION" --no-header --quiet --console=plain --output-file=build/tmp/release_note.txt
 
           gh release create "$VERSION" \
             --title "$VERSION" \
