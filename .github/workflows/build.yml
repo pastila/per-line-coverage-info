@@ -28,6 +28,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -e
           VERSION=$(./gradlew properties --property version --quiet --console=plain | tail -n 1 | cut -f2- -d ' ')
 
           if gh release view "$VERSION" &>/dev/null; then
@@ -39,7 +40,8 @@ jobs:
           echo "Asset: $ZIP"
 
           mkdir -p build/tmp
-          ./gradlew getChangelog --version "$VERSION" --no-header --quiet --console=plain --output-file=build/tmp/release_note.txt
+          ./gradlew getChangelog --version "$VERSION" --no-header --quiet --console=plain --output-file=build/tmp/release_note.txt 2>/dev/null || true
+          test -f build/tmp/release_note.txt || echo "$VERSION" > build/tmp/release_note.txt
 
           gh release create "$VERSION" \
             --title "$VERSION" \
