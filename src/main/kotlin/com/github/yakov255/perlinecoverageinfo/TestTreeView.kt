@@ -10,6 +10,7 @@ import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.actionSystem.ToggleAction
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
@@ -585,11 +586,15 @@ internal class TestTreeView(private val project: Project) {
         val absolutePath = vf.path
 
         if (lineNumber != null) {
-            val scenarioName = CoverageTestNavigator.resolveScenarioName(project, rawFeaturePath, lineStr)
-            if (scenarioName != null) {
-                BehatTestRunner.runScenario(project, absolutePath, scenarioName, debug)
-            } else {
-                BehatTestRunner.runFeatureFile(project, absolutePath, debug)
+            ApplicationManager.getApplication().executeOnPooledThread {
+                val scenarioName = CoverageTestNavigator.resolveScenarioName(project, rawFeaturePath, lineStr)
+                invokeLater {
+                    if (scenarioName != null) {
+                        BehatTestRunner.runScenario(project, absolutePath, scenarioName, debug)
+                    } else {
+                        BehatTestRunner.runFeatureFile(project, absolutePath, debug)
+                    }
+                }
             }
         } else {
             BehatTestRunner.runFeatureFile(project, absolutePath, debug)
