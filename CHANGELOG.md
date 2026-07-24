@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-07-10
+- Component-based coverage: separate `.cov4` per component, keyed by commit+component
+- Component config with 10 components (api/avia, raketa, api/hotels, api/transfer, api/rail, api/profile-sync, api/queue, api/aeroexpress, api/contract, api/bus)
+- Filter CI jobs by detected component; wait for running behat jobs (infinite, cancel via progress or branch switch)
+- Fallback to baseline (master) pipeline when current branch has no jobs for the component
+- Branch name stored per artifact; shown in Artifacts table
+- Cache cleanup runs on every `writeCov4`; entries expire by `lastUsedMs` instead of `timestampMs`
+- Reuse preloaded baseline reader to avoid redundant `.cov4` opens
+- Skip initial HEAD reload in `CoverageHeadTracker` (avoids duplicate load at startup)
+- Auto-refresh Artifacts panel on coverage change via `COVERAGE_CHANGED_TOPIC`
+- `pluginUntilBuild` extended to `299.*`
+- Simplify CI: build + release only, no tests/Qodana/Verifier/Marketplace
+- Auto-create GitHub release with `.zip` asset on push to main (if version changed)
+- Pre-commit hook to auto-generate `docs/updatePlugins.xml`
+- Rewrite README for in-house Raketa usage
+
 ## [2.5.1] - 2026-07-13
 - Show startup dialog to configure GitLab token when not set
 - Normalize raketta coverage paths: strip `core/web/` prefix when downloading artifacts
