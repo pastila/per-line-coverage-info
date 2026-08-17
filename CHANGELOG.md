@@ -4,6 +4,17 @@
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-08-17
+- Shared app-level GitLab coordinator: single worker thread, TTL-cached metadata and a rate limiter — dramatically fewer API requests
+- Pipeline resolution memoized per repository/HEAD; refresh skipped within a 60s cooldown (zero requests on branch switches with cached coverage)
+- Identical artifact downloads coalesced across project windows
+- Pipeline polling interval reduced from 5s to 30s; polls share the cached API so N windows cost one network request
+- `Cov4Reader` instances shared across windows (large files read once per commit)
+- Disk cache writes synchronized for safety with multiple windows
+- Retry HTTP 429 honouring `Retry-After`
+- Send plugin name and version as `User-Agent` so requests are identifiable in GitLab server logs
+- Visibility logging: cache hits/misses, rate-limiter waits, cross-window coalescing
+
 ## [2.6.0] - 2026-07-10
 - Component-based coverage: separate `.cov4` per component, keyed by commit+component
 - Component config with 10 components (api/avia, raketa, api/hotels, api/transfer, api/rail, api/profile-sync, api/queue, api/aeroexpress, api/contract, api/bus)

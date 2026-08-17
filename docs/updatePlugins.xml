@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.7.0/per-line-coverage-info-2.7.0.zip" version="2.7.0">
+        <name>per-line-coverage-info</name>
+        <vendor>yakov255</vendor>
+        <idea-version since-build="252" until-build="299.*"/>
+        <change-notes><![CDATA[<ul><li>Shared app-level GitLab coordinator: single worker thread, TTL-cached metadata and a rate limiter — dramatically fewer API requests</li><li>Pipeline resolution memoized per repository/HEAD; refresh skipped within a 60s cooldown (zero requests on branch switches with cached coverage)</li><li>Identical artifact downloads coalesced across project windows</li><li>Pipeline polling interval reduced from 5s to 30s; polls share the cached API so N windows cost one network request</li><li><code>Cov4Reader</code> instances shared across windows (large files read once per commit)</li><li>Disk cache writes synchronized for safety with multiple windows</li><li>Retry HTTP 429 honouring <code>Retry-After</code></li><li>Send plugin name and version as <code>User-Agent</code> so requests are identifiable in GitLab server logs</li><li>Visibility logging: cache hits/misses, rate-limiter waits, cross-window coalescing</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.6.0/per-line-coverage-info-2.6.0.zip" version="2.6.0">
         <name>per-line-coverage-info</name>
         <vendor>yakov255</vendor>
