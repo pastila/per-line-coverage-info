@@ -22,7 +22,7 @@ import java.net.http.HttpResponse.BodySubscriber
 import java.net.http.HttpResponse.BodySubscribers
 import java.net.http.HttpResponse.ResponseInfo
 
-class GitLabApiClient(baseUrl: String, private val privateToken: String) {
+class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLabApi {
 
     private val log = CoverageLog.get(GitLabApiClient::class.java)
     private val baseUrl = baseUrl.trimEnd('/')
@@ -44,10 +44,24 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
             CoverageErrorKind.NETWORK -> true
             CoverageErrorKind.GITLAB_API -> {
                 val httpStatus = e.details["httpStatus"]
-                httpStatus != null && httpStatus.startsWith("5")
+                httpStatus != null && (httpStatus.startsWith("5") || httpStatus == "429")
             }
             else -> false
         }
+    }
+
+    /** Retry-After (in seconds) → milliseconds, or null when not applicable. */
+    private fun retryAfterMs(response: HttpResponse<*>): String? {
+        if (response.statusCode() != 429) return null
+        return response.headers().firstValue("Retry-After")
+            .map { (it.toLongOrNull() ?: 1L) * 1000L }
+            .map { it.toString() }
+            .orElse(null)
+    }
+
+    private fun retryDelayMs(e: Exception, attempt: Int): Long {
+        val explicit = (e as? CoverageApiException)?.details?.get("retryAfterMs")?.toLongOrNull()
+        return explicit ?: retryDelays[attempt - 1]
     }
 
     private fun <T> retrySync(url: String, block: () -> T): T {
@@ -57,8 +71,9 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                 return block()
             } catch (e: Exception) {
                 if (!isRetryable(e) || attempt == maxAttempts) throw e
-                log.info("Coverage: retrying $url after ${retryDelays[attempt - 1]}ms (attempt $attempt/$maxAttempts)")
-                Thread.sleep(retryDelays[attempt - 1])
+                val delayMs = retryDelayMs(e, attempt)
+                log.info("Coverage: retrying $url after ${delayMs}ms (attempt $attempt/$maxAttempts)")
+                Thread.sleep(delayMs)
             }
         }
         throw IllegalStateException("Unreachable")
@@ -95,6 +110,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                         "url" to url,
                         "httpStatus" to response.statusCode().toString(),
                         "responseBody" to body,
+                        "retryAfterMs" to retryAfterMs(response),
                     ),
                     kind = CoverageErrorKind.GITLAB_API,
                 )
@@ -141,6 +157,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                     details = mapOf(
                         "url" to url,
                         "httpStatus" to response.statusCode().toString(),
+                        "retryAfterMs" to retryAfterMs(response),
                     ),
                     kind = CoverageErrorKind.GITLAB_API,
                 )
@@ -152,10 +169,10 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
     private fun encode(value: String): String =
         URLEncoder.encode(value, Charsets.UTF_8)
 
-    fun searchProjects(query: String): List<GitLabProject> =
+    override fun searchProjects(query: String): List<GitLabProject> =
         makeRequest("/api/v4/projects?search=${encode(query)}&membership=true&per_page=20")
 
-    fun listMemberProjects(): List<GitLabProject> {
+    override fun listMemberProjects(): List<GitLabProject> {
         val all = mutableListOf<GitLabProject>()
         var page = 1
         while (true) {
@@ -169,11 +186,11 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
         return all
     }
 
-    fun listPipelines(
+    override fun listPipelines(
         projectId: Long,
         ref: String,
-        status: String? = "success",
-        perPage: Int = 100,
+        status: String?,
+        perPage: Int,
     ): List<GitLabPipeline> =
         makeRequest(
             "/api/v4/projects/$projectId/pipelines" +
@@ -182,21 +199,21 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                 "&per_page=$perPage&order_by=updated_at&sort=desc"
         )
 
-    fun listPipelineJobs(
+    override fun listPipelineJobs(
         projectId: Long,
         pipelineId: Long,
-        perPage: Int = 100,
+        perPage: Int,
     ): List<GitLabJob> =
         makeRequest("/api/v4/projects/$projectId/pipelines/$pipelineId/jobs?per_page=$perPage")
 
-    fun downloadSingleArtifactFile(projectId: Long, jobId: Long, artifactPath: String): ByteArray =
+    override fun downloadSingleArtifactFile(projectId: Long, jobId: Long, artifactPath: String): ByteArray =
         makeRawRequest("/api/v4/projects/$projectId/jobs/$jobId/artifacts/${encode(artifactPath)}")
 
-    fun downloadSingleArtifactFileAsync(
+    override fun downloadSingleArtifactFileAsync(
         projectId: Long,
         jobId: Long,
         artifactPath: String,
-        onProgress: ((received: Long, total: Long) -> Unit)? = null,
+        onProgress: ((received: Long, total: Long) -> Unit)?,
     ): CompletableFuture<ByteArray> =
         makeRawRequestAsync(
             "/api/v4/projects/$projectId/jobs/$jobId/artifacts/${encode(artifactPath)}",
@@ -276,6 +293,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                             details = mapOf(
                                 "url" to url,
                                 "httpStatus" to response.statusCode().toString(),
+                                "retryAfterMs" to retryAfterMs(response),
                             ),
                             kind = CoverageErrorKind.GITLAB_API,
                         )
@@ -285,7 +303,8 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
                 .exceptionallyComposeAsync({ raw ->
                     val e = (raw as? CompletionException)?.cause ?: raw
                     if (isRetryable(e) && n < 3) {
-                        val delayMs = retryDelays[n - 1]
+                        val explicit = (e as? CoverageApiException)?.details?.get("retryAfterMs")?.toLongOrNull()
+                        val delayMs = explicit ?: retryDelays[n - 1]
                         log.info("Coverage: retrying $url after ${delayMs}ms (attempt $n/3)")
                         val delayed = CompletableFuture<ByteArray>()
                         retryScheduler.schedule({
@@ -304,14 +323,14 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) {
         return attempt(1)
     }
 
-    fun getPipelineCommits(projectId: Long, ref: String): List<PipelineCommit> =
+    override fun getPipelineCommits(projectId: Long, ref: String): List<PipelineCommit> =
         listPipelines(projectId, ref).map { PipelineCommit(commitHash = it.sha, pipelineId = it.id) }
 
     /**
      * Computes merge-base server-side via GitLab API.
      * Returns the merge-base commit SHA, or null if the refs are unknown or have no common ancestor.
      */
-    fun getMergeBase(projectId: Long, ref1: String, ref2: String): String? {
+    override fun getMergeBase(projectId: Long, ref1: String, ref2: String): String? {
         val endpoint = "/api/v4/projects/$projectId/repository/merge_base" +
             "?refs[]=${encode(ref1)}&refs[]=${encode(ref2)}"
         return try {

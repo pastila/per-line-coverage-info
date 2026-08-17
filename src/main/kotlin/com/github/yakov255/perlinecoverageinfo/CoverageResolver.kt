@@ -27,7 +27,7 @@ data class DualResolved(
 )
 
 class CoverageResolver(
-    private val gitLabClient: GitLabApiClient,
+    private val gitLabClient: GitLabApi,
     private val project: Project,
 ) {
 
@@ -126,7 +126,7 @@ class CoverageResolver(
         }
         val projectId = CoverageApiSettings.getInstance().gitlabProjectId
         val pipelines = try {
-            gitLabClient.listPipelines(projectId, currentBranch, status = "success")
+            gitLabClient.listPipelines(projectId, currentBranch, status = "success", perPage = 1)
         } catch (e: Exception) {
             log.warn("Coverage: failed to list pipelines for current branch '$currentBranch', falling back to coverage branch: ${e.message}")
             return null

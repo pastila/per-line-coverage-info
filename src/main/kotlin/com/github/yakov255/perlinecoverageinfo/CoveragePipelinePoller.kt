@@ -15,7 +15,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
     private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
 
     companion object {
-        private const val POLL_INTERVAL_MS = 5_000L
+        private const val POLL_INTERVAL_MS = 30_000L
         private const val MAX_CONSECUTIVE_ERRORS = 3
         private val IN_FLIGHT_STATUSES = setOf("created", "waiting_for_resource", "preparing", "pending", "running")
         private val TERMINAL_FAILURE_STATUSES = setOf("failed", "canceled", "skipped")
@@ -35,10 +35,6 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
 
     /** SHA of a failed pipeline we already notified about (don't re-notify). */
     private var reportedFailureSha: String? = null
-
-    private var gitLabClient: GitLabApiClient? = null
-    private var clientBaseUrl: String? = null
-    private var clientToken: String? = null
 
     /**
      * Starts or restarts the polling loop. Called after coverage loads, HEAD changes,
@@ -64,9 +60,6 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         targetBranch = null
         consecutiveErrors = 0
         reportedFailureSha = null
-        gitLabClient = null
-        clientBaseUrl = null
-        clientToken = null
         log.info("Coverage: pipeline polling stopped")
     }
 
@@ -126,6 +119,14 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         }
 
         targetBranch = branch
+
+        // While a load is running for this project, don't fire extra requests.
+        if (CoverageLoadService.getInstance(project).isLoadInProgress()) {
+            log.info("Coverage: pipeline poll — load in progress, skipping this cycle")
+            scheduleNext()
+            return
+        }
+
         val remoteSha = try {
             CoverageResolver.runGitCommand(gitRoot, "ls-remote", "origin", "refs/heads/$branch")
                 ?.substringBefore('\t')
@@ -150,7 +151,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
 
         // Remote has a different commit — check if there's a pipeline
         val projectId = settings.gitlabProjectId
-        val client = getOrCreateClient(settings)
+        val client = getOrCreateClient()
 
         val latestPipeline = try {
             client.listPipelines(projectId, branch, status = null, perPage = 1).firstOrNull()
@@ -204,19 +205,12 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         }
     }
 
-    private fun getOrCreateClient(settings: CoverageApiSettings): GitLabApiClient {
-        val url = settings.gitlabBaseUrl
-        val token = settings.bearerToken
-        val existing = gitLabClient
-        if (existing != null && clientBaseUrl == url && clientToken == token) {
-            return existing
-        }
-        val newClient = GitLabApiClient(url, token)
-        gitLabClient = newClient
-        clientBaseUrl = url
-        clientToken = token
-        return newClient
-    }
+    /**
+     * Returns the shared, cached, rate-limited GitLab API from the app-level
+     * [GitLabCoordinator]. Poller requests are automatically deduplicated and
+     * rate-limited together with all other plugin traffic.
+     */
+    private fun getOrCreateClient(): GitLabApi = GitLabCoordinator.getInstance().api()
 
     private fun triggerLoad() {
         stop()

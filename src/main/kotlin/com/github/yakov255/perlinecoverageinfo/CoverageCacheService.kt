@@ -70,13 +70,18 @@ class CoverageCacheService(private val project: Project) {
         val cov4File = File(cacheDir(), cov4FileName(commitHash, component))
         if (!cov4File.exists()) return null
 
-        return try {
-            Cov4Reader(cov4File).also {
-                log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB, component=$component)")
+        // Share Cov4Reader instances across project windows so large files are read
+        // once per commit, not once per open window. Readers are immutable and
+        // close() is a no-op, so sharing an instance is safe.
+        return GitLabCoordinator.getInstance().sharedReader(commitHash, component) {
+            try {
+                Cov4Reader(cov4File).also {
+                    log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB, component=$component)")
+                }
+            } catch (e: Exception) {
+                log.warn("Coverage cache: failed to open COV4 file for commit $commitHash (component=$component)", e)
+                null
             }
-        } catch (e: Exception) {
-            log.warn("Coverage cache: failed to open COV4 file for commit $commitHash (component=$component)", e)
-            null
         }
     }
 
@@ -86,13 +91,15 @@ class CoverageCacheService(private val project: Project) {
      * when each artifact was last viewed.
      */
     fun updateLastUsed(commitHash: String, component: String) {
-        val index = readIndex() ?: return
-        if (index.entries.none { it.commitHash == commitHash && it.component == component }) return
-        val updated = index.entries.map { entry ->
-            if (entry.commitHash == commitHash && entry.component == component)
-                entry.copy(lastUsedMs = System.currentTimeMillis()) else entry
+        synchronized(LOCK) {
+            val index = readIndex() ?: return
+            if (index.entries.none { it.commitHash == commitHash && it.component == component }) return
+            val updated = index.entries.map { entry ->
+                if (entry.commitHash == commitHash && entry.component == component)
+                    entry.copy(lastUsedMs = System.currentTimeMillis()) else entry
+            }
+            writeIndex(CacheIndex(entries = updated))
         }
-        writeIndex(CacheIndex(entries = updated))
     }
 
     /**
@@ -106,39 +113,41 @@ class CoverageCacheService(private val project: Project) {
         component: String,
         branch: String? = null,
     ) {
-        cleanup()
-        val dir = cacheDir()
-        dir.mkdirs()
-        val cov4File = File(dir, cov4FileName(commitHash, component))
+        synchronized(LOCK) {
+            cleanup()
+            val dir = cacheDir()
+            dir.mkdirs()
+            val cov4File = File(dir, cov4FileName(commitHash, component))
 
-        try {
-            Cov4Writer.write(coverage, cov4File)
-        } catch (e: Exception) {
-            log.warn("Coverage cache: failed to write COV4 for commit $commitHash (component=$component)", e)
-            return
+            try {
+                Cov4Writer.write(coverage, cov4File)
+            } catch (e: Exception) {
+                log.warn("Coverage cache: failed to write COV4 for commit $commitHash (component=$component)", e)
+                return
+            }
+
+            val totalFiles = coverage.size
+            val totalLines = coverage.values.sumOf { it.size }
+            val coveredLines = coverage.values.sumOf { lineMap -> lineMap.values.count { it.isNotEmpty() } }
+
+            val now = System.currentTimeMillis()
+            val index = readIndex() ?: CacheIndex(entries = emptyList())
+            val newEntry = CacheEntry(
+                commitHash = commitHash,
+                pipelineId = pipelineId,
+                component = component,
+                branch = branch,
+                timestampMs = now,
+                totalFiles = totalFiles,
+                totalLines = totalLines,
+                coveredLines = coveredLines,
+                lastUsedMs = now,
+            )
+            val updated = index.entries.filter { it.commitHash != commitHash || it.component != component } + newEntry
+            writeIndex(CacheIndex(entries = updated))
+
+            log.info("Coverage cache: stored commit $commitHash as COV4 (${cov4File.length() / 1024}KB, component=$component, $totalFiles files, $coveredLines/$totalLines lines covered)")
         }
-
-        val totalFiles = coverage.size
-        val totalLines = coverage.values.sumOf { it.size }
-        val coveredLines = coverage.values.sumOf { lineMap -> lineMap.values.count { it.isNotEmpty() } }
-
-        val now = System.currentTimeMillis()
-        val index = readIndex() ?: CacheIndex(entries = emptyList())
-        val newEntry = CacheEntry(
-            commitHash = commitHash,
-            pipelineId = pipelineId,
-            component = component,
-            branch = branch,
-            timestampMs = now,
-            totalFiles = totalFiles,
-            totalLines = totalLines,
-            coveredLines = coveredLines,
-            lastUsedMs = now,
-        )
-        val updated = index.entries.filter { it.commitHash != commitHash || it.component != component } + newEntry
-        writeIndex(CacheIndex(entries = updated))
-
-        log.info("Coverage cache: stored commit $commitHash as COV4 (${cov4File.length() / 1024}KB, component=$component, $totalFiles files, $coveredLines/$totalLines lines covered)")
     }
 
     /**
@@ -146,22 +155,24 @@ class CoverageCacheService(private val project: Project) {
      * Returns true if the file was deleted (or was already absent), false on I/O error.
      */
     fun deleteArtifact(commitHash: String, component: String): Boolean {
-        val dir = cacheDir()
-        val cov4File = File(dir, cov4FileName(commitHash, component))
+        synchronized(LOCK) {
+            val dir = cacheDir()
+            val cov4File = File(dir, cov4FileName(commitHash, component))
 
-        if (cov4File.exists() && !cov4File.delete()) {
-            log.warn("Coverage cache: failed to delete ${cov4File.absolutePath}")
-            return false
+            if (cov4File.exists() && !cov4File.delete()) {
+                log.warn("Coverage cache: failed to delete ${cov4File.absolutePath}")
+                return false
+            }
+
+            val index = readIndex() ?: CacheIndex(entries = emptyList())
+            val updated = index.entries.filter { it.commitHash != commitHash || it.component != component }
+            if (updated.size != index.entries.size) {
+                writeIndex(CacheIndex(entries = updated))
+            }
+
+            log.info("Coverage cache: deleted artifact for commit $commitHash (component=$component)")
+            return true
         }
-
-        val index = readIndex() ?: CacheIndex(entries = emptyList())
-        val updated = index.entries.filter { it.commitHash != commitHash || it.component != component }
-        if (updated.size != index.entries.size) {
-            writeIndex(CacheIndex(entries = updated))
-        }
-
-        log.info("Coverage cache: deleted artifact for commit $commitHash (component=$component)")
-        return true
     }
 
     /**
@@ -201,63 +212,65 @@ class CoverageCacheService(private val project: Project) {
      * next cleanup can retry.
      */
     fun cleanup(maxAgeDays: Int = 7) {
-        val dir = cacheDir()
-        val index = readIndex() ?: CacheIndex(entries = emptyList())
-        val cutoff = System.currentTimeMillis() - maxAgeDays * 24 * 60 * 60 * 1000L
-        val (freshEntries, expiredEntries) = index.entries.partition { (it.lastUsedMs ?: 0) > cutoff }
+        synchronized(LOCK) {
+            val dir = cacheDir()
+            val index = readIndex() ?: CacheIndex(entries = emptyList())
+            val cutoff = System.currentTimeMillis() - maxAgeDays * 24 * 60 * 60 * 1000L
+            val (freshEntries, expiredEntries) = index.entries.partition { (it.lastUsedMs ?: 0) > cutoff }
 
-        val expiredRetained = mutableListOf<CacheEntry>()
-        var expiredDeleted = 0
-        for (entry in expiredEntries) {
-            val cov4File = File(dir, cov4FileName(entry.commitHash, entry.component))
-            if (!cov4File.exists()) {
-                continue
-            }
-            if (cov4File.delete()) {
-                expiredDeleted++
-                log.info("Coverage cache: cleaned up commit ${entry.commitHash} (component=${entry.component})")
-            } else {
-                log.warn("Coverage cache: failed to delete ${cov4File.absolutePath}; will retry on next cleanup")
-                expiredRetained.add(entry)
-            }
-        }
-
-        // Drop index entries whose file is missing (crashed write, manual rm, etc.).
-        val (existing, missing) = freshEntries.partition {
-            File(dir, cov4FileName(it.commitHash, it.component)).exists()
-        }
-        if (missing.isNotEmpty()) {
-            log.info("Coverage cache: dropped ${missing.size} index entries with no file on disk")
-        }
-
-        // Delete orphan .cov4 files on disk that no index entry references.
-        val knownKeys = (existing + expiredRetained).map { it.commitHash to it.component }.toHashSet()
-        var orphansDeleted = 0
-        var orphansFailed = 0
-        dir.listFiles { f -> f.isFile && f.name.endsWith(".cov4") }?.forEach { file ->
-            val key = fileKey(file)
-            if (key !in knownKeys) {
-                if (file.delete()) {
-                    orphansDeleted++
-                    log.info("Coverage cache: deleted orphan file ${file.name}")
+            val expiredRetained = mutableListOf<CacheEntry>()
+            var expiredDeleted = 0
+            for (entry in expiredEntries) {
+                val cov4File = File(dir, cov4FileName(entry.commitHash, entry.component))
+                if (!cov4File.exists()) {
+                    continue
+                }
+                if (cov4File.delete()) {
+                    expiredDeleted++
+                    log.info("Coverage cache: cleaned up commit ${entry.commitHash} (component=${entry.component})")
                 } else {
-                    orphansFailed++
-                    log.warn("Coverage cache: failed to delete orphan ${file.absolutePath}")
+                    log.warn("Coverage cache: failed to delete ${cov4File.absolutePath}; will retry on next cleanup")
+                    expiredRetained.add(entry)
                 }
             }
-        }
 
-        val finalEntries = existing + expiredRetained
-        if (finalEntries.size != index.entries.size) {
-            writeIndex(CacheIndex(entries = finalEntries))
-        }
+            // Drop index entries whose file is missing (crashed write, manual rm, etc.).
+            val (existing, missing) = freshEntries.partition {
+                File(dir, cov4FileName(it.commitHash, it.component)).exists()
+            }
+            if (missing.isNotEmpty()) {
+                log.info("Coverage cache: dropped ${missing.size} index entries with no file on disk")
+            }
 
-        if (expiredDeleted > 0 || missing.isNotEmpty() || orphansDeleted > 0 || orphansFailed > 0) {
-            log.info(
-                "Coverage cache: cleanup done — expired=$expiredDeleted, " +
-                    "missingIndexDropped=${missing.size}, orphansDeleted=$orphansDeleted, " +
-                    "orphansFailed=$orphansFailed, remaining=${finalEntries.size}"
-            )
+            // Delete orphan .cov4 files on disk that no index entry references.
+            val knownKeys = (existing + expiredRetained).map { it.commitHash to it.component }.toHashSet()
+            var orphansDeleted = 0
+            var orphansFailed = 0
+            dir.listFiles { f -> f.isFile && f.name.endsWith(".cov4") }?.forEach { file ->
+                val key = fileKey(file)
+                if (key !in knownKeys) {
+                    if (file.delete()) {
+                        orphansDeleted++
+                        log.info("Coverage cache: deleted orphan file ${file.name}")
+                    } else {
+                        orphansFailed++
+                        log.warn("Coverage cache: failed to delete orphan ${file.absolutePath}")
+                    }
+                }
+            }
+
+            val finalEntries = existing + expiredRetained
+            if (finalEntries.size != index.entries.size) {
+                writeIndex(CacheIndex(entries = finalEntries))
+            }
+
+            if (expiredDeleted > 0 || missing.isNotEmpty() || orphansDeleted > 0 || orphansFailed > 0) {
+                log.info(
+                    "Coverage cache: cleanup done — expired=$expiredDeleted, " +
+                        "missingIndexDropped=${missing.size}, orphansDeleted=$orphansDeleted, " +
+                        "orphansFailed=$orphansFailed, remaining=${finalEntries.size}"
+                )
+            }
         }
     }
 
@@ -299,6 +312,9 @@ class CoverageCacheService(private val project: Project) {
     }
 
     companion object {
+        /** Serializes in-JVM cache/index mutations across project windows sharing a repo. */
+        private val LOCK = Any()
+
         fun getInstance(project: Project): CoverageCacheService = project.service()
     }
 }

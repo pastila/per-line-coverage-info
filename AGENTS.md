@@ -39,17 +39,22 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### GitLab integration
 | File | Purpose |
 |------|---------|
-| `GitLabApiClient.kt` | HTTP client: pipelines, jobs, artifact download, merge-base, project list |
+| `GitLabApi.kt` | Interface for the GitLab REST surface (`listPipelines`, `listPipelineJobs`, `getMergeBase`, artifact download, project list). Two impls: thin HTTP client and the cached worker facade |
+| `GitLabApiClient.kt` | Thin HTTP client implementing `GitLabApi`: pipelines, jobs, artifact download, merge-base, project list. Retries 5xx/429, honours `Retry-After` |
 | `GitLabModels.kt` | `@Serializable` data classes for GitLab REST responses |
-| `CoverageResolver.kt` | Picks the best pipeline for current HEAD via three-tier merge-base resolution; `resolveDual()` returns `DualResolved(primary, baseline?)` for dual-coverage mode |
+| `CoverageResolver.kt` | Picks the best pipeline for current HEAD via three-tier merge-base resolution; `resolveDual()` returns `DualResolved(primary, baseline?)` for dual-coverage mode. Works against the shared `GitLabApi` facade |
+| `CachedGitLabApi.kt` | Shared "worker" facade implementing `GitLabApi`: serializes metadata calls (pipelines/jobs/merge-base) on one dedicated worker thread, TTL-caches results, rate-limits actual requests. Artifact downloads pass through. `invalidateJobs()` forces fresh job status for the wait-loop |
+| `GitLabCoordinator.kt` | App-level (`Service.Level.APP`) coordinator owning the single shared worker for the whole JVM: `api()` (recreates client on settings change, clears caches), `singleFlight()`/`memoize()` (cross-window coalescing + TTL memoization), `sharedReader()` (LRU of `Cov4Reader`), `markRefreshed()`/`isWithinRefreshCooldown()` (refresh cooldown) |
+| `TtlCache.kt` | Generic thread-safe TTL cache (lazy expiry) |
+| `RateLimiter.kt` | Token-bucket rate limiter (`tryAcquire`/`acquire(timeout)`) |
 
 ### Loading pipeline
 | File | Purpose |
 |------|---------|
-| `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback → GitLab refresh), `loadFromGitLab()` (two-phase: silent resolve → visible download on cache miss). `downloadArtifacts()` filters by detected component, waits for running behat jobs (infinite, cancel via progress/branch switch), falls back to baseline pipeline on `NO_DATA`. `loadOrFetchBaseline()` accepts `preloadedReader` to avoid redundant `.cov4` opens. |
+| `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback → GitLab refresh), `loadFromGitLab()` (two-phase: silent resolve → visible download on cache miss). Resolves through `GitLabCoordinator` (memoized per git-root/HEAD, short-circuits when fresh within 60 s cooldown); coalesces identical downloads across windows via `singleFlight`. `downloadArtifacts()` filters by detected component, waits for running behat jobs (infinite, cancel via progress/branch switch), falls back to baseline pipeline on `NO_DATA`. `loadOrFetchBaseline()` accepts `preloadedReader` to avoid redundant `.cov4` opens. |
 | `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden |
 | `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; skipped when gutter hidden |
-| `CoveragePipelinePoller.kt` | Polls remote for new pipelines and auto-refreshes coverage; stopped/blocked when gutter hidden |
+| `CoveragePipelinePoller.kt` | Polls remote for new pipelines and auto-refreshes coverage (every 30 s; skipped while a load is in progress); uses the shared cached API, so N windows/pollers cost one network request per TTL; stopped/blocked when gutter hidden |
 | `LoadCoverageAction.kt` | Find Action: "Load Coverage from GitLab" |
 | `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz) |
 | `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" |
@@ -60,7 +65,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `BinaryCoverageParser.kt` | Parses `.covt` binary and CI artifact ZIPs → `Map<file, Map<line, List<test>>>` |
 | `Cov4Writer.kt` | Writes COV4 random-access cache file (spec: `coverage_storage_format_v4.md`) |
 | `Cov4Reader.kt` | Reads COV4 on demand (lazy per-file decoding); implements `Closeable` |
-| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<projectId>/`; key = commit hash + component; files named `hash-component.cov4`; manages index, cleanup (7 days by `lastUsedMs`), last-used tracking. `CacheEntry` stores component and branch per artifact. |
+| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<projectId>/`; key = commit hash + component; files named `hash-component.cov4`; manages index, cleanup (7 days by `lastUsedMs`), last-used tracking, in-JVM-synchronized writes, shared `Cov4Reader` via coordinator. `CacheEntry` stores component and branch per artifact. |
 
 ### In-memory model
 | File | Purpose |
@@ -144,9 +149,11 @@ When the current branch has its own pipeline **and** the coverage branch (master
 
 On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). **All auto-loading is skipped when gutter visibility is off** (see below). GitLab requests are also skipped when the gutter is hidden.
 
+All GitLab traffic goes through the app-level `GitLabCoordinator`: pipeline resolution is memoized per git-root/HEAD (TTL 60 s) and skipped entirely when the loaded coverage is already fresh within the 60 s refresh cooldown; identical downloads across project windows are coalesced via `singleFlight`; metadata calls (pipelines/jobs/merge-base) are serialized on one worker thread, TTL-cached (120 s / 600 s / 300 s) and rate-limited (12-token bucket, 1 token / 3 s) — so N open windows of the same repo cost the same as one.
+
 `CoverageLoadService` auto-detects the current component via `ComponentConfig.detectComponent()` (root → `raketa`, subpath → matching component, unknown → error). During download, the plugin filters CI jobs to only the detected component, waits for running jobs (infinite — cancelled only via progress bar or branch switch), and falls back to the baseline (master) pipeline when the current branch has no jobs for the component.
 
-Cache is stored per component (`~/.cache/coverage-plugin/<projectId>/<hash>-<component>.cov4`). Each artifact tracks which branch it was downloaded from. On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
+Cache is stored per component (`~/.cache/coverage-plugin/<projectId>/<hash>-<component>.cov4`), shared across IDE instances via the shared project id. Each artifact tracks which branch it was downloaded from. On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
 
 ## MCP
 
@@ -176,12 +183,13 @@ Tool: `list_files` — lists files with coverage data under a directory.
 - **Logging**: `private val log = CoverageLog.get(Foo::class.java)` — never `Logger.getInstance` directly.
 - **Paths**: canonical key is git-root-relative (e.g. `api/hotels/src/Foo.php`). `LineMappingService.toGitRelativePath` converts project-relative → git-relative. Feature paths in test names are also git-root-relative; strip with `CoverageTestNavigator.toProjectRelativeFeaturePath`.
 - **Line numbers**: 1-based throughout.
-- **Cache key**: commit hash + component (not pipeline ID). Files: `<hash>-<component>.cov4`.
+- **Cache key**: commit hash + component (not pipeline ID). Files: `<hash>-<component>.cov4` under `~/.cache/coverage-plugin/<projectId>/`.
+- **Shared GitLab access**: always go through `GitLabCoordinator.getInstance().api()` (cached/rate-limited worker) — never construct a raw `GitLabApiClient` for the loading flow. `CoverageResolver`, `CoverageLoadService`, `CoveragePipelinePoller` take the `GitLabApi` facade.
 - **Component**: `ComponentConfig.detectComponent()` maps project root → `raketa`, subdirectory → matching component. Only behat jobs for the detected component are downloaded.
-- **Waiting**: `downloadArtifacts()` waits indefinitely for running behat jobs; cancelled via progress bar (`indicator.isCanceled`) or branch switch (`pendingReload`).
+- **Waiting**: `downloadArtifacts()` waits indefinitely for running behat jobs; cancelled via progress bar (`indicator.isCanceled`) or branch switch (`pendingReload`). The wait-loop calls `invalidateJobs()` to bypass the jobs TTL cache.
 - **Fallback**: when the primary pipeline has no jobs for the component, `startDownloadTask()` falls back to the baseline (master) pipeline and clears the baseline reader.
 - **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.
-- **Threading**: pipeline resolve on pooled thread (silent); download in `Task.Backgroundable` (visible progress); UI updates via `invokeLater`.
+- **Threading**: pipeline resolve on pooled thread (silent); download in `Task.Backgroundable` (visible progress); UI updates via `invokeLater`. Metadata API calls are serialized on the coordinator worker thread.
 - **Errors**: throw `CoverageApiException(CoverageErrorKind.*)`. Auto-triggered callers only log (silent mode).
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.

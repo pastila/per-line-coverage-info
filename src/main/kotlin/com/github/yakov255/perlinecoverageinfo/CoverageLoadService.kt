@@ -37,6 +37,12 @@ class CoverageLoadService(private val project: Project) {
     private var pendingReload = false
 
     /**
+     * True while a GitLab load (resolve + download) is in progress for this project.
+     * Used by [CoveragePipelinePoller] to avoid firing API requests during a load.
+     */
+    fun isLoadInProgress(): Boolean = loadingCommitHash != null
+
+    /**
      * Validates that the plugin is enabled and GitLab settings are configured.
      * Returns an error message if invalid, null if OK.
      */
@@ -128,8 +134,17 @@ class CoverageLoadService(private val project: Project) {
                                     CoverageHighlighter.applyToOpenEditors(project)
                                 }
                             }
-                            // Always try to fetch fresh in background (errors are silent)
-                            loadFromGitLab(showErrors = false)
+                            // Refresh in the background (errors are silent) unless this
+                            // exact commit was just refreshed — avoids redundant resolve
+                            // requests during rapid branch switches / HEAD toggles.
+                            val headHash = CoverageResolver.runGitCommand(gitRoot, "rev-parse", "HEAD")
+                            val withinCooldown = headHash != null && cachedCommit == headHash &&
+                                GitLabCoordinator.getInstance().isWithinRefreshCooldown(gitRoot, headHash, REFRESH_COOLDOWN_MS)
+                            if (withinCooldown) {
+                                log.info("Coverage: offline-first hit within refresh cooldown, skipping GitLab refresh")
+                            } else {
+                                loadFromGitLab(showErrors = false)
+                            }
                             return
                         }
                     }
@@ -226,12 +241,37 @@ class CoverageLoadService(private val project: Project) {
 
         CoverageCacheService.getInstance(project).cleanup()
 
+        val dataService = CoverageDataService.getInstance(project)
+        val coordinator = GitLabCoordinator.getInstance()
+
+        // Short-circuit: if coverage for the current HEAD is already loaded, fresh
+        // and was refreshed recently, skip GitLab entirely (zero requests).
+        val gitRoot = findGitRoot()
+        val headHash = gitRoot?.let { CoverageResolver.runGitCommand(it, "rev-parse", "HEAD") }
+        if (gitRoot != null && headHash != null &&
+            dataService.coverageCommitHash == headHash && dataService.hasData() && !dataService.isStale &&
+            coordinator.isWithinRefreshCooldown(gitRoot, headHash, REFRESH_COOLDOWN_MS)
+        ) {
+            log.info("Coverage: coverage for HEAD ${headHash.take(8)} is fresh and within refresh cooldown, skipping GitLab resolve")
+            finishLoad(onComplete)
+            return
+        }
+
         val settings = CoverageApiSettings.getInstance()
-        val gitLabClient = GitLabApiClient(settings.gitlabBaseUrl, settings.bearerToken)
+        val gitLabClient = coordinator.api()
         val resolver = CoverageResolver(gitLabClient, project)
-        val dual = resolver.resolveDual()
+        val coverageBranch = settings.coverageBranch.trim()
+        // Share the resolution across project windows of the same repo and cache it
+        // briefly, so repeated loads / branch switches cost zero API requests.
+        val resolveKey = "$gitRoot|$headHash|$coverageBranch"
+        val dual = coordinator.memoize("resolve", resolveKey, RESOLVE_TTL_MS) {
+            resolver.resolveDual()
+        }
         val resolved = dual.primary
         loadingCommitHash = resolved.commitHash
+        if (gitRoot != null && headHash != null) {
+            coordinator.markRefreshed(gitRoot, headHash)
+        }
         log.info("Coverage: resolved primary pipeline ${resolved.pipelineId} at commit ${resolved.commitHash.take(8)}")
         if (dual.baseline != null) {
             log.info("Coverage: resolved baseline pipeline ${dual.baseline.pipelineId} at commit ${dual.baseline.commitHash.take(8)}")
@@ -240,7 +280,6 @@ class CoverageLoadService(private val project: Project) {
         }
 
         val cache = CoverageCacheService.getInstance(project)
-        val dataService = CoverageDataService.getInstance(project)
         val component = detectComponent(resolved.gitRoot)
         if (component == null) {
             throw CoverageApiException(
@@ -289,7 +328,7 @@ class CoverageLoadService(private val project: Project) {
      * in the status bar while artifacts are being fetched.
      */
     private fun startDownloadTask(
-        gitLabClient: GitLabApiClient,
+        gitLabClient: GitLabApi,
         dual: DualResolved,
         cache: CoverageCacheService,
         dataService: CoverageDataService,
@@ -305,6 +344,7 @@ class CoverageLoadService(private val project: Project) {
             finishLoad(onComplete)
             return
         }
+        val coordinator = GitLabCoordinator.getInstance()
 
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Downloading Coverage", true) {
             override fun run(indicator: ProgressIndicator) {
@@ -315,16 +355,22 @@ class CoverageLoadService(private val project: Project) {
                     if (primaryCached == null) {
                         log.info("Coverage: cache miss — downloading primary artifacts for pipeline ${resolved.pipelineId}")
                         var fellBackToBaseline = false
+                        // Coalesce identical downloads across project windows of the
+                        // same repo: concurrent loads share one download.
                         val result = try {
-                            downloadArtifacts(indicator, gitLabClient, resolved,
-                                fractionStart = 0.0, fractionEnd = 0.6)
+                            coordinator.singleFlight("download:${resolved.commitHash}:$component") {
+                                downloadArtifacts(indicator, gitLabClient, resolved,
+                                    fractionStart = 0.0, fractionEnd = 0.6)
+                            }
                         } catch (e: CoverageApiException) {
                             if (e.kind == CoverageErrorKind.NO_DATA && dual.baseline != null) {
                                 log.info("Coverage: no ${component} jobs in primary pipeline, falling back to baseline pipeline ${dual.baseline.pipelineId}")
                                 dataService.clearBaseline()
                                 fellBackToBaseline = true
-                                downloadArtifacts(indicator, gitLabClient, dual.baseline,
-                                    fractionStart = 0.0, fractionEnd = 0.6)
+                                coordinator.singleFlight("download:${dual.baseline.commitHash}:$component") {
+                                    downloadArtifacts(indicator, gitLabClient, dual.baseline,
+                                        fractionStart = 0.0, fractionEnd = 0.6)
+                                }
                             } else {
                                 throw e
                             }
@@ -427,7 +473,7 @@ class CoverageLoadService(private val project: Project) {
      */
     fun downloadArtifacts(
         indicator: ProgressIndicator,
-        gitLabClient: GitLabApiClient,
+        gitLabClient: GitLabApi,
         resolved: ResolvedPipeline,
         fractionStart: Double = 0.2,
         fractionEnd: Double = 0.8,
@@ -479,6 +525,9 @@ class CoverageLoadService(private val project: Project) {
             Thread.sleep(10_000L)
 
             try {
+                // The wait-loop must observe fresh job status, bypassing the jobs
+                // TTL cache (which is intended for immutable completed pipelines).
+                (gitLabClient as? CachedGitLabApi)?.invalidateJobs(settings.gitlabProjectId, resolved.pipelineId)
                 val freshJobs = gitLabClient.listPipelineJobs(settings.gitlabProjectId, resolved.pipelineId)
                 currentJobs = freshJobs.filter { job ->
                     job.name.contains("behat", ignoreCase = true) && job.name.contains(component.jobPrefix, ignoreCase = true)
@@ -714,7 +763,7 @@ class CoverageLoadService(private val project: Project) {
      */
     private fun loadOrFetchBaseline(
         indicator: ProgressIndicator?,
-        gitLabClient: GitLabApiClient,
+        gitLabClient: GitLabApi,
         cache: CoverageCacheService,
         baseline: ResolvedPipeline?,
         preloadedReader: Cov4Reader? = null,
@@ -750,10 +799,12 @@ class CoverageLoadService(private val project: Project) {
             log.info("Coverage: baseline cache miss — downloading artifacts for pipeline ${baseline.pipelineId}")
             indicator.text = "Loading baseline coverage…"
             indicator.fraction = baseProgress
-            val result = downloadArtifacts(indicator, gitLabClient, baseline,
-                fractionStart = baseProgress,
-                fractionEnd = 1.0,
-            )
+            val result = GitLabCoordinator.getInstance().singleFlight("download-baseline:${baseline.commitHash}:$component") {
+                downloadArtifacts(indicator, gitLabClient, baseline,
+                    fractionStart = baseProgress,
+                    fractionEnd = 1.0,
+                )
+            }
             val baselineComponent = result.componentResults.first().component
             cache.writeCov4(baseline.commitHash, baseline.pipelineId, result.componentResults.first().coverage, component = baselineComponent, branch = CoverageApiSettings.getInstance().coverageBranch)
             val freshReader = cache.get(baseline.commitHash, baselineComponent)
@@ -979,6 +1030,12 @@ class CoverageLoadService(private val project: Project) {
     }
 
     companion object {
+        /** Re-resolving the same HEAD within this window is skipped (short-circuit). */
+        private const val REFRESH_COOLDOWN_MS = 60_000L
+
+        /** TTL for the shared, cross-window pipeline-resolution result. */
+        private const val RESOLVE_TTL_MS = 60_000L
+
         fun getInstance(project: Project): CoverageLoadService = project.service()
 
         fun errorTitle(kind: CoverageErrorKind): String = when (kind) {
