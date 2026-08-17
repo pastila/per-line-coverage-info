@@ -36,6 +36,9 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
     /** SHA of a failed pipeline we already notified about (don't re-notify). */
     private var reportedFailureSha: String? = null
 
+    /** Last time the quiet "remote unchanged" state was logged (throttle debug noise). */
+    private var lastQuietLogMs = 0L
+
     /**
      * Starts or restarts the polling loop. Called after coverage loads, HEAD changes,
      * or whenever the plugin should begin watching for pipeline updates.
@@ -145,6 +148,12 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         val loadedSha = dataService.coverageCommitHash
 
         if (remoteSha == loadedSha) {
+            // Quiet steady state (every poll cycle) — log at most once a minute.
+            val now = System.currentTimeMillis()
+            if (now - lastQuietLogMs > 60_000) {
+                lastQuietLogMs = now
+                log.debug("Coverage: pipeline poll — remote unchanged (${loadedSha?.take(8) ?: "none"}), coverage current")
+            }
             scheduleNext()
             return
         }

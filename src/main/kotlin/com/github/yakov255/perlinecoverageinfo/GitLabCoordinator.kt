@@ -38,7 +38,7 @@ class GitLabCoordinator : Disposable {
 
     private val lock = Any()
 
-    private val readerCache = ReaderLruCache(MAX_READER_CACHE_ENTRIES)
+    private val readerCache = ReaderLruCache(MAX_READER_CACHE_ENTRIES, log)
     private val singleFlight = ConcurrentHashMap<String, CompletableFuture<*>>()
     private val memoizedCaches = ConcurrentHashMap<String, TtlCache<String, Any>>()
     private val refreshCooldowns = ConcurrentHashMap<String, Long>()
@@ -70,9 +70,13 @@ class GitLabCoordinator : Disposable {
             clientToken = token
             previous?.shutdown()
             // Settings changed — drop cached resolution results so nothing stale is served.
+            val memoizedCount = memoizedCaches.size
+            val cooldownCount = refreshCooldowns.size
+            val readerCount = readerCache.size()
             memoizedCaches.clear()
             refreshCooldowns.clear()
             readerCache.clear()
+            log.info("GitLab coordinator: settings changed — cleared in-memory caches (memoized=$memoizedCount, cooldowns=$cooldownCount, readers=$readerCount)")
             return cached
         }
     }
@@ -93,15 +97,18 @@ class GitLabCoordinator : Disposable {
     fun <T> singleFlight(key: String, loader: () -> T): T {
         val existing = singleFlight[key]
         if (existing != null) {
+            log.debug("GitLab coordinator: joining in-flight work ($key)")
             @Suppress("UNCHECKED_CAST")
             return (existing as CompletableFuture<T>).joinAndUnwrap()
         }
         val future = CompletableFuture<T>()
         val raced = singleFlight.putIfAbsent(key, future)
         if (raced != null) {
+            log.debug("GitLab coordinator: joining in-flight work ($key)")
             @Suppress("UNCHECKED_CAST")
             return (raced as CompletableFuture<T>).joinAndUnwrap()
         }
+        log.debug("GitLab coordinator: starting work ($key)")
         try {
             val value = loader()
             future.complete(value)
@@ -122,10 +129,16 @@ class GitLabCoordinator : Disposable {
     fun <T : Any> memoize(name: String, key: String, ttlMs: Long, loader: () -> T): T {
         val cache = memoizedCaches.getOrPut(name) { TtlCache<String, Any>(ttlMs) }
         @Suppress("UNCHECKED_CAST")
-        cache.get(key)?.let { return it as T }
+        cache.get(key)?.let {
+            log.debug("GitLab coordinator: memoized hit ($name:$key)")
+            return it as T
+        }
         return singleFlight("$name:$key") {
             @Suppress("UNCHECKED_CAST")
-            cache.get(key)?.let { return@singleFlight it as T }
+            cache.get(key)?.let {
+                log.debug("GitLab coordinator: memoized hit ($name:$key)")
+                return@singleFlight it as T
+            }
             val value = loader()
             cache.put(key, value)
             value
@@ -174,7 +187,7 @@ private fun <T> CompletableFuture<T>.joinAndUnwrap(): T {
  * evicted readers are simply dropped (their underlying byte arrays become
  * garbage collectable).
  */
-private class ReaderLruCache(private val maxEntries: Int) {
+private class ReaderLruCache(private val maxEntries: Int, private val log: CoverageLog) {
 
     private val map = object : LinkedHashMap<String, Cov4Reader>(16, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Cov4Reader>?): Boolean =
@@ -184,15 +197,25 @@ private class ReaderLruCache(private val maxEntries: Int) {
 
     fun getOrOpen(key: String, open: () -> Cov4Reader?): Cov4Reader? {
         synchronized(lock) {
-            map[key]?.let { return it }
+            map[key]?.let {
+                log.debug("GitLab coordinator: reusing cached reader ($key)")
+                return it
+            }
         }
         val reader = open() ?: return null
         synchronized(lock) {
             map[key]?.let { return it }
+            if (map.size >= maxEntries) {
+                val eldest = map.entries.first()
+                log.debug("GitLab coordinator: evicting reader (${eldest.key})")
+                map.remove(eldest.key)
+            }
             map[key] = reader
             return reader
         }
     }
+
+    fun size(): Int = synchronized(lock) { map.size }
 
     fun clear() {
         synchronized(lock) {

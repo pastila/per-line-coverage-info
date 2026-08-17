@@ -55,13 +55,27 @@ class CachedGitLabApi(
         }
     }
 
-    /** Returns [key] from [cache], or loads it via [loader] (rate-limited). */
-    private fun <T> cached(key: String, cache: TtlCache<String, T>, loader: () -> T): T {
+    /**
+     * Returns [key] from [cache], or loads it via [loader] (rate-limited).
+     * [label] is a short human-readable description used in log messages, e.g.
+     * `pipelines ref=master`. Every cache miss logs at INFO — this is the
+     * single place where all real metadata API traffic is observable.
+     */
+    private fun <T> cached(label: String, key: String, cache: TtlCache<String, T>, loader: () -> T): T {
         return onWorker {
-            cache.get(key)?.let { return@onWorker it }
-            if (!rateLimiter.acquire(RATE_LIMIT_WAIT_MS)) {
-                log.warn("GitLab rate limiter: no token within ${RATE_LIMIT_WAIT_MS}ms, proceeding without token")
+            cache.get(key)?.let {
+                log.debug("GitLab worker: cache hit ($label)")
+                return@onWorker it
             }
+            val waitStart = System.nanoTime()
+            val acquired = rateLimiter.acquire(RATE_LIMIT_WAIT_MS)
+            val waitMs = (System.nanoTime() - waitStart) / 1_000_000
+            if (!acquired) {
+                log.warn("GitLab worker: rate limiter — no token within ${RATE_LIMIT_WAIT_MS}ms, proceeding without token ($label)")
+            } else if (waitMs > 1_000) {
+                log.info("GitLab worker: waited ${waitMs}ms for rate-limiter token ($label)")
+            }
+            log.info("GitLab worker: cache miss ($label), fetching")
             val value = loader()
             cache.put(key, value)
             value
@@ -70,21 +84,31 @@ class CachedGitLabApi(
 
     override fun listPipelines(projectId: Long, ref: String, status: String?, perPage: Int): List<GitLabPipeline> {
         val key = "pipelines:$projectId:$ref:$status:$perPage"
-        return cached(key, pipelinesCache) { delegate.listPipelines(projectId, ref, status, perPage) }
+        return cached("pipelines ref=$ref", key, pipelinesCache) { delegate.listPipelines(projectId, ref, status, perPage) }
     }
 
     override fun listPipelineJobs(projectId: Long, pipelineId: Long, perPage: Int): List<GitLabJob> {
         val key = "jobs:$projectId:$pipelineId"
-        return cached(key, jobsCache) { delegate.listPipelineJobs(projectId, pipelineId, perPage) }
+        return cached("jobs pipeline=$pipelineId", key, jobsCache) { delegate.listPipelineJobs(projectId, pipelineId, perPage) }
     }
 
     override fun getMergeBase(projectId: Long, ref1: String, ref2: String): String? {
         return onWorker {
             val key = "mergebase:$projectId:$ref1:$ref2"
-            mergeBaseCache.get(key)?.let { return@onWorker it }
-            if (!rateLimiter.acquire(RATE_LIMIT_WAIT_MS)) {
-                log.warn("GitLab rate limiter: no token within ${RATE_LIMIT_WAIT_MS}ms, proceeding without token")
+            val label = "merge-base refs=$ref1,$ref2"
+            mergeBaseCache.get(key)?.let {
+                log.debug("GitLab worker: cache hit ($label)")
+                return@onWorker it
             }
+            val waitStart = System.nanoTime()
+            val acquired = rateLimiter.acquire(RATE_LIMIT_WAIT_MS)
+            val waitMs = (System.nanoTime() - waitStart) / 1_000_000
+            if (!acquired) {
+                log.warn("GitLab worker: rate limiter — no token within ${RATE_LIMIT_WAIT_MS}ms, proceeding without token ($label)")
+            } else if (waitMs > 1_000) {
+                log.info("GitLab worker: waited ${waitMs}ms for rate-limiter token ($label)")
+            }
+            log.info("GitLab worker: cache miss ($label), fetching")
             val result = delegate.getMergeBase(projectId, ref1, ref2)
             if (result != null) mergeBaseCache.put(key, result)
             result
@@ -114,6 +138,7 @@ class CachedGitLabApi(
         pipelinesCache.clear()
         jobsCache.clear()
         mergeBaseCache.clear()
+        log.debug("GitLab worker: invalidated all metadata caches")
     }
 
     /**
@@ -124,6 +149,7 @@ class CachedGitLabApi(
      */
     fun invalidateJobs(projectId: Long, pipelineId: Long) {
         jobsCache.invalidate("jobs:$projectId:$pipelineId")
+        log.debug("GitLab worker: invalidated jobs cache for pipeline $pipelineId")
     }
 
     fun shutdown() {
