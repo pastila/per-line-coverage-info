@@ -1,5 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.ide.plugins.PluginManagerCore
+import com.intellij.openapi.extensions.PluginId
 import kotlinx.serialization.json.Json
 import java.net.URI
 import java.net.URLEncoder
@@ -26,6 +28,17 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
 
     private val log = CoverageLog.get(GitLabApiClient::class.java)
     private val baseUrl = baseUrl.trimEnd('/')
+
+    /**
+     * User-Agent identifying this plugin in GitLab server logs, e.g.
+     * `Per-Line-Coverage-Info/2.6.0`. Version is read from the plugin
+     * descriptor; falls back to `dev` when the descriptor is unavailable
+     * (e.g. in unit tests).
+     */
+    private val userAgent: String by lazy {
+        val version = PluginManagerCore.getPlugin(PluginId.getId(PLUGIN_ID))?.version
+        "Per-Line-Coverage-Info/${version ?: "dev"}"
+    }
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -86,6 +99,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
             val request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .GET()
+                .header("User-Agent", userAgent)
                 .header("Accept", "application/json")
                 .header("PRIVATE-TOKEN", privateToken)
                 .build()
@@ -136,6 +150,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
             val request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .GET()
+                .header("User-Agent", userAgent)
                 .header("PRIVATE-TOKEN", privateToken)
                 .build()
             val response = try {
@@ -266,6 +281,7 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
             val request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .GET()
+                .header("User-Agent", userAgent)
                 .header("PRIVATE-TOKEN", privateToken)
                 .timeout(Duration.ofSeconds(30))
                 .build()
@@ -344,5 +360,9 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
                 throw e
             }
         }
+    }
+
+    companion object {
+        private const val PLUGIN_ID = "com.github.yakov255.perlinecoverageinfo"
     }
 }
