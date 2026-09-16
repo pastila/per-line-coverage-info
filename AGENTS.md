@@ -115,7 +115,8 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Behat runner
 | File | Purpose |
 |------|---------|
-| `BehatTestRunner.kt` | Runs scenarios via Behat run-configuration template; single or bundled multi-path launch; passes feature file paths as separate positional arguments (e.g. `file:1 file:2`) |
+| `BehatTestRunner.kt` | Runs scenarios via Behat run-configuration template; single or bundled multi-path launch; pins every launch to the Behat config that owns the feature files and passes paths relative to it as separate positional arguments (e.g. `file:1 file:2`); paths from several services produce one launch per service, started sequentially |
+| `BehatConfigLocator.kt` | Pure lookup of the Behat project owning a feature file: nearest ancestor directory with `behat.yml` / `behat.php` / `*.dist` (also `config/` subdir), searched up to the project root |
 | `CoverageTestNavigator.kt` | PSI navigation to scenario; converts git-root-relative feature paths to project-relative |
 
 ### Errors & logging
@@ -214,4 +215,4 @@ Tool: `list_files` — lists files with coverage data under a directory.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.
 - **HEAD tracker**: `CoverageHeadTracker` skits the initial `null → revision` event to avoid duplicating `CoverageStartupActivity`.
-- **Behat paths**: `BehatTestRunner.runMultiplePaths()` passes feature file paths as separate positional arguments (e.g. `file:1 file:2 file:3`), not as comma-separated lines with `--paths` option.
+- **Behat paths**: `BehatTestRunner.runMultiplePaths()` passes feature file paths as separate positional arguments (e.g. `file:1 file:2 file:3`), not as comma-separated lines with `--paths` option. Paths are relative to the directory of the Behat config found by `BehatConfigLocator` (that config is also forced onto the run configuration via `setUseAlternativeConfigurationFile`) — Behat resolves relative specification paths against its config directory, so anything else gives "No specifications found".

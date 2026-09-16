@@ -3,6 +3,7 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+- Fix "No specifications found" when running tests from the coverage panels: each launch is now pinned to the `behat.yml`/`behat.php` that owns the feature file, and paths are relative to it (before, the working directory came from the first configured Behat framework, so a `core` feature was passed as `../../core/src/...`); tests from different services are launched one after another
 - Local coverage layer: `.covt` files from local Behat runs are merged over CI coverage instead of replacing it; a locally re-run scenario replaces its CI data, other scenarios keep theirs
 - Auto-load of new `.covt` / `.covt.gz` files from `storage/coverage` (Settings → Tools → GitLab Coverage → Local Coverage Dir) via the IDE file watcher
 - Local coverage stays aligned while editing: each run keeps a snapshot of the files it executed and is line-mapped from it
