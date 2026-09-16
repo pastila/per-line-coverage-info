@@ -229,4 +229,37 @@ class CoverageMcpToolsetTest {
     fun pageSizeConstant() {
         assertEquals(50, CoverageMcpToolset.PAGE_SIZE)
     }
+
+    // --- LocalCoverageStatusResult ---
+
+    @Test
+    fun localCoverageStatusSerialization() {
+        val status = LocalCoverageStatusResult(
+            collectLocalCoverage = true,
+            localCoverageDir = "storage/coverage",
+            watchedDirectory = "/repo/storage/coverage",
+            localRuns = 3,
+            staleRuns = 1,
+            localTests = 7,
+            localFiles = 12,
+            pluginEnabled = true,
+        )
+        val serialized = json.encodeToString(LocalCoverageStatusResult.serializer(), status)
+        val deserialized = json.decodeFromString(LocalCoverageStatusResult.serializer(), serialized)
+        assertEquals(status, deserialized)
+        assertTrue(deserialized.collectLocalCoverage)
+        assertEquals("/repo/storage/coverage", deserialized.watchedDirectory)
+    }
+
+    @Test
+    fun localCoverageStatusDefaultsToNoLocalRuns() {
+        val status = LocalCoverageStatusResult(
+            collectLocalCoverage = false,
+            localCoverageDir = "storage/coverage",
+        )
+        assertNull(status.watchedDirectory)
+        assertEquals(0, status.localRuns)
+        assertEquals(0, status.staleRuns)
+        assertEquals(0, status.localTests)
+    }
 }

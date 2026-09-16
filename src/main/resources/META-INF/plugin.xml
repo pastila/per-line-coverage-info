@@ -59,6 +59,10 @@
                 icon="AllIcons.General.RunWithCoverage"
                 text="Collect Local Coverage" description="Make Behat runs started from the IDE write coverage that is merged over CI coverage">
         </action>
+        <action id="RestoreStaleLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.RestoreStaleLocalCoverageAction"
+                icon="AllIcons.General.Warning"
+                text="Restore Stale Local Coverage" description="Merge local runs collected on another commit onto the current HEAD">
+        </action>
         <action id="ClearLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.ClearLocalCoverageAction"
                 text="Clear Local Coverage" description="Drop coverage from local runs and show CI coverage only">
         </action>

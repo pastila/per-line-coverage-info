@@ -78,6 +78,7 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
                 filterBoth, filterMaster, filterFeature,
                 Separator.getInstance(),
                 ActionManager.getInstance().getAction("CollectLocalCoverage"),
+                ActionManager.getInstance().getAction("RestoreStaleLocalCoverage"),
             ),
             true
         )

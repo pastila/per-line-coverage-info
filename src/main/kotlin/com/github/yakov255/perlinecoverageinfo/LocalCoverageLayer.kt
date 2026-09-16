@@ -14,6 +14,8 @@ class LocalCoverageRun(
     val coverage: Map<String, Map<Int, List<String>>>,
     /** Git-root-relative path → file content the line numbers in [coverage] refer to. */
     val snapshots: Map<String, String>,
+    /** HEAD commit the run was collected on; null when it could not be resolved. */
+    val commit: String? = null,
 ) {
     /** Returns this run with [superseded] tests removed, or null if no tests are left. */
     fun without(superseded: Set<String>): LocalCoverageRun? {
@@ -23,8 +25,18 @@ class LocalCoverageRun(
         val filtered = coverage.mapValues { (_, lines) ->
             lines.mapValues { (_, lineTests) -> lineTests.filter { it !in superseded } }
         }
-        return LocalCoverageRun(remaining, filtered, snapshots)
+        return LocalCoverageRun(remaining, filtered, snapshots, commit)
     }
+
+    /** Returns this run stamped with [commit], so it counts as collected on that HEAD. */
+    fun restampedTo(commit: String?): LocalCoverageRun =
+        if (this.commit == commit) this else LocalCoverageRun(tests, coverage, snapshots, commit)
+
+    /**
+     * Whether the run belongs to a different commit than [head] — its file snapshots and the
+     * scenarios it supersedes describe another state of the repository.
+     */
+    fun isStale(head: String?): Boolean = commit != null && head != null && commit != head
 }
 
 /**
@@ -33,6 +45,10 @@ class LocalCoverageRun(
  * A newer run supersedes older ones test by test: if a scenario is re-run, its previous local
  * results are dropped and only the latest execution counts. Thread-safe; readers get an
  * immutable snapshot of the run list.
+ *
+ * Every run remembers the commit it was collected on. After a checkout the runs of another
+ * commit become *stale*: they are kept, but excluded from the merge, because their snapshots
+ * and the CI coverage they supersede describe a different state of the repository.
  */
 class LocalCoverageLayer {
 
@@ -55,10 +71,28 @@ class LocalCoverageLayer {
 
     fun runs(): List<LocalCoverageRun> = runs
 
+    /** Runs collected on [head] — the only ones that may be merged over CI coverage. */
+    fun activeRuns(head: String?): List<LocalCoverageRun> = runs.filterNot { it.isStale(head) }
+
+    /** Runs collected on another commit; kept, but excluded from the merge until restored. */
+    fun staleRuns(head: String?): List<LocalCoverageRun> = runs.filter { it.isStale(head) }
+
+    /** Stamps every run with [commit] — the user chose to trust them on the current HEAD. */
+    fun restampTo(commit: String?) {
+        synchronized(this) {
+            runs = runs.map { it.restampedTo(commit) }
+        }
+    }
+
     /** All tests executed locally, across runs. */
     fun tests(): Set<String> = runs.flatMapTo(HashSet()) { it.tests }
 
+    /** Tests of the runs collected on [head] — these supersede their CI coverage. */
+    fun activeTests(head: String?): Set<String> = activeRuns(head).flatMapTo(HashSet()) { it.tests }
+
     fun fileCount(): Int = runs.flatMapTo(HashSet()) { it.coverage.keys }.size
+
+    fun activeFileCount(head: String?): Int = activeRuns(head).flatMapTo(HashSet()) { it.coverage.keys }.size
 }
 
 object LocalCoverageMerge {

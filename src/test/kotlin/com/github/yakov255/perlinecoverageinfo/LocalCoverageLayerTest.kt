@@ -134,6 +134,64 @@ class LocalCoverageLayerTest {
         assertEquals(emptySet<String>(), layer.tests())
     }
 
+    // --- staleness ---
+
+    @Test
+    fun `runs of another commit are stale and excluded from the merge`() {
+        val layer = LocalCoverageLayer()
+        layer.add(run(setOf("t1"), "src/A.php" to mapOf(1 to listOf("t1")), commit = "aaa"))
+        layer.add(run(setOf("t2"), "src/B.php" to mapOf(1 to listOf("t2")), commit = "bbb"))
+
+        assertEquals(1, layer.activeRuns("bbb").size)
+        assertEquals(1, layer.staleRuns("bbb").size)
+        assertEquals(setOf("t2"), layer.activeTests("bbb"))
+        assertEquals(1, layer.activeFileCount("bbb"))
+        // All runs are still there — stale ones can be restored.
+        assertEquals(2, layer.runs().size)
+        assertEquals(setOf("t1", "t2"), layer.tests())
+    }
+
+    @Test
+    fun `a run without a known commit is never stale`() {
+        val layer = LocalCoverageLayer()
+        layer.add(run(setOf("t1"), "src/A.php" to mapOf(1 to listOf("t1"))))
+
+        assertEquals(setOf("t1"), layer.activeTests("bbb"))
+        assertTrue(layer.staleRuns("bbb").isEmpty())
+    }
+
+    @Test
+    fun `nothing is stale while HEAD is unknown`() {
+        val layer = LocalCoverageLayer()
+        layer.add(run(setOf("t1"), "src/A.php" to mapOf(1 to listOf("t1")), commit = "aaa"))
+
+        assertEquals(setOf("t1"), layer.activeTests(null))
+        assertTrue(layer.staleRuns(null).isEmpty())
+    }
+
+    @Test
+    fun `restamp brings stale runs back onto the current HEAD`() {
+        val layer = LocalCoverageLayer()
+        layer.add(run(setOf("t1"), "src/A.php" to mapOf(1 to listOf("t1")), commit = "aaa"))
+        layer.add(run(setOf("t2"), "src/B.php" to mapOf(1 to listOf("t2")), commit = "bbb"))
+
+        layer.restampTo("bbb")
+
+        assertEquals(2, layer.activeRuns("bbb").size)
+        assertTrue(layer.staleRuns("bbb").isEmpty())
+        assertEquals(setOf("t1", "t2"), layer.activeTests("bbb"))
+    }
+
+    @Test
+    fun `superseding keeps the commit of the surviving run`() {
+        val layer = LocalCoverageLayer()
+        layer.add(run(setOf("t1", "t2"), "src/A.php" to mapOf(1 to listOf("t1", "t2")), commit = "aaa"))
+        layer.add(run(setOf("t1"), "src/A.php" to mapOf(2 to listOf("t1")), commit = "aaa"))
+
+        assertEquals(2, layer.activeRuns("aaa").size)
+        assertTrue(layer.staleRuns("aaa").isEmpty())
+    }
+
     // --- paths ---
 
     @Test
@@ -161,6 +219,9 @@ class LocalCoverageLayerTest {
         assertNull(LocalCoveragePaths.normalize("core/src/Gone.php") { false })
     }
 
-    private fun run(tests: Set<String>, vararg files: Pair<String, Map<Int, List<String>>>) =
-        LocalCoverageRun(tests, mapOf(*files), emptyMap())
+    private fun run(
+        tests: Set<String>,
+        vararg files: Pair<String, Map<Int, List<String>>>,
+        commit: String? = null,
+    ) = LocalCoverageRun(tests, mapOf(*files), emptyMap(), commit)
 }

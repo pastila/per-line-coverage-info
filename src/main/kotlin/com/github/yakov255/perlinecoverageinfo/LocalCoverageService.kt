@@ -40,26 +40,46 @@ class LocalCoverageService(private val project: Project) : Disposable {
     @Volatile
     private var gitRoot: File? = null
 
+    /** HEAD the local runs are compared against; runs of another commit are stale. */
+    @Volatile
+    private var headCommit: String? = null
+
     private var watchRequest: LocalFileSystem.WatchRequest? = null
     private var connection: MessageBusConnection? = null
 
     /** Stamp of the last loaded version of each watched file. */
     private val loaded = HashMap<String, FileStamp>()
 
+    /** Whether any local run is loaded, stale ones included (they can still be restored). */
     fun hasData(): Boolean = !layer.isEmpty()
+
+    /** Whether any run is merged over CI coverage right now. */
+    fun hasActiveData(): Boolean = layer.activeRuns(headCommit).isNotEmpty()
+
+    /** Runs collected on another commit — excluded from the merge until [restoreStale]. */
+    fun staleRunCount(): Int = layer.staleRuns(headCommit).size
 
     /** Git root of the project, resolved on first use. */
     fun gitRootOrNull(): File? = gitRoot ?: findGitRoot()?.also { gitRoot = it }
 
-    /** Tests executed locally — they supersede their CI coverage. */
-    fun tests(): Set<String> = layer.tests()
+    /** Tests executed locally on the current HEAD — they supersede their CI coverage. */
+    fun tests(): Set<String> = layer.activeTests(headCommit)
+
+    /** Number of loaded local runs, stale ones included. */
+    fun runCount(): Int = layer.runs().size
+
+    /** Number of distinct files touched by the runs of the current HEAD. */
+    fun fileCount(): Int = layer.activeFileCount(headCommit)
+
+    /** Absolute path of the directory watched for `.covt` files, or null outside a git repo. */
+    fun watchedDirectory(): String? = gitRootOrNull()?.let { watchDir(it).path }
 
     /**
      * Local coverage for a file, mapped onto [currentContent]. Each run is mapped from its own
      * snapshot, so coverage stays aligned while the file is edited after the run.
      */
     fun getMappedCoverage(absolutePath: String, currentContent: String): Map<Int, List<String>>? {
-        val runs = layer.runs()
+        val runs = layer.activeRuns(headCommit)
         if (runs.isEmpty()) return null
         val root = gitRoot ?: return null
         val relativePath = toGitRelative(absolutePath, root) ?: return null
@@ -91,9 +111,44 @@ class LocalCoverageService(private val project: Project) : Disposable {
         })
     }
 
+    /**
+     * Called on every HEAD move. Runs collected on another commit stop being merged: their file
+     * snapshots and the CI coverage they supersede belong to the previous checkout. They are kept
+     * and can be brought back with [restoreStale] (the button in the Covering Line toolbar).
+     */
+    fun onHeadChanged(revision: String?) {
+        if (revision == null || revision == headCommit) return
+        val previouslyActive = layer.activeRuns(headCommit).size
+        headCommit = revision
+        val stale = layer.staleRuns(revision).size
+        if (stale == 0) return
+        log.info("LocalCoverage: HEAD is now ${revision.take(8)} — $stale run(s) marked stale (was $previouslyActive active)")
+        refreshEditors()
+        notify(
+            "Local coverage is stale",
+            "$stale local run(s) were collected on another commit and are no longer merged over CI coverage. " +
+                "Restore them from the Covering Line toolbar, or run the scenarios again.",
+            NotificationType.WARNING,
+        )
+    }
+
+    /** Re-stamps stale runs onto the current HEAD, putting them back into the merge. */
+    fun restoreStale() {
+        val restored = layer.staleRuns(headCommit).size
+        if (restored == 0) return
+        log.info("LocalCoverage: restoring $restored stale run(s) onto ${headCommit?.take(8)}")
+        layer.restampTo(headCommit)
+        refreshEditors()
+    }
+
     fun clear() {
         log.info("LocalCoverage: clearing ${layer.runs().size} run(s)")
         layer.clear()
+        refreshEditors()
+    }
+
+    /** Drops the highlighters of every editor and re-applies them from the current data. */
+    private fun refreshEditors() {
         ApplicationManager.getApplication().invokeLater {
             if (project.isDisposed) return@invokeLater
             for (editor in EditorFactory.getInstance().allEditors) {
@@ -222,8 +277,11 @@ class LocalCoverageService(private val project: Project) : Disposable {
             log.warn("LocalCoverage: $skipped file(s) from ${file.name} not found under $root")
         }
 
-        layer.add(LocalCoverageRun(covt.tests.toSet(), coverage, snapshots))
-        log.info("LocalCoverage: loaded ${file.path} — ${covt.tests.size} test(s), ${coverage.size} file(s); layer now has ${layer.runs().size} run(s)")
+        // The run executed the working tree of the current HEAD — remember it, so the run can be
+        // recognised as stale after a checkout.
+        val head = resolveHead(root)?.also { headCommit = it } ?: headCommit
+        layer.add(LocalCoverageRun(covt.tests.toSet(), coverage, snapshots, head))
+        log.info("LocalCoverage: loaded ${file.path} — ${covt.tests.size} test(s), ${coverage.size} file(s) at ${head?.take(8) ?: "unknown commit"}; layer now has ${layer.runs().size} run(s)")
 
         ApplicationManager.getApplication().invokeLater {
             if (!project.isDisposed) CoverageHighlighter.applyToOpenEditors(project)
@@ -246,6 +304,9 @@ class LocalCoverageService(private val project: Project) : Disposable {
     private fun watchDir(root: File): File = File(root, CoverageApiSettings.getInstance().localCoverageDir)
 
     private fun isCovt(path: String): Boolean = path.endsWith(".covt") || path.endsWith(".covt.gz")
+
+    private fun resolveHead(root: File): String? =
+        CoverageResolver.runGitCommand(root, "rev-parse", "HEAD")?.trim()?.takeIf { it.isNotEmpty() }
 
     private fun findGitRoot(): File? {
         val basePath = project.basePath ?: return null

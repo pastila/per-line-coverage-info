@@ -23,12 +23,17 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
     private var lastKnownRevision: String? = null
 
     override fun repositoryChanged(repository: GitRepository) {
+        val currentRevision = repository.currentRevision ?: return
+
+        // Local runs belong to the commit they were collected on. Flag them before the visibility
+        // gate, so a hidden gutter cannot bring stale local coverage back when it is shown again.
+        LocalCoverageService.getInstance(project).onHeadChanged(currentRevision)
+
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
             log.info("Coverage: HEAD change ignored — gutter visibility is off")
             return
         }
 
-        val currentRevision = repository.currentRevision ?: return
         val previous = lastKnownRevision
 
         if (previous == currentRevision) return

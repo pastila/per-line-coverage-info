@@ -52,7 +52,7 @@ object CoverageHighlighter {
     fun applyToEditor(editor: Editor, project: Project) {
         val dataService = CoverageDataService.getInstance(project)
         val localService = LocalCoverageService.getInstance(project)
-        if (!dataService.hasData() && !localService.hasData()) {
+        if (!dataService.hasData() && !localService.hasActiveData()) {
             return
         }
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
@@ -153,9 +153,9 @@ object CoverageHighlighter {
         return if (baseline.isEmpty()) CoverageCategory.FEATURE_ONLY else CoverageCategory.COVERED
     }
 
-    /** Whether there is anything to render — CI coverage, local runs, or both. */
+    /** Whether there is anything to render — CI coverage, non-stale local runs, or both. */
     fun hasAnyData(project: Project): Boolean =
-        CoverageDataService.getInstance(project).hasData() || LocalCoverageService.getInstance(project).hasData()
+        CoverageDataService.getInstance(project).hasData() || LocalCoverageService.getInstance(project).hasActiveData()
 
     fun clearCoverageHighlighters(editor: Editor) {
         val toRemove = editor.markupModel.allHighlighters.filter {

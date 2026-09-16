@@ -3,6 +3,8 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+- Local runs are tied to the commit they were collected on: after a checkout they are marked stale and stop superseding CI coverage (they used to keep hiding it on the new branch, turning covered lines red); a balloon reports it and "Restore Stale Local Coverage" in the Covering Line toolbar brings them back onto the current HEAD
+- MCP: new `get_local_coverage_status`, `set_local_coverage_collection`, `restore_stale_local_coverage` and `clear_local_coverage` tools — read and flip the "Collect Local Coverage" switch, restore runs that went stale after a checkout, and drop local runs without leaving the agent
 - Fix "No specifications found" when running tests from the coverage panels: each launch is now pinned to the `behat.yml`/`behat.php` that owns the feature file, and paths are relative to it (before, the working directory came from the first configured Behat framework, so a `core` feature was passed as `../../core/src/...`); tests from different services are launched one after another
 - Local coverage layer: `.covt` files from local Behat runs are merged over CI coverage instead of replacing it; a locally re-run scenario replaces its CI data, other scenarios keep theirs
 - Auto-load of new `.covt` / `.covt.gz` files from `storage/coverage` (Settings → Tools → GitLab Coverage → Local Coverage Dir) via the IDE file watcher
