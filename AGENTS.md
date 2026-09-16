@@ -23,7 +23,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Settings
 | File | Purpose |
 |------|---------|
-| `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel |
+| `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel, `localCoverageDir` (default `storage/coverage`) |
 | `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; triggers `loadOfflineFirst()` for all open projects on Apply/OK if plugin enabled and configured |
 
 ### Component configuration
@@ -56,7 +56,11 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; skipped when gutter hidden |
 | `CoveragePipelinePoller.kt` | Polls remote for new pipelines and auto-refreshes coverage (every 30 s; skipped while a load is in progress); uses the shared cached API, so N windows/pollers cost one network request per TTL; stopped/blocked when gutter hidden |
 | `LoadCoverageAction.kt` | Find Action: "Load Coverage from GitLab" |
-| `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz) |
+| `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz) — adds a run to the local layer |
+| `ClearLocalCoverageAction.kt` | Find Action: "Clear Local Coverage" |
+| `CollectLocalCoverageToggleAction.kt` | Toggle "Collect Local Coverage" (Find Action + Covering Line toolbar) → `CoverageApiSettings.collectLocalCoverage` |
+| `LocalCoverageRunExtension.kt` | `phpRunConfigurationExtension` (registered in `behat-integration.xml`): when the toggle is on, patches Behat command lines via `LocalCoverageCommand` |
+| `LocalCoverageCommand.kt` | Pure command-line rewrite: finds the Behat script, matches its interpreter-side service dir (`/web/core`) to the git root (`core`), picks the profile with `BehatBinaryCoverage` (prefers `coverage-clover`), adds `-d pcov.*` before the script and `--profile/--binary-coverage-*` after; skips services without the extension and command lines that already set `--profile` |
 | `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" |
 
 ### Parsing & on-disk format
@@ -73,6 +77,8 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageDataService.kt` | Holds active coverage: primary `Cov4Reader` + optional baseline `Cov4Reader`; tracks commit hashes, git root, stale flag |
 | `LineMappingService.kt` | Maps old coverage line numbers to current document lines via `git show` + `ComparisonManager` diff; supports both primary and baseline commits; LRU cache of file contents |
 | `CoverageLineMapper.kt` | Pure functions: diff old/new content, build old→new line map |
+| `LocalCoverageLayer.kt` | Pure model of local runs: `LocalCoverageRun` (tests + coverage + file snapshots), `LocalCoverageLayer` (newer run supersedes the same tests in older runs), `LocalCoverageMerge` (CI ⊕ local), `LocalCoveragePaths` (`core/web/app/…` → `app/…`) |
+| `LocalCoverageService.kt` | Project service holding the local layer: loads `.covt` runs (manual or auto via IDE file watcher on `localCoverageDir`, loaded once size+mtime settle), maps each run from its snapshot onto the current document |
 | `CoverageDiff.kt` | Pure helpers: `featureOnly(primary, baseline)` (set-diff by test name) and `union(primary, baseline)` (distinct, primary first) |
 
 ### Rendering
@@ -134,6 +140,7 @@ When the current branch has its own pipeline **and** the coverage branch (master
 |--------|---------|
 | 🟢 Green | Line covered; all tests also exist on master |
 | 🔵 Blue | Line covered; at least one test is new on this branch (`FEATURE_ONLY`) |
+| 🔵 Dark blue | Line covered by at least one test from a local run (`LOCAL`, takes precedence; see "Local coverage layer") |
 | 🔴 Red | Line not covered by any test |
 
 **Test filter** (bottom "Covering Line" panel, visible only in dual mode):
@@ -144,6 +151,18 @@ When the current branch has its own pipeline **and** the coverage branch (master
 | New on This Branch | Tests only in primary (feature-only diff) |
 
 `CoverageDiff` provides the set-diff / union helpers used by both the highlighter and the panel.
+
+## Local coverage layer
+
+Coverage from local Behat runs is kept apart from the CI readers in `LocalCoverageService`, so CI reloads (poller, HEAD change) never drop it. Per line of the current document:
+
+```
+effective = (ci − localTests) ∪ local
+```
+
+`localTests` is the full test list from the `.covt` headers: a scenario re-run locally replaces its CI data everywhere, including files the local run no longer reaches; scenarios not run locally keep their CI data. Line numbers: CI is mapped from `git show <commit>:path`, each local run from the file snapshot taken when the run was loaded (the run executed the on-disk files, which may be uncommitted). `CoverageHighlighter` merges via `LocalCoverageMerge.merge` before rendering, so dual-mode classification works unchanged — local tests missing on master show as blue.
+
+Auto-load: `LocalFileSystem.addRootToWatch(<git root>/<localCoverageDir>)` + `VFS_CHANGES` listener; the directory and its parent get their VFS children loaded so events arrive even when it is excluded from the project. Files already present at startup are not loaded (their snapshots are unknown). Collecting: with `collectLocalCoverage` on, `LocalCoverageRunExtension` rewrites every Behat launch from the IDE to write `<git root>/<localCoverageDir>/local.covt` (interpreter-side path), which the watcher then loads. Not yet merged: MCP tools, "Affected by Changes".
 
 ## Flow
 

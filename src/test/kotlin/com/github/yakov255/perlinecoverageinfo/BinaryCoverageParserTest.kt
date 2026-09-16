@@ -43,6 +43,18 @@ class BinaryCoverageParserTest {
     }
 
     @Test
+    fun testParseCovtReturnsExecutedTests() {
+        val data = File("php-sample-code/calc/coverage.covt").readBytes()
+
+        val result = BinaryCoverageParser.parseCovt(data)
+
+        val testsOnLines = result.coverage.values.flatMap { it.values.flatten() }.toSet()
+        assertTrue("Header should list tests", result.tests.isNotEmpty())
+        assertTrue("Every test on a line is in the header list", result.tests.containsAll(testsOnLines))
+        assertEquals(BinaryCoverageParser.parseCovtBytes(data), result.coverage)
+    }
+
+    @Test
     fun testParseCovtEmptyData() {
         try {
             BinaryCoverageParser.parseCovtBytes(ByteArray(0))

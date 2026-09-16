@@ -53,7 +53,14 @@
                 text="Load Coverage from GitLab" description="Download coverage artifacts from GitLab and display per-line coverage">
         </action>
         <action id="LoadLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.LoadLocalCoverageAction"
-                text="Load Coverage from File" description="Load per-line coverage from a local .covt file">
+                text="Load Coverage from File" description="Merge per-line coverage from a local .covt file over CI coverage">
+        </action>
+        <action id="CollectLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.CollectLocalCoverageToggleAction"
+                icon="AllIcons.General.RunWithCoverage"
+                text="Collect Local Coverage" description="Make Behat runs started from the IDE write coverage that is merged over CI coverage">
+        </action>
+        <action id="ClearLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.ClearLocalCoverageAction"
+                text="Clear Local Coverage" description="Drop coverage from local runs and show CI coverage only">
         </action>
         <action id="ClearCoverageData" class="com.github.yakov255.perlinecoverageinfo.ClearCoverageAction"
                 text="Clear Coverage Data" description="Remove coverage annotations from all editors">

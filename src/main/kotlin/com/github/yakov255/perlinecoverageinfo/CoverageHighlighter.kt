@@ -18,8 +18,7 @@ object CoverageHighlighter {
     val COVERAGE_HIGHLIGHTER_KEY = Key.create<Boolean>("PER_LINE_COVERAGE_HIGHLIGHTER")
 
     fun applyToOpenEditors(project: Project) {
-        val dataService = CoverageDataService.getInstance(project)
-        if (!dataService.hasData()) {
+        if (!hasAnyData(project)) {
             return
         }
 
@@ -52,7 +51,8 @@ object CoverageHighlighter {
      */
     fun applyToEditor(editor: Editor, project: Project) {
         val dataService = CoverageDataService.getInstance(project)
-        if (!dataService.hasData()) {
+        val localService = LocalCoverageService.getInstance(project)
+        if (!dataService.hasData() && !localService.hasData()) {
             return
         }
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
@@ -75,8 +75,15 @@ object CoverageHighlighter {
 
         ApplicationManager.getApplication().executeOnPooledThread {
             val lineMappingService = LineMappingService.getInstance(project)
-            val coverageLines = lineMappingService.getMappedCoverage(snapshot.filePath, snapshot.text)
-                ?: findCoverageForFile(snapshot.filePath, project)
+            val ciLines = if (dataService.hasData()) {
+                lineMappingService.getMappedCoverage(snapshot.filePath, snapshot.text)
+                    ?: findCoverageForFile(snapshot.filePath, project)
+            } else {
+                null
+            }
+            val localTests = localService.tests()
+            val localLines = localService.getMappedCoverage(snapshot.filePath, snapshot.text)
+            val coverageLines = LocalCoverageMerge.merge(ciLines, localLines, localTests)
             if (coverageLines == null) {
                 return@executeOnPooledThread
             }
@@ -104,6 +111,7 @@ object CoverageHighlighter {
                     baselineLines = baselineLines,
                     hasBaseline = snapshot.hasBaseline,
                     warnings = warnings,
+                    localTests = localTests,
                 )
 
                 val highlighter = editor.markupModel.addRangeHighlighter(
@@ -121,6 +129,7 @@ object CoverageHighlighter {
      * Pure helper exposed for tests: classify a line given its primary and baseline test lists.
      * - Empty primary → UNCOVERED (regardless of baseline; we trust primary as the source of truth
      *   for what tests currently exercise the line).
+     * - Covered by at least one test from a local run → LOCAL.
      * - Has baseline + master has no coverage on this line, but branch does → FEATURE_ONLY.
      * - Otherwise → COVERED.
      */
@@ -129,11 +138,24 @@ object CoverageHighlighter {
         primary: List<String>,
         baseline: List<String>,
         hasBaseline: Boolean,
+    ): CoverageCategory = categorizeLine(primary, baseline, hasBaseline, emptySet())
+
+    @JvmStatic
+    internal fun categorizeLine(
+        primary: List<String>,
+        baseline: List<String>,
+        hasBaseline: Boolean,
+        localTests: Set<String>,
     ): CoverageCategory {
         if (primary.isEmpty()) return CoverageCategory.UNCOVERED
+        if (localTests.isNotEmpty() && primary.any { it in localTests }) return CoverageCategory.LOCAL
         if (!hasBaseline) return CoverageCategory.COVERED
         return if (baseline.isEmpty()) CoverageCategory.FEATURE_ONLY else CoverageCategory.COVERED
     }
+
+    /** Whether there is anything to render — CI coverage, local runs, or both. */
+    fun hasAnyData(project: Project): Boolean =
+        CoverageDataService.getInstance(project).hasData() || LocalCoverageService.getInstance(project).hasData()
 
     fun clearCoverageHighlighters(editor: Editor) {
         val toRemove = editor.markupModel.allHighlighters.filter {

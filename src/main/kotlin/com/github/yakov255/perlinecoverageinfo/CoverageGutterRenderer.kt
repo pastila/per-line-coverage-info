@@ -18,11 +18,13 @@ import java.awt.Rectangle
 import java.awt.RenderingHints
 import java.awt.event.MouseEvent
 
-enum class CoverageCategory { COVERED, UNCOVERED, FEATURE_ONLY }
+enum class CoverageCategory { COVERED, UNCOVERED, FEATURE_ONLY, LOCAL }
 
 private val COLOR_COVERED = Color(100, 180, 120)
 private val COLOR_UNCOVERED = Color(210, 110, 110)
 private val COLOR_FEATURE = Color(80, 140, 220)
+/** Darker than [COLOR_FEATURE] so locally covered lines stand out from lines new on the branch. */
+private val COLOR_LOCAL = Color(40, 90, 180)
 
 class FileCoverageRenderer(
     private val filePath: String,
@@ -31,6 +33,8 @@ class FileCoverageRenderer(
     private val baselineLines: Map<Int, List<String>>?,
     private val hasBaseline: Boolean,
     private val warnings: CoverageWarnings?,
+    /** Tests executed in local runs; their share of a line is called out in the tooltip. */
+    private val localTests: Set<String> = emptySet(),
 ) : FillingLineMarkerRenderer, ActiveGutterRenderer {
 
     private val log = CoverageLog.get(FileCoverageRenderer::class.java)
@@ -59,10 +63,11 @@ class FileCoverageRenderer(
             val paintY = editor.visualLineToY(visLine)
             val paintH = (EditorUtil.getVisualLineAreaEndY(editor, visLine) - paintY).coerceAtLeast(1)
 
-            g2.color = when (CoverageHighlighter.categorizeLine(tests, baselineTests, hasBaseline)) {
+            g2.color = when (CoverageHighlighter.categorizeLine(tests, baselineTests, hasBaseline, localTests)) {
                 CoverageCategory.COVERED -> COLOR_COVERED
                 CoverageCategory.UNCOVERED -> COLOR_UNCOVERED
                 CoverageCategory.FEATURE_ONLY -> COLOR_FEATURE
+                CoverageCategory.LOCAL -> COLOR_LOCAL
             }
             g2.fillRect(r.x, paintY, stripWidth, paintH)
 
@@ -116,7 +121,11 @@ class FileCoverageRenderer(
         val tests = coverageLines[line] ?: return ""
         val baselineTests = baselineLines?.get(line) ?: emptyList()
         val newCount = if (hasBaseline) CoverageDiff.featureOnly(tests, baselineTests).size else 0
-        val suffix = if (newCount > 0) " ($newCount new on this branch)" else ""
+        val localCount = if (localTests.isEmpty()) 0 else tests.count { it in localTests }
+        val suffix = listOfNotNull(
+            if (newCount > 0) "$newCount new on this branch" else null,
+            if (localCount > 0) "$localCount from local run" else null,
+        ).joinToString(", ").let { if (it.isEmpty()) "" else " ($it)" }
         val base = if (tests.isEmpty()) {
             if (withWarnings) "Line $line: not covered" else "Line $line not covered"
         } else {

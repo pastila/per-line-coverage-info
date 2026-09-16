@@ -76,6 +76,8 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
                 runAllAction, runAllDebugAction,
                 Separator.getInstance(),
                 filterBoth, filterMaster, filterFeature,
+                Separator.getInstance(),
+                ActionManager.getInstance().getAction("CollectLocalCoverage"),
             ),
             true
         )

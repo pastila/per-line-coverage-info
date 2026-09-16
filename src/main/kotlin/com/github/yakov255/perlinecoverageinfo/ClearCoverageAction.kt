@@ -14,6 +14,7 @@ class ClearCoverageAction : AnAction(), DumbAware {
 
         log.info("ClearCoverageAction: clearing coverage for project ${project.name}")
         CoverageDataService.getInstance(project).clear()
+        LocalCoverageService.getInstance(project).clear()
 
         for (editor in EditorFactory.getInstance().allEditors) {
             if (editor.project == project) {

@@ -3,6 +3,12 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+- Local coverage layer: `.covt` files from local Behat runs are merged over CI coverage instead of replacing it; a locally re-run scenario replaces its CI data, other scenarios keep theirs
+- Auto-load of new `.covt` / `.covt.gz` files from `storage/coverage` (Settings → Tools → GitLab Coverage → Local Coverage Dir) via the IDE file watcher
+- Local coverage stays aligned while editing: each run keeps a snapshot of the files it executed and is line-mapped from it
+- "Load Coverage from File" now adds to the local layer; new "Clear Local Coverage" action
+- Lines covered by a local run are shown in dark blue (`LOCAL` category); the tooltip shows how many covering tests come from it
+- "Collect Local Coverage" toggle (Covering Line toolbar, Find Action, settings): Behat runs started from the IDE — gutter ▶, run configurations, Run from the coverage panels — get pcov and binary-coverage options added and write `local.covt` into the local coverage dir; services whose `behat.yml` has no profile with the binary coverage extension run unchanged
 
 ## [2.7.0] - 2026-08-17
 - Shared app-level GitLab coordinator: single worker thread, TTL-cached metadata and a rate limiter — dramatically fewer API requests

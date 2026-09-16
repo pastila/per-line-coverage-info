@@ -16,6 +16,7 @@ class CoverageCategorizationTest {
         val baseline: List<String>,
         val hasBaseline: Boolean,
         val expected: CoverageCategory,
+        val localTests: Set<String> = emptySet(),
     )
 
     private val cases = listOf(
@@ -26,12 +27,16 @@ class CoverageCategorizationTest {
         Case("dual, branch removed test → still covered", listOf("t1"), listOf("t1", "t2"), true, CoverageCategory.COVERED),
         Case("dual, primary empty → uncovered (primary wins)", emptyList(), listOf("t1"), true, CoverageCategory.UNCOVERED),
         Case("dual, master has no coverage but branch does → feature only", listOf("t9"), emptyList(), true, CoverageCategory.FEATURE_ONLY),
+        Case("single mode, covered by a local run → local", listOf("ci", "loc"), emptyList(), false, CoverageCategory.LOCAL, setOf("loc")),
+        Case("dual, covered by a local run and master → local", listOf("loc"), listOf("loc"), true, CoverageCategory.LOCAL, setOf("loc")),
+        Case("covered only by CI while local runs exist → covered", listOf("ci"), emptyList(), false, CoverageCategory.COVERED, setOf("loc")),
+        Case("coverable, uncovered after a local run → uncovered", emptyList(), listOf("loc"), true, CoverageCategory.UNCOVERED, setOf("loc")),
     )
 
     @Test
     fun `categorizeLine matches the truth table`() {
         for (case in cases) {
-            val actual = CoverageHighlighter.categorizeLine(case.primary, case.baseline, case.hasBaseline)
+            val actual = CoverageHighlighter.categorizeLine(case.primary, case.baseline, case.hasBaseline, case.localTests)
             assertEquals("case='${case.name}'", case.expected, actual)
         }
     }
