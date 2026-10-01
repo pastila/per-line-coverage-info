@@ -1,68 +1,74 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.7.0/per-line-coverage-info-2.7.0.zip" version="2.7.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.8.0/per-line-coverage-info-2.8.0.zip" version="2.8.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252" until-build="299.*"/>
+        <change-notes><![CDATA[<ul><li>Plugin moved to <a href="https://github.com/pastila/per-line-coverage-info">pastila/per-line-coverage-info</a>: updates, releases and error reports now go there; plugin repository URL is <code>https://pastila.github.io/per-line-coverage-info/updatePlugins.xml</code></li><li>Local runs are tied to the commit they were collected on: after a checkout they are marked stale and stop superseding CI coverage (they used to keep hiding it on the new branch, turning covered lines red); a balloon reports it and &quot;Restore Stale Local Coverage&quot; in the Covering Line toolbar brings them back onto the current HEAD</li><li>MCP: new <code>get_local_coverage_status</code>, <code>set_local_coverage_collection</code>, <code>restore_stale_local_coverage</code> and <code>clear_local_coverage</code> tools — read and flip the &quot;Collect Local Coverage&quot; switch, restore runs that went stale after a checkout, and drop local runs without leaving the agent</li><li>Fix &quot;No specifications found&quot; when running tests from the coverage panels: each launch is now pinned to the <code>behat.yml</code>/<code>behat.php</code> that owns the feature file, and paths are relative to it (before, the working directory came from the first configured Behat framework, so a <code>core</code> feature was passed as <code>../../core/src/...</code>); tests from different services are launched one after another</li><li>Local coverage layer: <code>.covt</code> files from local Behat runs are merged over CI coverage instead of replacing it; a locally re-run scenario replaces its CI data, other scenarios keep theirs</li><li>Auto-load of new <code>.covt</code> / <code>.covt.gz</code> files from <code>storage/coverage</code> (Settings → Tools → GitLab Coverage → Local Coverage Dir) via the IDE file watcher</li><li>Local coverage stays aligned while editing: each run keeps a snapshot of the files it executed and is line-mapped from it</li><li>&quot;Load Coverage from File&quot; now adds to the local layer; new &quot;Clear Local Coverage&quot; action</li><li>Lines covered by a local run are shown in dark blue (<code>LOCAL</code> category); the tooltip shows how many covering tests come from it</li><li>&quot;Collect Local Coverage&quot; toggle (Covering Line toolbar, Find Action, settings): Behat runs started from the IDE — gutter ▶, run configurations, Run from the coverage panels — get pcov and binary-coverage options added and write <code>local.covt</code> into the local coverage dir; services whose <code>behat.yml</code> has no profile with the binary coverage extension run unchanged</li><li>&quot;Collect Local Coverage&quot; also works for runs through PhpStorm's Behat helper (<code>.phpstorm_helpers/behat.php</code>): the service directory is taken from <code>IDE_BEHAT_DIR</code> or <code>--config</code></li></ul>]]></change-notes>
+    </plugin>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.7.0/per-line-coverage-info-2.7.0.zip" version="2.7.0">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Shared app-level GitLab coordinator: single worker thread, TTL-cached metadata and a rate limiter — dramatically fewer API requests</li><li>Pipeline resolution memoized per repository/HEAD; refresh skipped within a 60s cooldown (zero requests on branch switches with cached coverage)</li><li>Identical artifact downloads coalesced across project windows</li><li>Pipeline polling interval reduced from 5s to 30s; polls share the cached API so N windows cost one network request</li><li><code>Cov4Reader</code> instances shared across windows (large files read once per commit)</li><li>Disk cache writes synchronized for safety with multiple windows</li><li>Retry HTTP 429 honouring <code>Retry-After</code></li><li>Send plugin name and version as <code>User-Agent</code> so requests are identifiable in GitLab server logs</li><li>Visibility logging: cache hits/misses, rate-limiter waits, cross-window coalescing</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.6.0/per-line-coverage-info-2.6.0.zip" version="2.6.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.6.0/per-line-coverage-info-2.6.0.zip" version="2.6.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Component-based coverage: separate <code>.cov4</code> per component, keyed by commit+component</li><li>Component config with 10 components (api/avia, raketa, api/hotels, api/transfer, api/rail, api/profile-sync, api/queue, api/aeroexpress, api/contract, api/bus)</li><li>Filter CI jobs by detected component; wait for running behat jobs (infinite, cancel via progress or branch switch)</li><li>Fallback to baseline (master) pipeline when current branch has no jobs for the component</li><li>Branch name stored per artifact; shown in Artifacts table</li><li>Cache cleanup runs on every <code>writeCov4</code>; entries expire by <code>lastUsedMs</code> instead of <code>timestampMs</code></li><li>Reuse preloaded baseline reader to avoid redundant <code>.cov4</code> opens</li><li>Skip initial HEAD reload in <code>CoverageHeadTracker</code> (avoids duplicate load at startup)</li><li>Auto-refresh Artifacts panel on coverage change via <code>COVERAGE_CHANGED_TOPIC</code></li><li><code>pluginUntilBuild</code> extended to <code>299.*</code></li><li>Simplify CI: build + release only, no tests/Qodana/Verifier/Marketplace</li><li>Auto-create GitHub release with <code>.zip</code> asset on push to main (if version changed)</li><li>Pre-commit hook to auto-generate <code>docs/updatePlugins.xml</code></li><li>Rewrite README for in-house Raketa usage</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.5.1/per-line-coverage-info-2.5.1.zip" version="2.5.1">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.5.1/per-line-coverage-info-2.5.1.zip" version="2.5.1">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Show startup dialog to configure GitLab token when not set</li><li>Normalize raketta coverage paths: strip <code>core/web/</code> prefix when downloading artifacts</li><li>Replace coverage column with separate Покрыто/Не покрыто/Всего строк columns in artifacts table</li><li>Add pre-commit hook to auto-generate <code>docs/updatePlugins.xml</code></li><li>Rewrite README for in-house Raketa usage</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.5.0/per-line-coverage-info-2.5.0.zip" version="2.5.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.5.0/per-line-coverage-info-2.5.0.zip" version="2.5.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>MCP: new <code>get_tests_at_line</code> tool with paginated test listing for a specific line</li><li>MCP: new <code>get_first_tests_at_lines</code> tool — quickly check which test covers each line</li><li>MCP: <code>get_coverage_for_file</code> now returns per-line content with pagination (<code>offset</code>/<code>limit</code>) and <code>coverage</code> filter</li><li>MCP: <code>list_files</code> gains <code>coverage</code> filter (<code>all</code>/<code>uncovered</code>/<code>fully_covered</code>)</li><li>Suppress progress indicator during pipeline resolution — only show status bar when actually downloading artifacts</li><li>Simplify loading pipeline: unified download flow, removed dead code (<code>refreshBaselineFromCache</code>, <code>applyCoverageFromReader</code>)</li><li>Fix double-close of <code>Cov4Reader</code> in post-download apply path</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.4.0/per-line-coverage-info-2.4.0.zip" version="2.4.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.4.0/per-line-coverage-info-2.4.0.zip" version="2.4.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Stop all loading activity (GitLab downloads, pipeline polling, HEAD tracking, startup loading) when coverage gutter is hidden — resume when shown again</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.3.1/per-line-coverage-info-2.3.1.zip" version="2.3.1">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.3.1/per-line-coverage-info-2.3.1.zip" version="2.3.1">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Switch to standard IntelliJ custom plugin repository for updates</li><li>Pipeline polling for automatic coverage refresh</li><li>Show report merging progress in the progress bar</li><li>Show download speed and per-job byte progress in progress bar</li><li>Set-based deduplication when merging coverage reports</li><li>Queue reload when coverage load is triggered during an in-progress load</li><li>Suppress misleading &quot;0 commit(s) behind&quot; warning</li><li>Migrate MCP server to JetBrains MCP framework</li><li>Add detailed logging across coverage pipeline</li><li>Remove coverage status notification popups</li><li>Fix EDT violations: move I/O off EDT, sync LRU cache, wrap Swing subscribers</li><li>Fix &quot;no coverage&quot; display after refresh</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.3.0/per-line-coverage-info-2.3.0.zip" version="2.3.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.3.0/per-line-coverage-info-2.3.0.zip" version="2.3.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Dual coverage diff view: show only new coverage</li><li>MCP toolset: coverage access for LLM, list_files tool, detail parameter</li><li>Async coverage artifact download</li><li>Detect expired artifacts</li><li>Speed up artifacts downloading</li><li>Coverage auto-updating after settings save</li><li>Warning if coverage is stale</li><li>Loading optimization</li><li>Show tab content during indexing</li><li>No fallback to configured target branch</li><li>Split affected tests and covered line tests</li><li>Download current branch coverage</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.2.0/per-line-coverage-info-2.2.0.zip" version="2.2.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.2.0/per-line-coverage-info-2.2.0.zip" version="2.2.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Embedded MCP server for LLM coverage access</li><li>Auto-reload coverage on any HEAD change, not just branch switch</li><li>Move coverage actions from Tools menu to Artifacts panel</li><li>Artifacts tab in Coverage Tests tool window</li><li>Allow all coverage actions during IDE indexing (dumb mode)</li><li>Auto load coverage on start</li><li>Select coverage dialog and saved selected artifact</li><li>Store artifact usage history (last used artifact)</li><li>Load from file now saves to cache and appears in artifacts list</li><li>Handle GitLab token expired error</li><li>Fix path resolution</li><li>Many UI/UX improvements</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.1.0/per-line-coverage-info-2.1.0.zip" version="2.1.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.1.0/per-line-coverage-info-2.1.0.zip" version="2.1.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Offline-first coverage loading</li><li>Replace raw .covt cache with indexed COV4 binary format</li><li>Add auto-refresh, disk cache, and local file loading</li><li>Filter artifact downloads to behat jobs only</li><li>Show Coverage gutter context menu action</li><li>Reduce RAM on cache download</li><li>Improve cache handling</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/2.0.0/per-line-coverage-info-2.0.0.zip" version="2.0.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.0.0/per-line-coverage-info-2.0.0.zip" version="2.0.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Migrate plugin from custom API to GitLab coverage artifacts</li><li>Three-tier merge-base resolution with GitLab API fallback</li><li>Show covered test count</li><li>Replace project search with load-all + live filter</li><li>Fix project search: move HTTP call off EDT to background thread</li><li>Fix coverage artifact download to match real GitLab behavior</li><li>Improve error dialogs with detailed diagnostic info</li></ul>]]></change-notes>
     </plugin>
-    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/yakov255/per-line-coverage-info/releases/download/1.0.0/per-line-coverage-info-1.0.0.zip" version="1.0.0">
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/1.0.0/per-line-coverage-info-1.0.0.zip" version="1.0.0">
         <name>per-line-coverage-info</name>
-        <vendor>yakov255</vendor>
+        <vendor>pastila</vendor>
         <idea-version since-build="252" until-build="299.*"/>
         <change-notes><![CDATA[<ul><li>Initial release</li><li>Basic per-line coverage display in editor gutter</li></ul>]]></change-notes>
     </plugin>

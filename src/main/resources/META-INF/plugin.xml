@@ -1,8 +1,8 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
-<idea-plugin url="https://yakov255.github.io/per-line-coverage-info/updatePlugins.xml">
+<idea-plugin url="https://pastila.github.io/per-line-coverage-info/updatePlugins.xml">
     <id>com.github.yakov255.perlinecoverageinfo</id>
     <name>Per-Line Coverage Info</name>
-    <vendor>yakov255</vendor>
+    <vendor>pastila</vendor>
 
     <depends>com.intellij.modules.platform</depends>
     <depends optional="true" config-file="mcp-integration.xml">com.intellij.mcpServer</depends>

@@ -19,6 +19,7 @@ new on the feature branch versus the base branch.
 - [Установка](#установка)
 - [Требования](#требования)
 - [Разработка](#разработка)
+- [Авторы](#авторы)
 
 ## Проблема
 
@@ -67,18 +68,23 @@ CI (Behat with pcov) → .covt → GitLab Artifacts
 
 ## Установка
 
-### Option A — Custom Plugin Repository (автообновление с GitHub, рекомендуется)
+### Вариант A — свой репозиторий плагинов (рекомендуется, с автообновлением)
 
 1. **Settings → Plugins**
 2. **⚙ (gear) → Manage Plugin Repositories…**
-3. Добавить URL: `https://yakov255.github.io/per-line-coverage-info/updatePlugins.xml`
-4. Открыть вкладку **Marketplace**, найти `per-line-coverage-info`, установить.
+3. Нажать **+** и добавить URL: `https://pastila.github.io/per-line-coverage-info/updatePlugins.xml`
+4. Открыть вкладку **Marketplace**, найти `Per-Line Coverage Info`, установить и перезапустить IDE.
 
-Новые версии подхватываются автоматически — как из обычного Marketplace.
+Новые версии подхватываются автоматически, как из обычного Marketplace.
 
-### Option B — Установка из ZIP
+> **Если плагин раньше ставился из репозитория yakov255** — в **Manage Plugin Repositories…**
+> замените `https://yakov255.github.io/per-line-coverage-info/updatePlugins.xml` на адрес выше.
+> ID плагина не изменился, поэтому настройки и кеш покрытия сохранятся, а обновление встанет поверх.
+> Начиная с 2.8.0 плагин и сам проверяет обновления по новому адресу.
 
-1. Скачать `.zip` с [releases page](https://github.com/yakov255/per-line-coverage-info/releases)
+### Вариант B — установка из ZIP
+
+1. Скачать `per-line-coverage-info-<версия>.zip` со [страницы релизов](https://github.com/pastila/per-line-coverage-info/releases)
 2. **Settings → Plugins → ⚙ → Install Plugin from Disk…**
 3. Выбрать `.zip`, перезапустить IDE
 
@@ -97,6 +103,15 @@ CI (Behat with pcov) → .covt → GitLab Artifacts
 ./gradlew runIde          # запуск тестовой IDE
 ```
 
-### Лицензия
+## Авторы
+
+- **Yakov Vladimirov** — автор плагина: [github.com/yakov255](https://github.com/yakov255)
+- **Evgenii Bukin** — сопровождение: [github.com/pastila](https://github.com/pastila)
+
+Репозиторий: [github.com/pastila/per-line-coverage-info](https://github.com/pastila/per-line-coverage-info) ·
+[Issues](https://github.com/pastila/per-line-coverage-info/issues) ·
+[Releases](https://github.com/pastila/per-line-coverage-info/releases)
+
+## Лицензия
 
 MIT

@@ -3,6 +3,9 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+
+## [2.8.0] - 2026-10-01
+- Plugin moved to [pastila/per-line-coverage-info](https://github.com/pastila/per-line-coverage-info): updates, releases and error reports now go there; plugin repository URL is `https://pastila.github.io/per-line-coverage-info/updatePlugins.xml`
 - Local runs are tied to the commit they were collected on: after a checkout they are marked stale and stop superseding CI coverage (they used to keep hiding it on the new branch, turning covered lines red); a balloon reports it and "Restore Stale Local Coverage" in the Covering Line toolbar brings them back onto the current HEAD
 - MCP: new `get_local_coverage_status`, `set_local_coverage_collection`, `restore_stale_local_coverage` and `clear_local_coverage` tools — read and flip the "Collect Local Coverage" switch, restore runs that went stale after a checkout, and drop local runs without leaving the agent
 - Fix "No specifications found" when running tests from the coverage panels: each launch is now pinned to the `behat.yml`/`behat.php` that owns the feature file, and paths are relative to it (before, the working directory came from the first configured Behat framework, so a `core` feature was passed as `../../core/src/...`); tests from different services are launched one after another
@@ -12,6 +15,7 @@
 - "Load Coverage from File" now adds to the local layer; new "Clear Local Coverage" action
 - Lines covered by a local run are shown in dark blue (`LOCAL` category); the tooltip shows how many covering tests come from it
 - "Collect Local Coverage" toggle (Covering Line toolbar, Find Action, settings): Behat runs started from the IDE — gutter ▶, run configurations, Run from the coverage panels — get pcov and binary-coverage options added and write `local.covt` into the local coverage dir; services whose `behat.yml` has no profile with the binary coverage extension run unchanged
+- "Collect Local Coverage" also works for runs through PhpStorm's Behat helper (`.phpstorm_helpers/behat.php`): the service directory is taken from `IDE_BEHAT_DIR` or `--config`
 
 ## [2.7.0] - 2026-08-17
 - Shared app-level GitLab coordinator: single worker thread, TTL-cached metadata and a rate limiter — dramatically fewer API requests

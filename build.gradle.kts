@@ -155,7 +155,7 @@ tasks {
     val pluginName = providers.gradleProperty("pluginName")
     val sinceBuild = providers.gradleProperty("pluginSinceBuild")
     val untilBuild = providers.gradleProperty("pluginUntilBuild")
-    val repo = "https://github.com/yakov255/per-line-coverage-info"
+    val repo = "https://github.com/pastila/per-line-coverage-info"
 
     register("generateUpdatePluginsXml") {
         group = "distribution"
@@ -184,7 +184,7 @@ tasks {
 
                     appendLine("""    <plugin id="${pluginId.get()}" url="$repo/releases/download/$ver/per-line-coverage-info-$ver.zip" version="$ver">""")
                     appendLine("        <name>${pluginName.get()}</name>")
-                    appendLine("        <vendor>yakov255</vendor>")
+                    appendLine("        <vendor>pastila</vendor>")
                     appendLine("""        <idea-version since-build="${sinceBuild.get()}" until-build="${untilBuild.get()}"/>""")
                     if (htmlNotes.isNotBlank()) {
                         appendLine("        <change-notes><![CDATA[$htmlNotes]]></change-notes>")
