@@ -14,6 +14,10 @@ object LocalCoverageCommand {
     private const val EXTENSION_MARKER = "BehatBinaryCoverage"
     private const val PREFERRED_PROFILE = "coverage-clover"
     private val BEHAT_SCRIPT_SUFFIXES = listOf("/vendor/behat/behat/bin/behat", "/vendor/bin/behat")
+
+    /** PhpStorm's wrapper; the real Behat executable is passed in [BEHAT_DIR_ENV]. */
+    private const val IDE_HELPER_SUFFIX = "/.phpstorm_helpers/behat.php"
+    private const val BEHAT_DIR_ENV = "IDE_BEHAT_DIR"
     private val TOP_LEVEL_KEY = Regex("^([A-Za-z0-9_.-]+):")
 
     sealed interface Result {
@@ -26,12 +30,14 @@ object LocalCoverageCommand {
      * @param coverageDir git-root-relative directory to write the report to
      * @param isLocalDir whether a git-root-relative directory exists on the host
      * @param readLocalFile contents of a git-root-relative file on the host, or null if missing
+     * @param environment the command line environment (PhpStorm's helper gets the Behat path from it)
      */
     fun patch(
         parameters: List<String>,
         coverageDir: String,
         isLocalDir: (String) -> Boolean,
         readLocalFile: (String) -> String?,
+        environment: Map<String, String> = emptyMap(),
     ): Result {
         if (parameters.any { it.startsWith("--binary-coverage-target") }) {
             return Result.Skipped("binary coverage options are already set")
@@ -40,9 +46,17 @@ object LocalCoverageCommand {
             return Result.Skipped("--profile is already set")
         }
 
-        val scriptIndex = parameters.indexOfFirst { p -> BEHAT_SCRIPT_SUFFIXES.any { p.endsWith(it) } }
+        val scriptIndex = parameters.indexOfFirst { p ->
+            p.endsWith(IDE_HELPER_SUFFIX) || BEHAT_SCRIPT_SUFFIXES.any { p.endsWith(it) }
+        }
         if (scriptIndex < 0) return Result.Skipped("Behat executable not found in the command line")
-        val remoteServiceDir = parameters[scriptIndex].substringBefore("/vendor/")
+        val remoteServiceDir = if (parameters[scriptIndex].endsWith(IDE_HELPER_SUFFIX)) {
+            environment[BEHAT_DIR_ENV]?.substringBefore("/vendor/")
+                ?: configValue(parameters)?.substringBeforeLast('/')
+                ?: return Result.Skipped("neither $BEHAT_DIR_ENV nor --config is set for the PhpStorm Behat helper")
+        } else {
+            parameters[scriptIndex].substringBefore("/vendor/")
+        }
 
         val (remoteRoot, serviceDir) = matchServiceDir(remoteServiceDir, isLocalDir)
             ?: return Result.Skipped("$remoteServiceDir does not correspond to a directory in the git root")
@@ -81,14 +95,18 @@ object LocalCoverageCommand {
         return null
     }
 
-    private fun configPath(parameters: List<String>, remoteRoot: String): String? {
+    private fun configValue(parameters: List<String>): String? {
         val index = parameters.indexOfFirst { it == "--config" || it == "-c" || it.startsWith("--config=") }
         if (index < 0) return null
-        val value = if (parameters[index].startsWith("--config=")) {
+        return if (parameters[index].startsWith("--config=")) {
             parameters[index].substringAfter("=")
         } else {
-            parameters.getOrNull(index + 1) ?: return null
+            parameters.getOrNull(index + 1)
         }
+    }
+
+    private fun configPath(parameters: List<String>, remoteRoot: String): String? {
+        val value = configValue(parameters) ?: return null
         val prefix = remoteRoot.trimEnd('/') + "/"
         return if (value.startsWith(prefix)) value.removePrefix(prefix) else null
     }

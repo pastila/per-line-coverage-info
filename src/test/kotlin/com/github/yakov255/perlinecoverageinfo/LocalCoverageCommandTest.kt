@@ -31,12 +31,60 @@ class LocalCoverageCommandTest {
     private val localDirs = setOf("core", "api", "api/hotels", "storage", "storage/coverage")
     private val localFiles = mapOf("core/behat.yml" to coreConfig, "api/hotels/behat.yml" to hotelsConfig)
 
-    private fun patch(vararg parameters: String) = LocalCoverageCommand.patch(
+    private fun patch(vararg parameters: String) = patchWithEnv(emptyMap(), *parameters)
+
+    private fun patchWithEnv(environment: Map<String, String>, vararg parameters: String) = LocalCoverageCommand.patch(
         parameters.toList(),
         coverageDir = "storage/coverage",
         isLocalDir = { it in localDirs },
         readLocalFile = { localFiles[it] },
+        environment = environment,
     )
+
+    @Test
+    fun `PhpStorm behat helper takes the service dir from the config`() {
+        val result = patch(
+            "/opt/.phpstorm_helpers/behat.php",
+            "--format", "PhpStormBehatFormatter",
+            "--no-interaction",
+            "src/Features/a.feature:106",
+            "--config", "/web/core/behat.yml",
+        )
+
+        assertEquals(
+            Result.Patched(
+                listOf(
+                    "-d", "pcov.enabled=1", "-d", "pcov.directory=/web",
+                    "/opt/.phpstorm_helpers/behat.php",
+                    "--format", "PhpStormBehatFormatter",
+                    "--no-interaction",
+                    "src/Features/a.feature:106",
+                    "--config", "/web/core/behat.yml",
+                    "--profile=coverage-clover",
+                    "--binary-coverage-target=/web/storage/coverage/local.covt",
+                    "--binary-coverage-root=core",
+                ),
+                serviceDir = "core",
+            ),
+            result,
+        )
+    }
+
+    @Test
+    fun `PhpStorm behat helper prefers IDE_BEHAT_DIR`() {
+        val result = patchWithEnv(
+            mapOf("IDE_BEHAT_DIR" to "/web/core/vendor/behat/behat/bin/behat"),
+            "/opt/.phpstorm_helpers/behat.php",
+            "src/Features/a.feature",
+        )
+
+        assertEquals("core", (result as Result.Patched).serviceDir)
+    }
+
+    @Test
+    fun `PhpStorm behat helper without behat dir and config is left alone`() {
+        assertTrue(patch("/opt/.phpstorm_helpers/behat.php", "src/Features/a.feature") is Result.Skipped)
+    }
 
     @Test
     fun `docker command line gets pcov and binary coverage options`() {

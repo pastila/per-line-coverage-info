@@ -43,6 +43,7 @@ class LocalCoverageRunExtension : PhpRunConfigurationExtension() {
             coverageDir = CoverageApiSettings.getInstance().localCoverageDir,
             isLocalDir = { File(gitRoot, it).isDirectory },
             readLocalFile = { File(gitRoot, it).takeIf(File::isFile)?.readText() },
+            environment = cmdLine.environment,
         )
         when (result) {
             is LocalCoverageCommand.Result.Patched -> {
@@ -51,7 +52,10 @@ class LocalCoverageRunExtension : PhpRunConfigurationExtension() {
                 log.info("LocalCoverage run: collecting coverage for ${result.serviceDir} (${configuration.name})")
             }
             is LocalCoverageCommand.Result.Skipped ->
-                log.info("LocalCoverage run: not collecting for ${configuration.name} — ${result.reason}")
+                log.info(
+                    "LocalCoverage run: not collecting for ${configuration.name} — ${result.reason}; " +
+                        "exe=${cmdLine.exePath}, parameters=${cmdLine.parametersList.list}",
+                )
         }
     }
 }
