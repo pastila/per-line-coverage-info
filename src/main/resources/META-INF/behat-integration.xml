@@ -1,3 +1,7 @@
 <idea-plugin>
     <!-- Extensions registered only when com.jetbrains.php.behat plugin is available -->
+    <extensions defaultExtensionNs="com.intellij">
+        <phpRunConfigurationExtension
+            implementation="com.github.yakov255.perlinecoverageinfo.LocalCoverageRunExtension"/>
+    </extensions>
 </idea-plugin>

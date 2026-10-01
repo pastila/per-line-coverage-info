@@ -10,7 +10,7 @@ import java.io.File
 
 /**
  * Action to load coverage from a local .covt or .covt.gz file.
- * Useful for locally generated coverage data (no GitLab needed).
+ * The run is merged over CI coverage (see [LocalCoverageService]); no GitLab needed.
  */
 class LoadLocalCoverageAction : AnAction(), DumbAware {
 
@@ -31,6 +31,6 @@ class LoadLocalCoverageAction : AnAction(), DumbAware {
             }
 
         val virtualFile = FileChooser.chooseFile(descriptor, project, null) ?: return
-        CoverageLoadService.getInstance(project).loadFromLocalFile(File(virtualFile.path))
+        LocalCoverageService.getInstance(project).loadInBackground(File(virtualFile.path))
     }
 }

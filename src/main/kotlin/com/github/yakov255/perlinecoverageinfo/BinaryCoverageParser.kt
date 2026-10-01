@@ -25,7 +25,13 @@ object BinaryCoverageParser {
      * @return outer map: file path → inner map: 1-based line number → list of test names.
      *         Lines with set index -1 (uncovered but coverable) map to an empty list.
      */
-    fun parseCovtBytes(data: ByteArray): Map<String, Map<Int, List<String>>> {
+    fun parseCovtBytes(data: ByteArray): Map<String, Map<Int, List<String>>> = parseCovt(data).coverage
+
+    /**
+     * Same as [parseCovtBytes], but also returns the full test list from the header —
+     * every test that was executed in the run, including ones that hit no included file.
+     */
+    fun parseCovt(data: ByteArray): CovtData {
         if (data.isEmpty()) {
             throw CoverageApiException(
                 "COVT data is empty",
@@ -76,7 +82,7 @@ object BinaryCoverageParser {
                 when (marker) {
                     MARKER_END -> {
                         log.info("COVT: end marker reached, parsed ${result.size} file(s)")
-                        return result
+                        return CovtData(tests, result)
                     }
                     MARKER_FILE -> {
                         val filePath = readString(buf, "file path")
@@ -159,15 +165,25 @@ object BinaryCoverageParser {
      * Parses raw bytes that may be gzipped (`.covt.gz`) or plain (`.covt`).
      * Auto-detects GZIP via the magic bytes `0x1F 0x8B`.
      */
-    fun parsePossiblyGzippedCovtBytes(bytes: ByteArray): Map<String, Map<Int, List<String>>> {
-        val data = if (bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()) {
+    fun parsePossiblyGzippedCovtBytes(bytes: ByteArray): Map<String, Map<Int, List<String>>> =
+        parseCovtBytes(gunzipIfNeeded(bytes))
+
+    /** [parseCovt] for input that may be gzipped. */
+    fun parsePossiblyGzippedCovt(bytes: ByteArray): CovtData = parseCovt(gunzipIfNeeded(bytes))
+
+    private fun gunzipIfNeeded(bytes: ByteArray): ByteArray {
+        if (bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()) {
             log.info("COVT: input is gzipped, decompressing")
-            GZIPInputStream(bytes.inputStream()).use { it.readBytes() }
-        } else {
-            bytes
+            return GZIPInputStream(bytes.inputStream()).use { it.readBytes() }
         }
-        return parseCovtBytes(data)
+        return bytes
     }
+
+    /** Parsed `.covt`: all executed tests plus file → line → covering tests. */
+    data class CovtData(
+        val tests: List<String>,
+        val coverage: Map<String, Map<Int, List<String>>>,
+    )
 
     private fun readString(buf: ByteBuffer, context: String): String {
         ensureRemaining(buf, 4, "string length for $context")

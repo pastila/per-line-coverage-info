@@ -45,7 +45,7 @@ class CoverageErrorReporter : ErrorReportSubmitter() {
 
         val encodedBody = URLEncoder.encode(body, StandardCharsets.UTF_8)
         val encodedTitle = URLEncoder.encode("[Bug] $message".take(100), StandardCharsets.UTF_8)
-        val url = "https://github.com/yakov255/per-line-coverage-info/issues/new" +
+        val url = "https://github.com/pastila/per-line-coverage-info/issues/new" +
                 "?title=$encodedTitle&body=$encodedBody&labels=bug"
 
         BrowserUtil.browse(url)

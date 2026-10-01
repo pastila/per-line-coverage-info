@@ -8,6 +8,7 @@ import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.HyperlinkLabel
 import com.intellij.ui.components.JBList
+import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
@@ -25,6 +26,8 @@ class CoverageApiSettingsConfigurable : Configurable {
     private val gitlabDomainField = JBTextField()
     private val bearerTokenField = JBTextField()
     private val coverageBranchField = JBTextField()
+    private val localCoverageDirField = JBTextField()
+    private val collectLocalCoverageCheckBox = JCheckBox("Collect coverage when running Behat from the IDE")
     private val projectNameLabel = JBTextField().apply { isEditable = false }
     private val tokenLink = HyperlinkLabel("Create a Personal Access Token (scope: read_api)")
 
@@ -62,6 +65,10 @@ class CoverageApiSettingsConfigurable : Configurable {
             .addComponentToRightColumn(tokenLink)
             .addLabeledComponent("GitLab Project:", projectPanel)
             .addLabeledComponent("Coverage Branch:", coverageBranchField)
+            .addSeparator()
+            .addLabeledComponent("Local Coverage Dir:", localCoverageDirField)
+            .addComponentToRightColumn(JBLabel("Relative to the git root; new .covt files there are merged over CI coverage"))
+            .addComponent(collectLocalCoverageCheckBox)
             .addComponentFillVertically(JPanel(), 0)
             .panel
     }
@@ -177,18 +184,31 @@ class CoverageApiSettingsConfigurable : Configurable {
                bearerTokenField.text != settings.bearerToken ||
                selectedProjectId != settings.gitlabProjectId ||
                selectedProjectName != settings.gitlabProjectName ||
-               coverageBranchField.text != settings.coverageBranch
+               coverageBranchField.text != settings.coverageBranch ||
+               localCoverageDirField.text != settings.localCoverageDir ||
+               collectLocalCoverageCheckBox.isSelected != settings.collectLocalCoverage
     }
 
     override fun apply() {
         val settings = CoverageApiSettings.getInstance()
+        val localDirChanged = localCoverageDirField.text.trim().trim('/') != settings.localCoverageDir
         settings.enabled = enabledCheckBox.isSelected
         settings.gitlabDomain = gitlabDomainField.text
         settings.bearerToken = bearerTokenField.text
         settings.gitlabProjectId = selectedProjectId
         settings.gitlabProjectName = selectedProjectName
         settings.coverageBranch = coverageBranchField.text
+        settings.localCoverageDir = localCoverageDirField.text.trim().trim('/')
+        settings.collectLocalCoverage = collectLocalCoverageCheckBox.isSelected
 
+        if (localDirChanged) {
+            for (project in ProjectManager.getInstance().openProjects) {
+                if (project.isDisposed) continue
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    LocalCoverageService.getInstance(project).restartWatching()
+                }
+            }
+        }
         triggerCoverageLoad()
     }
 
@@ -224,5 +244,7 @@ class CoverageApiSettingsConfigurable : Configurable {
         selectedProjectName = settings.gitlabProjectName
         projectNameLabel.text = selectedProjectName
         coverageBranchField.text = settings.coverageBranch
+        localCoverageDirField.text = settings.localCoverageDir
+        collectLocalCoverageCheckBox.isSelected = settings.collectLocalCoverage
     }
 }

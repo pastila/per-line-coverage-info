@@ -9,6 +9,7 @@ import com.intellij.execution.process.ProcessEvent
 import com.intellij.execution.process.ProcessListener
 import com.intellij.execution.runners.ExecutionEnvironmentBuilder
 import com.intellij.execution.runners.ProgramRunner
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.jetbrains.php.behat.BehatFrameworkType
 import com.jetbrains.php.behat.run.BehatRunConfiguration
@@ -49,6 +50,7 @@ object BehatTestRunner {
         runnerSettings.scope = PhpTestRunnerSettings.Scope.Method
         runnerSettings.filePath = featureFilePath
         runnerSettings.methodName = scenarioName
+        pinBehatConfigFile(project, runnerSettings, featureFilePath)
         return settings
     }
 
@@ -65,24 +67,43 @@ object BehatTestRunner {
         val runnerSettings = config.settings.runnerSettings
         runnerSettings.scope = PhpTestRunnerSettings.Scope.File
         runnerSettings.filePath = featureFilePath
+        pinBehatConfigFile(project, runnerSettings, featureFilePath)
         return settings
     }
 
     /**
-     * Bundles multiple feature files / scenarios into a single Behat launch as positional
-     * arguments. [pathsByFile] maps a feature file absolute path to the list of 1-based
-     * scenario line numbers to run; an empty list means "run the entire file".
+     * Bundles feature files / scenarios into Behat launches — one per Behat project (a
+     * monorepo has several: `core/behat.yml`, `api/rail/behat.yml`, `api/bus/behat.php`, …).
+     * [pathsByFile] maps a feature file absolute path to the list of 1-based scenario line
+     * numbers to run; an empty list means "run the entire file".
      *
-     * Paths are converted to be relative to the Behat working directory (derived from
-     * the run configuration's config file location) so that Behat receives paths like
-     * `src/Features/foo.feature:10` rather than absolute filesystem paths.
+     * Each launch is pinned to the config file that owns its feature files, and the paths are
+     * made relative to that config's directory — Behat resolves relative specification paths
+     * against it, so a path relative to anything else fails with "No specifications found".
      *
      * Example produced CLI options (as a single string passed via test runner options):
-     *   features/a.feature:10 features/a.feature:20 features/b.feature
+     *   src/Features/a.feature:10 src/Features/a.feature:20 src/Features/b.feature
      */
-    private fun createMultiPathsConfig(
+    private fun createMultiPathsConfigs(
         project: Project,
         pathsByFile: Map<String, List<Int>>
+    ): List<com.intellij.execution.RunnerAndConfigurationSettings> {
+        if (pathsByFile.isEmpty()) return emptyList()
+        val byBehatProject = pathsByFile.entries.groupBy {
+            BehatConfigLocator.locate(it.key, project.basePath)
+        }
+        if (byBehatProject.size > 1) {
+            log.info("BehatTestRunner: paths span ${byBehatProject.size} Behat projects — launching them one after another")
+        }
+        return byBehatProject.mapNotNull { (behatProject, entries) ->
+            createMultiPathsConfig(project, entries.associate { it.key to it.value }, behatProject)
+        }
+    }
+
+    private fun createMultiPathsConfig(
+        project: Project,
+        pathsByFile: Map<String, List<Int>>,
+        behatProject: BehatConfigLocator.BehatProject?
     ): com.intellij.execution.RunnerAndConfigurationSettings? {
         if (pathsByFile.isEmpty()) return null
         val configType = BehatRunConfigurationType.getInstance()
@@ -98,19 +119,43 @@ object BehatTestRunner {
 
         val runnerSettings = config.settings.runnerSettings
         // Force ConfigurationFile scope so the handler does not append any positional
-        // path argument — paths are passed as separate positional arguments to behat. We
-        // intentionally do NOT touch `isUseAlternativeConfigurationFile` or
-        // `configurationFilePath`: those are inherited from the run configuration
-        // template the user edits via "Edit Configuration Templates", so both the
-        // default `behat.yml` and a custom config file location are honored.
+        // path argument — paths are passed as separate positional arguments to behat.
         runnerSettings.scope = PhpTestRunnerSettings.Scope.ConfigurationFile
 
-        val workingDir = resolveBehatWorkingDir(project, runnerSettings)
+        val workingDir = if (behatProject != null) {
+            // Pin the config that owns these feature files: it decides both the suites Behat
+            // knows about and the directory relative paths are resolved against. Without this
+            // the run inherits whichever framework configuration PhpStorm happens to pick.
+            runnerSettings.isUseAlternativeConfigurationFile = true
+            runnerSettings.configurationFilePath = behatProject.configFile
+            behatProject.workingDir
+        } else {
+            log.warn("BehatTestRunner: no behat config found for ${pathsByFile.keys.first()} — falling back to the run configuration template")
+            resolveBehatWorkingDir(project, runnerSettings)
+        }
         val relativePaths = relativizePaths(pathsByFile, workingDir)
         val pathsArgs = buildPositionalPathArgsInternal(relativePaths)
         val existing = runnerSettings.testRunnerOptions.orEmpty()
         runnerSettings.testRunnerOptions = if (existing.isBlank()) pathsArgs else "$existing $pathsArgs"
         return settings
+    }
+
+    /**
+     * Points a single-file / single-scenario run at the Behat config that owns [featureFilePath],
+     * instead of whichever framework configuration PhpStorm would pick by default.
+     */
+    private fun pinBehatConfigFile(
+        project: Project,
+        runnerSettings: PhpTestRunnerSettings,
+        featureFilePath: String
+    ) {
+        val behatProject = BehatConfigLocator.locate(featureFilePath, project.basePath)
+        if (behatProject == null) {
+            log.warn("BehatTestRunner: no behat config found for $featureFilePath — falling back to the run configuration template")
+            return
+        }
+        runnerSettings.isUseAlternativeConfigurationFile = true
+        runnerSettings.configurationFilePath = behatProject.configFile
     }
 
     /**
@@ -259,21 +304,23 @@ object BehatTestRunner {
     }
 
     /**
-     * Runs multiple feature files / scenarios in a single Behat launch.
-     * See [createMultiPathsConfig] for the [pathsByFile] format.
+     * Runs multiple feature files / scenarios in a single Behat launch — or, when they belong
+     * to different Behat projects, in one launch per project, started one after another.
+     * See [createMultiPathsConfigs] for the [pathsByFile] format.
      */
     fun runMultiplePaths(
         project: Project,
         pathsByFile: Map<String, List<Int>>,
         debug: Boolean = false
     ) {
-        val settings = createMultiPathsConfig(project, pathsByFile) ?: return
-        execute(project, settings, debug)
+        val configs = createMultiPathsConfigs(project, pathsByFile)
+        if (configs.isEmpty()) return
+        executeSequentially(project, configs, debug) {}
     }
 
     /**
-     * Same as [runMultiplePaths] but invokes [onFinished] with the process exit code
-     * once the run completes (or with -1 if the run could not be started).
+     * Same as [runMultiplePaths] but invokes [onFinished] once every launch has completed,
+     * with the first non-zero exit code (or -1 if nothing could be started).
      */
     fun runMultiplePathsWithCallback(
         project: Project,
@@ -281,12 +328,35 @@ object BehatTestRunner {
         onFinished: (Int) -> Unit,
         debug: Boolean = false
     ) {
-        val settings = createMultiPathsConfig(project, pathsByFile)
-        if (settings == null) {
+        val configs = createMultiPathsConfigs(project, pathsByFile)
+        if (configs.isEmpty()) {
             onFinished(-1)
             return
         }
-        executeWithCallback(project, settings, onFinished, debug)
+        executeSequentially(project, configs, debug, onFinished)
+    }
+
+    /**
+     * Starts the launches one at a time — Behat suites of a monorepo share a single test
+     * database, so two processes must never run in parallel.
+     */
+    private fun executeSequentially(
+        project: Project,
+        configs: List<com.intellij.execution.RunnerAndConfigurationSettings>,
+        debug: Boolean,
+        onFinished: (Int) -> Unit
+    ) {
+        fun step(index: Int, worstExitCode: Int) {
+            if (index >= configs.size) {
+                onFinished(worstExitCode)
+                return
+            }
+            executeWithCallback(project, configs[index], { exitCode ->
+                val worst = if (worstExitCode != 0) worstExitCode else exitCode
+                ApplicationManager.getApplication().invokeLater { step(index + 1, worst) }
+            }, debug)
+        }
+        step(0, 0)
     }
 
     private fun execute(

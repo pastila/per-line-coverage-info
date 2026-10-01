@@ -20,6 +20,10 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
         var enabled: Boolean = false,
         /** Whether the first-run token prompt has been shown. */
         var tokenPrompted: Boolean = false,
+        /** Git-root-relative directory watched for locally generated `.covt` files. */
+        var localCoverageDir: String = "storage/coverage",
+        /** Whether Behat runs started from the IDE write a `.covt` into [localCoverageDir]. */
+        var collectLocalCoverage: Boolean = false,
     )
 
     private var state = State()
@@ -57,6 +61,14 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
     var tokenPrompted: Boolean
         get() = state.tokenPrompted
         set(value) { state.tokenPrompted = value }
+
+    var localCoverageDir: String
+        get() = state.localCoverageDir
+        set(value) { state.localCoverageDir = value }
+
+    var collectLocalCoverage: Boolean
+        get() = state.collectLocalCoverage
+        set(value) { state.collectLocalCoverage = value }
 
     val gitlabBaseUrl: String
         get() = "https://${state.gitlabDomain.trimEnd('/')}"

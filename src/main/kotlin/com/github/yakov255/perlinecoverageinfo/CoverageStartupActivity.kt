@@ -21,6 +21,9 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
         try {
             promptForTokenIfNeeded(project)
 
+            // Local runs don't depend on GitLab settings or gutter visibility.
+            LocalCoverageService.getInstance(project).startWatching()
+
             val loadService = CoverageLoadService.getInstance(project)
 
             val settingsError = loadService.validateSettings()

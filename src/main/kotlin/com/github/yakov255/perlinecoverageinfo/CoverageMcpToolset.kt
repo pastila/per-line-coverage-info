@@ -350,6 +350,101 @@ class CoverageMcpToolset : McpToolset {
         )
     }
 
+    @McpTool
+    @McpDescription(
+        "Reports the state of local coverage collection: whether Behat runs started from the IDE " +
+        "write a .covt file, which directory is watched for those files, and how many local runs " +
+        "are currently merged over the CI coverage (runs collected on another commit are reported " +
+        "separately as staleRuns — they are excluded from the merge until restored in the IDE). " +
+        "Required parameter 'project' — absolute path to the project root directory."
+    )
+    suspend fun get_local_coverage_status(
+        @McpDescription("Required. Absolute path to the project root (e.g. /home/user/projects/my-app)")
+        project: String? = null,
+    ): LocalCoverageStatusResult {
+        log.info("MCP tool: get_local_coverage_status")
+        return localCoverageStatus(resolveProject(project))
+    }
+
+    @McpTool
+    @McpDescription(
+        "Turns local coverage collection on or off — the same switch as the 'Collect Local Coverage' " +
+        "toggle in the Covering Line toolbar. When on, every Behat run started from the IDE is " +
+        "rewritten to collect coverage and write a .covt file that is merged over the CI coverage. " +
+        "The setting is IDE-wide (it applies to every open project) and survives restarts. " +
+        "Returns the resulting state. " +
+        "Required parameter 'project' — absolute path to the project root directory."
+    )
+    suspend fun set_local_coverage_collection(
+        @McpDescription("Required. Absolute path to the project root (e.g. /home/user/projects/my-app)")
+        project: String? = null,
+        @McpDescription("true — collect coverage for IDE Behat runs; false — run Behat unchanged")
+        enabled: Boolean,
+    ): LocalCoverageStatusResult {
+        log.info("MCP tool: set_local_coverage_collection enabled=$enabled")
+        val resolved = resolveProject(project)
+        CoverageApiSettings.getInstance().collectLocalCoverage = enabled
+        return localCoverageStatus(resolved)
+    }
+
+    @McpTool
+    @McpDescription(
+        "Restores the local runs that were collected on another commit — the same button as " +
+        "'Restore Stale Local Coverage' in the Covering Line toolbar. After a checkout such runs are " +
+        "excluded from the merge, because their file snapshots and the CI coverage they supersede " +
+        "describe the previous checkout; restoring re-stamps them onto the current HEAD, which only " +
+        "makes sense when the checkout did not change the covered code. Returns the resulting state. " +
+        "Required parameter 'project' — absolute path to the project root directory."
+    )
+    suspend fun restore_stale_local_coverage(
+        @McpDescription("Required. Absolute path to the project root (e.g. /home/user/projects/my-app)")
+        project: String? = null,
+    ): LocalCoverageStatusResult {
+        log.info("MCP tool: restore_stale_local_coverage")
+        val resolved = resolveProject(project)
+        val localService = LocalCoverageService.getInstance(resolved)
+        if (localService.staleRunCount() == 0) {
+            throw mcpError(
+                "No stale local runs: every local run belongs to the current HEAD" +
+                    (if (localService.hasData()) "." else ", and none is loaded at all.")
+            )
+        }
+        localService.restoreStale()
+        return localCoverageStatus(resolved)
+    }
+
+    @McpTool
+    @McpDescription(
+        "Drops every locally collected run, stale ones included, so coverage falls back to the CI " +
+        "data alone. Runs collected on another commit are already excluded from the merge after a " +
+        "checkout; this removes them for good. " +
+        "Required parameter 'project' — absolute path to the project root directory."
+    )
+    suspend fun clear_local_coverage(
+        @McpDescription("Required. Absolute path to the project root (e.g. /home/user/projects/my-app)")
+        project: String? = null,
+    ): LocalCoverageStatusResult {
+        log.info("MCP tool: clear_local_coverage")
+        val resolved = resolveProject(project)
+        LocalCoverageService.getInstance(resolved).clear()
+        return localCoverageStatus(resolved)
+    }
+
+    private fun localCoverageStatus(project: Project): LocalCoverageStatusResult {
+        val settings = CoverageApiSettings.getInstance()
+        val localService = LocalCoverageService.getInstance(project)
+        return LocalCoverageStatusResult(
+            collectLocalCoverage = settings.collectLocalCoverage,
+            localCoverageDir = settings.localCoverageDir,
+            watchedDirectory = localService.watchedDirectory(),
+            localRuns = localService.runCount(),
+            staleRuns = localService.staleRunCount(),
+            localTests = localService.tests().size,
+            localFiles = localService.fileCount(),
+            pluginEnabled = settings.enabled,
+        )
+    }
+
     // TODO: Use McpProjectLocationInputs.resolveProject() from the MCP framework
     // for proper multi-project resolution (session headers, roots capability)
     private fun resolveProject(projectPath: String?): Project {
@@ -445,4 +540,24 @@ data class CoverageFileInfo(
     val coveredLines: Int,
     val totalLines: Int,
     val coveragePercent: Int,
+)
+
+@Serializable
+data class LocalCoverageStatusResult(
+    /** Whether IDE Behat runs are rewritten to collect coverage (IDE-wide setting). */
+    val collectLocalCoverage: Boolean,
+    /** Git-root-relative directory watched for `.covt` files. */
+    val localCoverageDir: String,
+    /** Absolute path of that directory, null when the project is not inside a git repository. */
+    val watchedDirectory: String? = null,
+    /** Local runs held in memory, stale ones included. */
+    val localRuns: Int = 0,
+    /** Runs collected on another commit — kept, but not merged until restored in the panel. */
+    val staleRuns: Int = 0,
+    /** Scenarios of the non-stale runs — their CI coverage is superseded. */
+    val localTests: Int = 0,
+    /** Files touched by the non-stale runs. */
+    val localFiles: Int = 0,
+    /** Master switch of the plugin (Settings → Tools → GitLab Coverage). */
+    val pluginEnabled: Boolean = false,
 )

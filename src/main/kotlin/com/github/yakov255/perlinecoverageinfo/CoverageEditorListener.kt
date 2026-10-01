@@ -42,11 +42,8 @@ class CoverageEditorListener : EditorFactoryListener {
     }
 
     private fun installDocumentListener(editor: Editor, project: Project) {
-        val dataService = CoverageDataService.getInstance(project)
-        if (!dataService.hasData()) {
-            return
-        }
-
+        // Installed even without coverage: local runs can arrive while the editor is open,
+        // and re-highlighting is a no-op until there is data.
         val virtualFile = FileDocumentManager.getInstance().getFile(editor.document)
         if (virtualFile == null) {
             return

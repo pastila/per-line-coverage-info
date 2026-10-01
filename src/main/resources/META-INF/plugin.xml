@@ -1,8 +1,8 @@
 <!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
-<idea-plugin url="https://yakov255.github.io/per-line-coverage-info/updatePlugins.xml">
+<idea-plugin url="https://pastila.github.io/per-line-coverage-info/updatePlugins.xml">
     <id>com.github.yakov255.perlinecoverageinfo</id>
     <name>Per-Line Coverage Info</name>
-    <vendor>yakov255</vendor>
+    <vendor>pastila</vendor>
 
     <depends>com.intellij.modules.platform</depends>
     <depends optional="true" config-file="mcp-integration.xml">com.intellij.mcpServer</depends>
@@ -53,7 +53,18 @@
                 text="Load Coverage from GitLab" description="Download coverage artifacts from GitLab and display per-line coverage">
         </action>
         <action id="LoadLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.LoadLocalCoverageAction"
-                text="Load Coverage from File" description="Load per-line coverage from a local .covt file">
+                text="Load Coverage from File" description="Merge per-line coverage from a local .covt file over CI coverage">
+        </action>
+        <action id="CollectLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.CollectLocalCoverageToggleAction"
+                icon="AllIcons.General.RunWithCoverage"
+                text="Collect Local Coverage" description="Make Behat runs started from the IDE write coverage that is merged over CI coverage">
+        </action>
+        <action id="RestoreStaleLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.RestoreStaleLocalCoverageAction"
+                icon="AllIcons.General.Warning"
+                text="Restore Stale Local Coverage" description="Merge local runs collected on another commit onto the current HEAD">
+        </action>
+        <action id="ClearLocalCoverage" class="com.github.yakov255.perlinecoverageinfo.ClearLocalCoverageAction"
+                text="Clear Local Coverage" description="Drop coverage from local runs and show CI coverage only">
         </action>
         <action id="ClearCoverageData" class="com.github.yakov255.perlinecoverageinfo.ClearCoverageAction"
                 text="Clear Coverage Data" description="Remove coverage annotations from all editors">
