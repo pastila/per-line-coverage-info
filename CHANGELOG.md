@@ -3,6 +3,8 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+- Fix coverage download after the CI refactor: use the dedicated `test:behat:coverage:<component>` jobs (coverage-test stage) instead of the legacy `test:behat:<component>` jobs, which no longer publish a coverage archive
+- Only jobs with a real archive artifact are treated as coverage jobs (behat jobs always have trace/junit artifacts, which previously masked the missing coverage report)
 
 ## [2.7.0] - 2026-08-17
 - Shared app-level GitLab coordinator: single worker thread, TTL-cached metadata and a rate limiter — dramatically fewer API requests

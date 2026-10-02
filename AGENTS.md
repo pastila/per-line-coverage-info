@@ -29,7 +29,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Component configuration
 | File | Purpose |
 |------|---------|
-| `ComponentConfig.kt` | Hardcoded mapping from repository service directories to CI job prefixes (e.g. `api/avia` → `test:behat:avia`). `detectComponent()` returns the component for the current project root (root → `raketa`, subpath → matching component). |
+| `ComponentConfig.kt` | Hardcoded mapping from repository service directories to CI job prefixes (e.g. `api/avia` → `test:behat:avia`). `detectComponent()` returns the component for the current project root (root → `raketa`, subpath → matching component). Coverage is published by the dedicated `test:behat:coverage:<component>` jobs (derived via `coverageJobPrefix`); `selectCoverageJobNames()` prefers those and falls back to legacy `test:behat:<component>` jobs only if no coverage job exists. |
 
 ### MCP server
 | File | Purpose |
