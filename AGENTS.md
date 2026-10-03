@@ -172,11 +172,30 @@ Tool: `list_files` — lists files with coverage data under a directory.
 ## Build & Run
 
 ```bash
-./gradlew compileKotlin   # compile
-./gradlew test            # unit tests
-./gradlew buildPlugin     # distributable zip
-./gradlew runIde          # sandbox IDE
+./gradlew compileKotlin            # compile
+./gradlew test                     # unit tests
+./gradlew buildPlugin              # distributable zip
+./gradlew runIde                   # sandbox IDE
+./gradlew generateUpdatePluginsXml # regenerate docs/updatePlugins.xml
 ```
+
+## Release
+
+Version lives in `gradle.properties` (`pluginVersion`, SemVer) — single source of truth.
+
+Two-commit flow:
+1. Work commit(s) add user-visible entries under `## [Unreleased]` in `CHANGELOG.md`.
+2. Release commit titled `Release X.Y.Z`:
+   - bump `pluginVersion` in `gradle.properties`;
+   - move the `[Unreleased]` entries under `## [X.Y.Z] - YYYY-MM-DD`, leaving `[Unreleased]` empty;
+   - regenerate `docs/updatePlugins.xml` (`./gradlew generateUpdatePluginsXml`).
+
+Pushing to `main` triggers `.github/workflows/build.yml`, which runs `./gradlew buildPlugin`, creates a GitHub release `X.Y.Z` with the `per-line-coverage-info-X.Y.Z.zip` asset and notes from `getChangelog`, then regenerates and commits `docs/updatePlugins.xml`.
+
+Rules:
+- `.githooks/pre-commit` (enabled via `core.hooksPath`) **fails** if the version is bumped while `[Unreleased]` still has entries, and always regenerates and stages `docs/updatePlugins.xml`.
+- Never hand-edit `docs/updatePlugins.xml` — it is generated.
+- `docs/updatePlugins.xml` is the custom plugin update manifest served to users.
 
 ## Conventions
 
@@ -186,6 +205,7 @@ Tool: `list_files` — lists files with coverage data under a directory.
 - **Cache key**: commit hash + component (not pipeline ID). Files: `<hash>-<component>.cov4` under `~/.cache/coverage-plugin/<projectId>/`.
 - **Shared GitLab access**: always go through `GitLabCoordinator.getInstance().api()` (cached/rate-limited worker) — never construct a raw `GitLabApiClient` for the loading flow. `CoverageResolver`, `CoverageLoadService`, `CoveragePipelinePoller` take the `GitLabApi` facade.
 - **Component**: `ComponentConfig.detectComponent()` maps project root → `raketa`, subdirectory → matching component. Only behat jobs for the detected component are downloaded.
+- **Coverage CI jobs**: coverage archives (`coverage-reports/coverage.covt.gz`) are published by the dedicated `test:behat:coverage:<component>` jobs (`coverage-test` stage). The legacy `test:behat:<component>` jobs (`test` stage) keep only trace/junit artifacts — never select them for coverage downloads. `ComponentEntry.jobName` is the component token; both job prefixes derive from it.
 - **Waiting**: `downloadArtifacts()` waits indefinitely for running behat jobs; cancelled via progress bar (`indicator.isCanceled`) or branch switch (`pendingReload`). The wait-loop calls `invalidateJobs()` to bypass the jobs TTL cache.
 - **Fallback**: when the primary pipeline has no jobs for the component, `startDownloadTask()` falls back to the baseline (master) pipeline and clears the baseline reader.
 - **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.
