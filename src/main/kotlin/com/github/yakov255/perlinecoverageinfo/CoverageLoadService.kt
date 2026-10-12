@@ -469,6 +469,19 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
+     * Selects the behat jobs that publish coverage artifacts for [component].
+     *
+     * CI publishes coverage from dedicated `test:behat:coverage:<component>` jobs
+     * (coverage-test stage); the legacy `test:behat:<component>` jobs no longer keep
+     * a coverage archive. Prefer the dedicated coverage jobs and fall back to the
+     * legacy ones only when no coverage-prefixed job exists in the pipeline.
+     */
+    private fun selectBehatJobs(jobs: List<GitLabJob>, component: ComponentEntry): List<GitLabJob> {
+        val selectedNames = ComponentConfig.selectCoverageJobNames(jobs.map { it.name }, component).toSet()
+        return jobs.filter { it.name in selectedNames }
+    }
+
+    /**
      * Downloads and parses coverage artifacts for an already-resolved pipeline.
      */
     fun downloadArtifacts(
@@ -497,9 +510,7 @@ class CoverageLoadService(private val project: Project) {
             kind = CoverageErrorKind.NO_DATA,
         )
 
-        val componentBehatJobs = jobs.filter { job ->
-            job.name.contains("behat", ignoreCase = true) && job.name.contains(component.jobPrefix, ignoreCase = true)
-        }
+        val componentBehatJobs = selectBehatJobs(jobs, component)
 
         if (componentBehatJobs.isEmpty()) {
             throw CoverageApiException(
@@ -529,9 +540,7 @@ class CoverageLoadService(private val project: Project) {
                 // TTL cache (which is intended for immutable completed pipelines).
                 (gitLabClient as? CachedGitLabApi)?.invalidateJobs(settings.gitlabProjectId, resolved.pipelineId)
                 val freshJobs = gitLabClient.listPipelineJobs(settings.gitlabProjectId, resolved.pipelineId)
-                currentJobs = freshJobs.filter { job ->
-                    job.name.contains("behat", ignoreCase = true) && job.name.contains(component.jobPrefix, ignoreCase = true)
-                }
+                currentJobs = selectBehatJobs(freshJobs, component)
             } catch (e: CoverageApiException) {
                 if (e.kind == CoverageErrorKind.NETWORK) {
                     log.warn("Coverage: network error during wait, will retry in 10s")
@@ -552,9 +561,10 @@ class CoverageLoadService(private val project: Project) {
             )
         }
 
-        val artifactJobs = currentJobs.filter { job ->
-            job.artifactsFile != null || job.artifacts.isNotEmpty()
-        }
+        // Only jobs with an actual archive can contain `coverage-reports/coverage.covt.gz`.
+        // Every behat job has trace/junit entries in `artifacts`, so that list must not be
+        // used as a coverage signal.
+        val artifactJobs = currentJobs.filter { job -> job.artifactsFile != null }
         if (artifactJobs.isEmpty()) {
             throw CoverageApiException(
                 "No coverage artifacts for component '${component.serviceDir}' in pipeline #${resolved.pipelineId}.",

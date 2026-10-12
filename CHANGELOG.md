@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+- Fix coverage download after the CI refactor: use the dedicated `test:behat:coverage:<component>` jobs (coverage-test stage) instead of the legacy `test:behat:<component>` jobs, which no longer publish a coverage archive
+- Only jobs with a real archive artifact are treated as coverage jobs (behat jobs always have trace/junit artifacts, which previously masked the missing coverage report)
+
 ## [2.8.0] - 2026-10-01
 - Plugin moved to [pastila/per-line-coverage-info](https://github.com/pastila/per-line-coverage-info): updates, releases and error reports now go there; plugin repository URL is `https://pastila.github.io/per-line-coverage-info/updatePlugins.xml`
 - Local runs are tied to the commit they were collected on: after a checkout they are marked stale and stop superseding CI coverage (they used to keep hiding it on the new branch, turning covered lines red); a balloon reports it and "Restore Stale Local Coverage" in the Covering Line toolbar brings them back onto the current HEAD

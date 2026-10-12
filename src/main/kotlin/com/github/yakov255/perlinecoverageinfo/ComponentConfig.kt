@@ -4,24 +4,45 @@ import java.io.File
 
 data class ComponentEntry(
     val serviceDir: String,
-    val jobPrefix: String,
-)
+    val jobName: String,
+) {
+    /** CI job prefix of the legacy behat job, e.g. `test:behat:raketa`. */
+    val jobPrefix: String = "test:behat:$jobName"
+
+    /**
+     * CI job prefix of the dedicated coverage job produced by the `coverage-test` stage,
+     * e.g. `test:behat:coverage:raketa`.
+     *
+     * Coverage archives (`coverage-reports/coverage.covt.gz`) are published only by
+     * these jobs. The plain `test:behat:<component>` jobs keep trace/junit artifacts
+     * but have no archive.
+     */
+    val coverageJobPrefix: String = "test:behat:coverage:$jobName"
+
+    /** True for the legacy `test:behat:<component>` job name (no coverage archive). */
+    fun matchesLegacyJobName(name: String): Boolean =
+        name.contains(jobPrefix, ignoreCase = true)
+
+    /** True for the dedicated `test:behat:coverage:<component>` job name. */
+    fun matchesCoverageJobName(name: String): Boolean =
+        name.contains(coverageJobPrefix, ignoreCase = true)
+}
 
 object ComponentConfig {
 
     private val log = CoverageLog.get(ComponentConfig::class.java)
 
     private val COMPONENTS = listOf(
-        ComponentEntry("api/avia", "test:behat:avia"),
-        ComponentEntry("raketa", "test:behat:raketa"),
-        ComponentEntry("api/hotels", "test:behat:hotels"),
-        ComponentEntry("api/transfer", "test:behat:transfer"),
-        ComponentEntry("api/rail", "test:behat:rail"),
-        ComponentEntry("api/profile-sync", "test:behat:profile-sync"),
-        ComponentEntry("api/queue", "test:behat:queue"),
-        ComponentEntry("api/aeroexpress", "test:behat:aeroexpress"),
-        ComponentEntry("api/contract", "test:behat:contract"),
-        ComponentEntry("api/bus", "test:behat:bus"),
+        ComponentEntry("api/avia", "avia"),
+        ComponentEntry("raketa", "raketa"),
+        ComponentEntry("api/hotels", "hotels"),
+        ComponentEntry("api/transfer", "transfer"),
+        ComponentEntry("api/rail", "rail"),
+        ComponentEntry("api/profile-sync", "profile-sync"),
+        ComponentEntry("api/queue", "queue"),
+        ComponentEntry("api/aeroexpress", "aeroexpress"),
+        ComponentEntry("api/contract", "contract"),
+        ComponentEntry("api/bus", "bus"),
     )
 
     private val RAKETA = COMPONENTS.first { it.serviceDir == "raketa" }
@@ -68,4 +89,17 @@ object ComponentConfig {
     }
 
     fun allEntries(): List<ComponentEntry> = COMPONENTS
+
+    /**
+     * Given behat job names, returns the subset that should be downloaded for [component].
+     *
+     * Dedicated `test:behat:coverage:<component>` jobs take precedence; the legacy
+     * `test:behat:<component>` jobs are used only when no coverage-prefixed job exists.
+     */
+    fun selectCoverageJobNames(jobNames: List<String>, component: ComponentEntry): List<String> {
+        val behatJobs = jobNames.filter { it.contains("behat", ignoreCase = true) }
+        val coverageJobs = behatJobs.filter { component.matchesCoverageJobName(it) }
+        if (coverageJobs.isNotEmpty()) return coverageJobs
+        return behatJobs.filter { component.matchesLegacyJobName(it) }
+    }
 }
