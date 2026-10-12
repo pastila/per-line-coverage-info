@@ -47,6 +47,9 @@ object ComponentConfig {
 
     private val RAKETA = COMPONENTS.first { it.serviceDir == "raketa" }
 
+    /** Present in every dedicated coverage job name; its presence marks a post-refactor pipeline. */
+    private const val COVERAGE_JOB_MARKER = "test:behat:coverage:"
+
     /**
      * Определяет компонент для проекта.
      * - Корень репо → raketa
@@ -94,12 +97,14 @@ object ComponentConfig {
      * Given behat job names, returns the subset that should be downloaded for [component].
      *
      * Dedicated `test:behat:coverage:<component>` jobs take precedence; the legacy
-     * `test:behat:<component>` jobs are used only when no coverage-prefixed job exists.
+     * `test:behat:<component>` jobs are used only for pre-refactor pipelines that have no
+     * `test:behat:coverage:*` job at all — after the refactor they carry no coverage archive.
      */
     fun selectCoverageJobNames(jobNames: List<String>, component: ComponentEntry): List<String> {
         val behatJobs = jobNames.filter { it.contains("behat", ignoreCase = true) }
         val coverageJobs = behatJobs.filter { component.matchesCoverageJobName(it) }
         if (coverageJobs.isNotEmpty()) return coverageJobs
+        if (behatJobs.any { it.contains(COVERAGE_JOB_MARKER, ignoreCase = true) }) return emptyList()
         return behatJobs.filter { component.matchesLegacyJobName(it) }
     }
 }
