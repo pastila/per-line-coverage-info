@@ -4,8 +4,10 @@
 
 ## [Unreleased]
 
+## [2.8.1] - 2026-10-12
 - Fix coverage download after the CI refactor: use the dedicated `test:behat:coverage:<component>` jobs (coverage-test stage) instead of the legacy `test:behat:<component>` jobs, which no longer publish a coverage archive
 - Only jobs with a real archive artifact are treated as coverage jobs (behat jobs always have trace/junit artifacts, which previously masked the missing coverage report)
+- Legacy `test:behat:<component>` jobs are no longer picked when the pipeline already has `test:behat:coverage:*` jobs (they carry no archive); they remain a fallback only for pipelines from before the CI refactor
 
 ## [2.8.0] - 2026-10-01
 - Plugin moved to [pastila/per-line-coverage-info](https://github.com/pastila/per-line-coverage-info): updates, releases and error reports now go there; plugin repository URL is `https://pastila.github.io/per-line-coverage-info/updatePlugins.xml`
