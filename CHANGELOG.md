@@ -3,6 +3,8 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+
+## [2.8.2] - 2026-10-14
 - Fix `ClassCastException` (`CoverageDataService cannot be cast to CoverageDataService`) when editing a file after the plugin was updated without restarting the IDE: editor document listeners are now removed when the plugin is unloaded instead of lingering from the old version
 
 ## [2.8.1] - 2026-10-12

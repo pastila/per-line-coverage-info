@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.8.2/per-line-coverage-info-2.8.2.zip" version="2.8.2">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252" until-build="299.*"/>
+        <change-notes><![CDATA[<ul><li>Fix <code>ClassCastException</code> (<code>CoverageDataService cannot be cast to CoverageDataService</code>) when editing a file after the plugin was updated without restarting the IDE: editor document listeners are now removed when the plugin is unloaded instead of lingering from the old version</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.8.1/per-line-coverage-info-2.8.1.zip" version="2.8.1">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>
