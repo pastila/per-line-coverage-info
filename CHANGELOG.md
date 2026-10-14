@@ -3,6 +3,7 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+- Fix `ClassCastException` (`CoverageDataService cannot be cast to CoverageDataService`) when editing a file after the plugin was updated without restarting the IDE: editor document listeners are now removed when the plugin is unloaded instead of lingering from the old version
 
 ## [2.8.1] - 2026-10-12
 - Fix coverage download after the CI refactor: use the dedicated `test:behat:coverage:<component>` jobs (coverage-test stage) instead of the legacy `test:behat:<component>` jobs, which no longer publish a coverage archive

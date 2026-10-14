@@ -52,7 +52,8 @@ class CoverageEditorListener : EditorFactoryListener {
         lineMappingService.toRelativePath(virtualFile.path) ?: return
 
         val listener = CoverageDocumentListener(editor, project)
-        val disposable = Disposer.newDisposable()
+        // Parented to the plugin so a dynamic unload removes the listener from the document.
+        val disposable = Disposer.newDisposable(CoveragePluginDisposable.getInstance(project), "CoverageDocumentListener")
         editor.document.addDocumentListener(listener, disposable)
         Disposer.register(disposable, listener)
         editor.putUserData(COVERAGE_DOC_DISPOSABLE_KEY, disposable)
@@ -69,7 +70,7 @@ private class CoverageDocumentListener(
     private val project: Project
 ) : DocumentListener, Disposable {
 
-    private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD)
+    private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
 
     override fun documentChanged(event: DocumentEvent) {
         alarm.cancelAllRequests()
