@@ -4,4 +4,7 @@
         <phpRunConfigurationExtension
             implementation="com.github.yakov255.perlinecoverageinfo.LocalCoverageRunExtension"/>
     </extensions>
+    <extensions defaultExtensionNs="com.github.yakov255.perlinecoverageinfo">
+        <behatLauncher implementation="com.github.yakov255.perlinecoverageinfo.PhpStormBehatLauncher"/>
+    </extensions>
 </idea-plugin>

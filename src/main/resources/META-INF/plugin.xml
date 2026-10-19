@@ -6,10 +6,16 @@
 
     <depends>com.intellij.modules.platform</depends>
     <depends optional="true" config-file="mcp-integration.xml">com.intellij.mcpServer</depends>
-    <depends>com.jetbrains.php</depends>
     <depends>gherkin</depends>
+    <!-- Running tests needs the Behat plugin of the IDE: PhpStorm's or Raketa's (see BehatLauncher). -->
     <depends optional="true" config-file="behat-integration.xml">com.jetbrains.php.behat</depends>
+    <depends optional="true" config-file="raketa-integration.xml">ru.raketa.php.behat</depends>
     <depends optional="true" config-file="git-integration.xml">Git4Idea</depends>
+
+    <extensionPoints>
+        <extensionPoint qualifiedName="com.github.yakov255.perlinecoverageinfo.behatLauncher"
+                        interface="com.github.yakov255.perlinecoverageinfo.BehatLauncher" dynamic="true"/>
+    </extensionPoints>
 
     <extensions defaultExtensionNs="com.intellij">
         <updateSettingsProvider implementation="com.github.yakov255.perlinecoverageinfo.CustomRepoProvider"/>

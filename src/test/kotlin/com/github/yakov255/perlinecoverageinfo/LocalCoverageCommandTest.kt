@@ -116,6 +116,32 @@ class LocalCoverageCommandTest {
     }
 
     @Test
+    fun `Raketa docker compose command line gets pcov and binary coverage options`() {
+        val prefix = listOf(
+            "compose", "-f", "/home/u/raketa/docker-compose.yml", "exec", "-T",
+            "-e", "BEHAT_PARAMS={\"extensions\":{\"/web/.idea/raketa-behat/raketa-behat-teamcity.php\":{}}}",
+            "-w", "/web/core", "php", "php",
+        )
+        val behat = listOf(
+            "/web/core/vendor/bin/behat", "--format=raketa_teamcity", "--no-interaction",
+            "--config=/web/core/behat.yml", "/web/core/src/Features/a.feature:6",
+        )
+        val result = patch(*(prefix + behat).toTypedArray())
+
+        assertEquals(
+            Result.Patched(
+                prefix + listOf("-d", "pcov.enabled=1", "-d", "pcov.directory=/web") + behat + listOf(
+                    "--profile=coverage-clover",
+                    "--binary-coverage-target=/web/storage/coverage/local.covt",
+                    "--binary-coverage-root=core",
+                ),
+                "core",
+            ),
+            result,
+        )
+    }
+
+    @Test
     fun `local interpreter uses host paths`() {
         val result = patch("/home/me/raketa/core/vendor/bin/behat", "--config=/home/me/raketa/core/behat.yml")
 

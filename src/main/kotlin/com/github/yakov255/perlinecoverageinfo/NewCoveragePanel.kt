@@ -1,7 +1,6 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.icons.AllIcons
-import com.jetbrains.php.PhpIcons
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionUpdateThread
@@ -422,7 +421,7 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
                     text = "$totalCount  ${data.displayName}"
                 }
                 is FileNodeData.FileEntry -> {
-                    icon = if (data.path.endsWith(".php")) PhpIcons.PHP_FILE else AllIcons.FileTypes.Any_type
+                    icon = PhpFileIcon.forPath(data.path)
                     val file = model.files.find { it.gitRelativePath == data.path }
                     val count = file?.count ?: 0
                     text = "$count  ${data.displayName}"

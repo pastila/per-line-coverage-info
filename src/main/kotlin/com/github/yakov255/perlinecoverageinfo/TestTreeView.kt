@@ -590,7 +590,7 @@ internal class TestTreeView(private val project: Project) {
                 val scenarioName = CoverageTestNavigator.resolveScenarioName(project, rawFeaturePath, lineStr)
                 invokeLater {
                     if (scenarioName != null) {
-                        BehatTestRunner.runScenario(project, absolutePath, scenarioName, debug)
+                        BehatTestRunner.runScenario(project, absolutePath, lineNumber, scenarioName, debug)
                     } else {
                         BehatTestRunner.runFeatureFile(project, absolutePath, debug)
                     }

@@ -5,7 +5,7 @@
 PhpStorm plugin that shows per-line PHP coverage inline in the editor. CI collects coverage via a custom PHP/Behat extension (`.covt` files), uploads to GitLab pipeline artifacts; the plugin downloads, caches locally as `.cov4`, and renders via gutter icons + line backgrounds. Clicking a covered line shows the tests that execute it; tests can be re-run from the popup.
 
 - **Plugin ID**: `com.github.yakov255.perlinecoverageinfo`
-- **Platform**: IntelliJ IDEA Ultimate 2025.2+, depends on `com.intellij.modules.platform`, `com.intellij.mcpServer`, `com.jetbrains.php`, `gherkin`, optional `com.jetbrains.php.behat`, optional `Git4Idea`
+- **Platform**: IntelliJ IDEA Ultimate / PhpStorm 2025.2+ and the Raketa IDE (262+); depends on `com.intellij.modules.platform`, `gherkin`, optional `com.intellij.mcpServer`, optional `com.jetbrains.php.behat` (PhpStorm), optional `ru.raketa.php.behat` (Raketa), optional `Git4Idea`. Code outside `PhpStormBehatLauncher` and `LocalCoverageRunExtension` must not use `com.jetbrains.php` classes: Raketa has no PhpStorm PHP plugin
 - **Language**: Kotlin, JVM 21 · **Build**: Gradle + IntelliJ Platform Gradle Plugin
 
 ## Project Layout
@@ -13,7 +13,7 @@ PhpStorm plugin that shows per-line PHP coverage inline in the editor. CI collec
 ```
 src/main/kotlin/com/github/yakov255/perlinecoverageinfo/   # plugin source
 src/test/kotlin/com/github/yakov255/perlinecoverageinfo/   # unit tests
-src/main/resources/META-INF/plugin.xml                     # manifest (+ behat-integration.xml, git-integration.xml)
+src/main/resources/META-INF/plugin.xml                     # manifest (+ behat-integration.xml, raketa-integration.xml, git-integration.xml)
 php-behat-coverage-extension/                              # PHP ext that emits .covt
 coverage_storage_format_v4.md                              # COV4 binary spec
 ```
@@ -60,7 +60,9 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `ClearLocalCoverageAction.kt` | Find Action: "Clear Local Coverage" |
 | `RestoreStaleLocalCoverageAction.kt` | Covering Line toolbar + Find Action: "Restore Stale Local Coverage" — re-stamps runs collected on another commit onto the current HEAD; visible only while some run is stale |
 | `CollectLocalCoverageToggleAction.kt` | Toggle "Collect Local Coverage" (Find Action + Covering Line toolbar) → `CoverageApiSettings.collectLocalCoverage` |
-| `LocalCoverageRunExtension.kt` | `phpRunConfigurationExtension` (registered in `behat-integration.xml`): when the toggle is on, patches Behat command lines via `LocalCoverageCommand` |
+| `LocalCoverageRunExtension.kt` | `phpRunConfigurationExtension` (registered in `behat-integration.xml`): when the toggle is on, patches Behat command lines via `LocalCoverageCommandLine` |
+| `RaketaLocalCoverageRunExtension.kt` | The same for Raketa: a platform `RunConfigurationExtensionBase` registered as `ru.raketa.php.behat.runConfigurationExtension` (`raketa-integration.xml`), applied to configurations of type `RaketaBehat` |
+| `LocalCoverageCommandLine.kt` | Shared patching of a `GeneralCommandLine` with `LocalCoverageCommand` (git root, settings, logging) |
 | `LocalCoverageCommand.kt` | Pure command-line rewrite: finds the Behat script, matches its interpreter-side service dir (`/web/core`) to the git root (`core`), picks the profile with `BehatBinaryCoverage` (prefers `coverage-clover`), adds `-d pcov.*` before the script and `--profile/--binary-coverage-*` after; skips services without the extension and command lines that already set `--profile` |
 | `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" |
 
@@ -116,7 +118,9 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Behat runner
 | File | Purpose |
 |------|---------|
-| `BehatTestRunner.kt` | Runs scenarios via Behat run-configuration template; single or bundled multi-path launch; pins every launch to the Behat config that owns the feature files and passes paths relative to it as separate positional arguments (e.g. `file:1 file:2`); paths from several services produce one launch per service, started sequentially |
+| `BehatLauncher.kt` | EP `behatLauncher`: creates Behat run configurations of the IDE's Behat plugin. `PhpStormBehatLauncher.kt` (`behat-integration.xml`) uses `com.jetbrains.php.behat`; `RaketaBehatLauncher.kt` (`raketa-integration.xml`) finds the `RaketaBehat` type by ID and sets its options (`testPath`, `testLine`, `workingDirectory`, `configFile`, `arguments`) through `readExternal`, so it compiles without Raketa classes |
+| `PhpFileIcon.kt` | PHP file icon from the IDE's PHP file type (no `PhpIcons`) |
+| `BehatTestRunner.kt` | Platform-only runner over `BehatLauncher`: runs scenarios via Behat run-configuration template; single or bundled multi-path launch; pins every launch to the Behat config that owns the feature files and passes paths relative to it as separate positional arguments (e.g. `file:1 file:2`); paths from several services produce one launch per service, started sequentially |
 | `BehatConfigLocator.kt` | Pure lookup of the Behat project owning a feature file: nearest ancestor directory with `behat.yml` / `behat.php` / `*.dist` (also `config/` subdir), searched up to the project root |
 | `CoverageTestNavigator.kt` | PSI navigation to scenario; converts git-root-relative feature paths to project-relative |
 

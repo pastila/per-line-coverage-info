@@ -1,0 +1,10 @@
+<idea-plugin>
+    <!-- Extensions registered only in the Raketa IDE, when its Behat plugin ru.raketa.php.behat is available.
+         Both use the platform API only: Raketa classes are not needed to compile them. -->
+    <extensions defaultExtensionNs="com.github.yakov255.perlinecoverageinfo">
+        <behatLauncher implementation="com.github.yakov255.perlinecoverageinfo.RaketaBehatLauncher"/>
+    </extensions>
+    <extensions defaultExtensionNs="ru.raketa.php.behat">
+        <runConfigurationExtension implementation="com.github.yakov255.perlinecoverageinfo.RaketaLocalCoverageRunExtension"/>
+    </extensions>
+</idea-plugin>

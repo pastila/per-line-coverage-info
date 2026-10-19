@@ -3,6 +3,9 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+- Works in the Raketa IDE (a fork of IntelliJ IDEA Community for PHP) as well as in PhpStorm: `com.jetbrains.php` is no longer required. Run / Debug from the coverage panels go through the Behat plugin of the IDE — PhpStorm's `com.jetbrains.php.behat` or Raketa's `ru.raketa.php.behat` (`BehatLauncher`, `raketa-integration.xml`); in Raketa the runs use the PHP interpreter of the project (Docker Compose included)
+- "Collect Local Coverage" also patches Raketa Behat runs, including `docker compose exec` command lines
+- PHP file icons come from the PHP file type of the IDE instead of `PhpIcons`
 
 ## [2.8.2] - 2026-10-14
 - Fix `ClassCastException` (`CoverageDataService cannot be cast to CoverageDataService`) when editing a file after the plugin was updated without restarting the IDE: editor document listeners are now removed when the plugin is unloaded instead of lingering from the old version
