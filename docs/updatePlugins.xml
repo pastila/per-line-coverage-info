@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.0/per-line-coverage-info-2.9.0.zip" version="2.9.0">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252" until-build="299.*"/>
+        <change-notes><![CDATA[<ul><li>Works in the Raketa IDE (a fork of IntelliJ IDEA Community for PHP) as well as in PhpStorm: <code>com.jetbrains.php</code> is no longer required. Run / Debug from the coverage panels go through the Behat plugin of the IDE — PhpStorm's <code>com.jetbrains.php.behat</code> or Raketa's <code>ru.raketa.php.behat</code> (<code>BehatLauncher</code>, <code>raketa-integration.xml</code>); in Raketa the runs use the PHP interpreter of the project (Docker Compose included)</li><li>&quot;Collect Local Coverage&quot; also patches Raketa Behat runs, including <code>docker compose exec</code> command lines</li><li>PHP file icons come from the PHP file type of the IDE instead of <code>PhpIcons</code></li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.8.2/per-line-coverage-info-2.8.2.zip" version="2.8.2">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>
