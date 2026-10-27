@@ -24,7 +24,6 @@ import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.ui.JBUI
-import icons.BehatIcons
 import java.awt.BorderLayout
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -74,13 +73,13 @@ internal class TestTreeView(private val project: Project) {
                     if (data.count > 0) r.append(" (${data.count})", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                 }
                 is TestNodeData.BehatGroup -> {
-                    r.icon = BehatIcons.Behat
+                    r.icon = PhpFileIcon.forFeature()
                     r.append(data.displayName, SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
                     val count = node.childCount
                     if (count > 0) r.append(" ($count)", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                 }
                 is TestNodeData.BehatScenario -> {
-                    r.icon = BehatIcons.Behat
+                    r.icon = PhpFileIcon.forFeature()
                     r.append(data.displayName, SimpleTextAttributes.REGULAR_ATTRIBUTES)
                 }
                 is TestNodeData.PhpUnitGroup -> {

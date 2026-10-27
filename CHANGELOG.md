@@ -3,6 +3,7 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+- Fixed a crash in the Raketa IDE when the coverage tests tree is shown (`NoClassDefFoundError: icons/BehatIcons`): Behat nodes now use the Gherkin `.feature` file icon
 
 ## [2.9.0] - 2026-10-19
 - Works in the Raketa IDE (a fork of IntelliJ IDEA Community for PHP) as well as in PhpStorm: `com.jetbrains.php` is no longer required. Run / Debug from the coverage panels go through the Behat plugin of the IDE — PhpStorm's `com.jetbrains.php.behat` or Raketa's `ru.raketa.php.behat` (`BehatLauncher`, `raketa-integration.xml`); in Raketa the runs use the PHP interpreter of the project (Docker Compose included)
