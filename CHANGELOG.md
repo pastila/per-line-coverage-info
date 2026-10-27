@@ -3,6 +3,8 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+
+## [2.9.1] - 2026-10-27
 - Fixed a crash in the Raketa IDE when the coverage tests tree is shown (`NoClassDefFoundError: icons/BehatIcons`): Behat nodes now use the Gherkin `.feature` file icon
 
 ## [2.9.0] - 2026-10-19
