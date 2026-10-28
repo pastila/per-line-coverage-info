@@ -5,10 +5,13 @@ import com.intellij.openapi.project.Project
 import com.intellij.util.Alarm
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryChangeListener
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Listens for any Git repository change (HEAD move, branch switch, pull, rebase, etc.)
  * and triggers offline-first coverage reload when the HEAD revision changes.
+ * When only the remote-tracking ref of the current branch moves (push, fetch), it
+ * restarts [CoveragePipelinePoller], which stops itself while nothing is pending.
  *
  * Replaces [CoverageBranchListener] which only fired on branch switch operations.
  * Uses a 2-second debounce to avoid redundant reloads during rapid changes
@@ -21,6 +24,9 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
 
     @Volatile
     private var lastKnownRevision: String? = null
+
+    /** Last seen hash of `origin/<current branch>` per repository root; "" = branch not pushed. */
+    private val lastKnownRemote = ConcurrentHashMap<String, String>()
 
     override fun repositoryChanged(repository: GitRepository) {
         val currentRevision = repository.currentRevision ?: return
@@ -36,7 +42,14 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
 
         val previous = lastKnownRevision
 
-        if (previous == currentRevision) return
+        if (previous == currentRevision) {
+            if (remoteRefMoved(repository)) {
+                log.info("Coverage: origin/${repository.currentBranchName} moved, resuming pipeline polling")
+                CoveragePipelinePoller.getInstance(project).start()
+            }
+            return
+        }
+        remoteRefMoved(repository)
 
         lastKnownRevision = currentRevision
 
@@ -66,6 +79,17 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
                 }
             }
         }, DEBOUNCE_MS)
+    }
+
+    /** Records the hash of `origin/<current branch>`; true when it changed since the last event. */
+    private fun remoteRefMoved(repository: GitRepository): Boolean {
+        val branch = repository.currentBranchName ?: return false
+        val branches = repository.branches
+        val hash = branches.remoteBranches.firstOrNull { it.name == "origin/$branch" }
+            ?.let { branches.getHash(it)?.asString() } ?: ""
+        val key = repository.root.path
+        val previous = lastKnownRemote.put(key, hash)
+        return previous != null && previous != hash && hash.isNotEmpty()
     }
 
     override fun dispose() {

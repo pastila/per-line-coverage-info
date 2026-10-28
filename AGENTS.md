@@ -52,9 +52,9 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | File | Purpose |
 |------|---------|
 | `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback → GitLab refresh), `loadFromGitLab()` (two-phase: silent resolve → visible download on cache miss). Resolves through `GitLabCoordinator` (memoized per git-root/HEAD, short-circuits when fresh within 60 s cooldown); coalesces identical downloads across windows via `singleFlight`. `downloadArtifacts()` filters by detected component, waits for running behat jobs (infinite, cancel via progress/branch switch), falls back to baseline pipeline on `NO_DATA`. `loadOrFetchBaseline()` accepts `preloadedReader` to avoid redundant `.cov4` opens. |
-| `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden |
+| `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden. When only `origin/<current branch>` moves (push / fetch) it restarts `CoveragePipelinePoller` |
 | `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; skipped when gutter hidden |
-| `CoveragePipelinePoller.kt` | Polls remote for new pipelines and auto-refreshes coverage (every 30 s; skipped while a load is in progress); uses the shared cached API, so N windows/pollers cost one network request per TTL; stopped/blocked when gutter hidden |
+| `CoveragePipelinePoller.kt` | Waits for the pipeline of the pushed commit and auto-refreshes coverage (every 30 s; skipped while a load is in progress). Reads the remote commit from the local `origin/<branch>` ref (no `git ls-remote`); asks GitLab (shared cached API) only when it differs from the loaded coverage; stops itself when there is nothing to wait for (coverage of the remote commit loaded, branch not pushed, pipeline of the remote commit failed, successful pipeline already loaded); stopped/blocked when gutter hidden |
 | `LoadCoverageAction.kt` | Find Action: "Load Coverage from GitLab" |
 | `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz) — adds a run to the local layer |
 | `ClearLocalCoverageAction.kt` | Find Action: "Clear Local Coverage" |

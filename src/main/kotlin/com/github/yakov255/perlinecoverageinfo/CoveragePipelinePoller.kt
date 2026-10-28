@@ -36,16 +36,19 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
     /** SHA of a failed pipeline we already notified about (don't re-notify). */
     private var reportedFailureSha: String? = null
 
-    /** Last time the quiet "remote unchanged" state was logged (throttle debug noise). */
-    private var lastQuietLogMs = 0L
+    /** SHA of the successful pipeline a load was last triggered for (don't reload it in a loop). */
+    @Volatile
+    private var triggeredLoadSha: String? = null
 
     /**
-     * Starts or restarts the polling loop. Called after coverage loads, HEAD changes,
-     * or whenever the plugin should begin watching for pipeline updates.
+     * Starts the polling loop. Called after coverage loads and when the remote-tracking
+     * ref of the current branch moves (push / fetch, see [CoverageHeadTracker]).
      *
-     * The polling loop runs continuously once started: every [POLL_INTERVAL_MS] it
-     * checks whether the remote branch has a newer pipeline (vs loaded coverage) and
-     * reacts accordingly. It never stops itself — only [stop] or [dispose] ends it.
+     * Every [POLL_INTERVAL_MS] it compares the remote-tracking ref `origin/<branch>` —
+     * read locally, without network access — with the loaded coverage and asks GitLab
+     * for the pipeline only when they differ. The loop stops itself once there is
+     * nothing to wait for: coverage of the remote commit is loaded, the branch is not
+     * pushed, or the pipeline of the remote commit finished without success.
      */
     fun start() {
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
@@ -130,17 +133,12 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
             return
         }
 
-        val remoteSha = try {
-            CoverageResolver.runGitCommand(gitRoot, "ls-remote", "origin", "refs/heads/$branch")
-                ?.substringBefore('\t')
-        } catch (e: Exception) {
-            log.warn("Coverage: pipeline poll — git ls-remote failed: ${e.message}")
-            null
-        }
-
+        // The remote-tracking ref is updated by push and fetch; reading it costs no network
+        // request. CoverageHeadTracker restarts polling when it moves.
+        val remoteSha = CoverageResolver.runGitCommand(gitRoot, "rev-parse", "--verify", "--quiet", "refs/remotes/origin/$branch")
         if (remoteSha == null) {
-            log.info("Coverage: pipeline poll — could not contact remote, retrying in ${POLL_INTERVAL_MS}ms")
-            scheduleNext()
+            log.info("Coverage: pipeline poll — '$branch' has no origin/$branch ref, stopping until it is pushed")
+            stop()
             return
         }
 
@@ -148,13 +146,8 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         val loadedSha = dataService.coverageCommitHash
 
         if (remoteSha == loadedSha) {
-            // Quiet steady state (every poll cycle) — log at most once a minute.
-            val now = System.currentTimeMillis()
-            if (now - lastQuietLogMs > 60_000) {
-                lastQuietLogMs = now
-                log.debug("Coverage: pipeline poll — remote unchanged (${loadedSha?.take(8) ?: "none"}), coverage current")
-            }
-            scheduleNext()
+            log.info("Coverage: pipeline poll — coverage of origin/$branch (${remoteSha.take(8)}) is loaded, stopping")
+            stop()
             return
         }
 
@@ -193,6 +186,14 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
 
         when (latestPipeline.status) {
             "success" -> {
+                if (latestPipeline.sha == triggeredLoadSha) {
+                    // Already loaded, but it gave no coverage of this commit (e.g. the pipeline
+                    // has no coverage job for the component and the load fell back to master).
+                    log.info("Coverage: pipeline poll — pipeline ${latestPipeline.id} (${latestPipeline.sha.take(8)}) already loaded, stopping")
+                    stop()
+                    return
+                }
+                triggeredLoadSha = latestPipeline.sha
                 log.info("Coverage: pipeline poll — pipeline ${latestPipeline.id} (${latestPipeline.sha.take(8)}) succeeded, newer than loaded coverage")
                 triggerLoad()
             }
@@ -201,7 +202,13 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
                     reportedFailureSha = latestPipeline.sha
                     log.info("Coverage: pipeline poll — pipeline ${latestPipeline.id} (${latestPipeline.sha.take(8)}) is ${latestPipeline.status}")
                 }
-                scheduleNext()
+                if (latestPipeline.sha == remoteSha) {
+                    // The pipeline of the remote commit is final; a new one comes with a new push.
+                    log.info("Coverage: pipeline poll — nothing to wait for on '$branch', stopping")
+                    stop()
+                } else {
+                    scheduleNext()
+                }
             }
             in IN_FLIGHT_STATUSES -> {
                 log.info("Coverage: pipeline poll — pipeline ${latestPipeline.id} (${latestPipeline.sha.take(8)}) is ${latestPipeline.status}")
