@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.2/per-line-coverage-info-2.9.2.zip" version="2.9.2">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252" until-build="299.*"/>
+        <change-notes><![CDATA[<ul><li>Pipeline polling no longer runs <code>git ls-remote</code> every 30 s: it reads the local <code>origin/&lt;branch&gt;</code> ref (updated by push and fetch) and stops once the coverage of the remote commit is loaded or its pipeline has finished; a push or fetch that moves <code>origin/&lt;branch&gt;</code> resumes it</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.1/per-line-coverage-info-2.9.1.zip" version="2.9.1">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>

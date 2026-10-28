@@ -3,6 +3,8 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+
+## [2.9.2] - 2026-10-28
 - Pipeline polling no longer runs `git ls-remote` every 30 s: it reads the local `origin/<branch>` ref (updated by push and fetch) and stops once the coverage of the remote commit is loaded or its pipeline has finished; a push or fetch that moves `origin/<branch>` resumes it
 
 ## [2.9.1] - 2026-10-27
