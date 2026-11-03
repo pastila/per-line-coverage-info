@@ -4,6 +4,9 @@
 
 ## [Unreleased]
 
+## [2.9.3] - 2026-11-03
+- Fix coverage and local Behat paths after moving core to `app/raketa`
+
 ## [2.9.2] - 2026-10-28
 - Pipeline polling no longer runs `git ls-remote` every 30 s: it reads the local `origin/<branch>` ref (updated by push and fetch) and stops once the coverage of the remote commit is loaded or its pipeline has finished; a push or fetch that moves `origin/<branch>` resumes it
 
