@@ -141,13 +141,16 @@ object LocalCoverageMerge {
 
 object LocalCoveragePaths {
 
-    private val WEB_PREFIX = Regex("^(?:[^/]+/)?web/(.+)$")
+    // The service root can contain more than one segment (`app/raketa`), so
+    // the old `core/web/...`-specific pattern is not sufficient after #39294.
+    private val WEB_PREFIX = Regex("^(?:.*/)?web/(.+)$")
 
     /**
      * Maps a path from a `.covt` onto a git-root-relative path that exists.
      *
-     * The PHP extension relativises paths against the Behat base path (`/web/core`) and then
-     * prepends `--binary-coverage-root`, so files outside it come out as `core/web/app/...`
+     * The PHP extension relativises paths against the Behat base path (`/web/app/raketa`) and then
+     * prepends `--binary-coverage-root`, so files outside it come out as
+     * `app/raketa/web/...`.
      * instead of `app/...`. Such paths are rewritten when the stripped variant exists.
      *
      * @return the path to use, or null if neither variant exists.

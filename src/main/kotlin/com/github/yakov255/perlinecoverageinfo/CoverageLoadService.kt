@@ -575,7 +575,9 @@ class CoverageLoadService(private val project: Project) {
 
         log.info("Coverage: component '${component.serviceDir}' — ${artifactJobs.size} behat jobs ready")
         val targetJobs = artifactJobs
-        val artifactComponent = component.serviceDir
+        // Keep the cache/component id stable (`raketa`) while using the actual
+        // repository path (`app/raketa`) for path handling.
+        val artifactComponent = component.componentId
 
         if (indicator.isCanceled) {
             throw CoverageApiException(
@@ -618,7 +620,14 @@ class CoverageLoadService(private val project: Project) {
                 log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
                 val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
                 val normalized = if (artifactComponent == "raketa") {
-                    parsed.mapKeys { it.key.removePrefix("core/web/") }
+                    parsed.mapKeys {
+                        // Before #39294 the Behat root was `core`; after the move
+                        // it is `app/raketa`. Files outside that root are emitted
+                        // as `<root>/web/<path>` by the binary coverage reporter.
+                        it.key
+                            .removePrefix("app/raketa/web/")
+                            .removePrefix("core/web/")
+                    }
                 } else {
                     parsed
                 }
@@ -1033,7 +1042,7 @@ class CoverageLoadService(private val project: Project) {
         val entry = ComponentConfig.detectComponent(basePath, gitRoot)
         if (entry != null) {
             log.info("Coverage: detected component '${entry.serviceDir}'")
-            return entry.serviceDir
+            return entry.componentId
         }
         log.info("Coverage: no component detected for project at $basePath")
         return null

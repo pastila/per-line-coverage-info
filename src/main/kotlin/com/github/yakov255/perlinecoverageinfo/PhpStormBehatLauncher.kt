@@ -132,7 +132,7 @@ class PhpStormBehatLauncher : BehatLauncher {
      * Resolves the Behat config file path as a **local** filesystem path.
      *
      * For remote interpreters (Docker, SSH) the framework config stores container-side
-     * paths (e.g. `/web/core/behat.yml`). We convert them to local paths using the
+     * paths (e.g. `/web/app/raketa/features/behat.yml`). We convert them to local paths using the
      * interpreter's path mappings.
      */
     private fun resolveBehatLocalConfigFilePath(project: Project, runnerSettings: PhpTestRunnerSettings): String {
@@ -212,8 +212,9 @@ class PhpStormBehatLauncher : BehatLauncher {
 
     /**
      * Heuristic fallback: tries to match a remote path to a local file by
-     * progressively shorter suffixes. For example, `/web/core/behat.yml` is
-     * tried as `web/core/behat.yml`, then `core/behat.yml` under [basePath].
+     * progressively shorter suffixes. For example, `/web/app/raketa/features/behat.yml` is
+     * tried as `web/app/raketa/features/behat.yml`, then `app/raketa/features/behat.yml`
+     * under [basePath].
      */
     private fun matchRemotePathToLocal(remotePath: String, basePath: String): String {
         val parts = remotePath.split("/").filter { it.isNotEmpty() }

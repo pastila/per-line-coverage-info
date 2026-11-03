@@ -207,6 +207,12 @@ class LocalCoverageLayerTest {
             "app/raketa/api/src/Access/AccessFacade.php",
             LocalCoveragePaths.normalize("core/web/app/raketa/api/src/Access/AccessFacade.php") { it in existing },
         )
+        assertEquals(
+            "cli/scripts/check.php",
+            LocalCoveragePaths.normalize("app/raketa/web/cli/scripts/check.php") {
+                it == "cli/scripts/check.php"
+            },
+        )
     }
 
     @Test

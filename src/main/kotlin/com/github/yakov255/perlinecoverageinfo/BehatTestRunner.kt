@@ -38,7 +38,7 @@ object BehatTestRunner {
 
     /**
      * Bundles feature files / scenarios into Behat launches — one per Behat project (a
-     * monorepo has several: `core/behat.yml`, `api/rail/behat.yml`, `api/bus/behat.php`, …).
+ * monorepo has several: `app/raketa/features/behat.yml`, `api/rail/behat.yml`, `api/bus/behat.php`, …).
      * [pathsByFile] maps a feature file absolute path to the list of 1-based scenario line
      * numbers to run; an empty list means "run the entire file".
      *

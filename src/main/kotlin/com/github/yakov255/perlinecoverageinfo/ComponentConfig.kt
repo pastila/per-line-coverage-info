@@ -6,6 +6,8 @@ data class ComponentEntry(
     val serviceDir: String,
     val jobName: String,
 ) {
+    /** Stable component id used in CI job names and the local cache. */
+    val componentId: String = jobName
     /** CI job prefix of the legacy behat job, e.g. `test:behat:raketa`. */
     val jobPrefix: String = "test:behat:$jobName"
 
@@ -34,7 +36,7 @@ object ComponentConfig {
 
     private val COMPONENTS = listOf(
         ComponentEntry("api/avia", "avia"),
-        ComponentEntry("raketa", "raketa"),
+        ComponentEntry("app/raketa", "raketa"),
         ComponentEntry("api/hotels", "hotels"),
         ComponentEntry("api/transfer", "transfer"),
         ComponentEntry("api/rail", "rail"),
@@ -45,7 +47,7 @@ object ComponentConfig {
         ComponentEntry("api/bus", "bus"),
     )
 
-    private val RAKETA = COMPONENTS.first { it.serviceDir == "raketa" }
+    private val RAKETA = COMPONENTS.first { it.componentId == "raketa" }
 
     /** Present in every dedicated coverage job name; its presence marks a post-refactor pipeline. */
     private const val COVERAGE_JOB_MARKER = "test:behat:coverage:"

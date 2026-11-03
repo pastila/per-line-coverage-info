@@ -159,6 +159,25 @@ class LocalCoverageCommandTest {
     }
 
     @Test
+    fun `raketa config falls back to features directory after core move`() {
+        val result = LocalCoverageCommand.patch(
+            parameters = listOf(
+                "/web/app/raketa/vendor/bin/behat",
+                "/web/app/raketa/features/FeatureTest/a.feature",
+            ),
+            coverageDir = "storage/coverage",
+            isLocalDir = { it in setOf("app/raketa", "storage", "storage/coverage") },
+            readLocalFile = {
+                if (it == "app/raketa/features/behat.yml") coreConfig else null
+            },
+        )
+
+        val patched = result as Result.Patched
+        assertEquals("app/raketa", patched.serviceDir)
+        assertTrue(patched.parameters.contains("--binary-coverage-root=app/raketa"))
+    }
+
+    @Test
     fun `service without the binary coverage extension is left alone`() {
         val result = patch("/web/api/hotels/vendor/behat/behat/bin/behat", "--config", "/web/api/hotels/behat.yml")
 

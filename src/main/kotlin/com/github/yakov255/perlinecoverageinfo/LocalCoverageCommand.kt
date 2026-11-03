@@ -3,7 +3,7 @@ package com.github.yakov255.perlinecoverageinfo
 /**
  * Rewrites a Behat command line so the run writes a `.covt` into the local coverage directory.
  *
- * Pure logic — paths in the command line are interpreter-side (e.g. `/web/core/...` inside a
+ * Pure logic — paths in the command line are interpreter-side (e.g. `/web/app/raketa/...` inside a
  * Docker container), the git root is host-side; the two are matched by the service directory
  * both have in common.
  */
@@ -61,7 +61,14 @@ object LocalCoverageCommand {
         val (remoteRoot, serviceDir) = matchServiceDir(remoteServiceDir, isLocalDir)
             ?: return Result.Skipped("$remoteServiceDir does not correspond to a directory in the git root")
 
-        val configRelative = configPath(parameters, remoteRoot) ?: "$serviceDir/behat.yml"
+        val configRelative = configPath(parameters, remoteRoot)
+            ?: listOf(
+                "$serviceDir/behat.yml",
+                "$serviceDir/features/behat.yml",
+                "$serviceDir/behat.php",
+                "$serviceDir/features/behat.php",
+            ).firstOrNull { readLocalFile(it) != null }
+            ?: return Result.Skipped("Behat config for $serviceDir not found")
         val config = readLocalFile(configRelative)
             ?: return Result.Skipped("Behat config $configRelative not found")
         val profile = findCoverageProfile(config)
@@ -81,7 +88,7 @@ object LocalCoverageCommand {
     /**
      * Splits an interpreter-side service directory into (interpreter-side git root, git-root-relative
      * service directory) by finding the shortest trailing path that exists under the host git root:
-     * `/web/core` → (`/web`, `core`), `/web/api/hotels` → (`/web`, `api/hotels`).
+     * `/web/app/raketa` → (`/web`, `app/raketa`), `/web/api/hotels` → (`/web`, `api/hotels`).
      */
     internal fun matchServiceDir(remoteServiceDir: String, isLocalDir: (String) -> Boolean): Pair<String, String>? {
         val segments = remoteServiceDir.trimEnd('/').split('/').filter { it.isNotEmpty() }

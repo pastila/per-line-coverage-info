@@ -7,7 +7,13 @@ import org.junit.Test
 
 class ComponentConfigTest {
 
-    private val raketa = ComponentEntry("raketa", "raketa")
+    private val raketa = ComponentEntry("app/raketa", "raketa")
+
+    @Test
+    fun `raketa keeps the CI component id separate from its repository path`() {
+        assertEquals("app/raketa", raketa.serviceDir)
+        assertEquals("raketa", raketa.componentId)
+    }
 
     @Test
     fun `job prefixes are derived from the component job token`() {

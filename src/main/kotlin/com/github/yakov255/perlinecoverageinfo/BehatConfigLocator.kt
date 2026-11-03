@@ -5,8 +5,8 @@ import java.io.File
 /**
  * Finds the Behat project a feature file belongs to.
  *
- * A monorepo has several independent Behat setups (`core/behat.yml`, `api/rail/behat.yml`,
- * `api/bus/behat.php`, …). Behat resolves relative specification paths against the directory
+ * A monorepo has several independent Behat setups (`app/raketa/features/behat.yml`,
+ * `api/rail/behat.yml`, `api/bus/behat.php`, …). Behat resolves relative specification paths against the directory
  * of the config file it was started with, so a run must use the config that owns the feature
  * file — and the paths must be relative to that directory.
  *
