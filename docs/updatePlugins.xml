@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.3/per-line-coverage-info-2.9.3.zip" version="2.9.3">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252" until-build="299.*"/>
+        <change-notes><![CDATA[<ul><li>Fix coverage and local Behat paths after moving core to <code>app/raketa</code></li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.2/per-line-coverage-info-2.9.2.zip" version="2.9.2">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>
