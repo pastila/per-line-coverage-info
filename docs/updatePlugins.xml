@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.4/per-line-coverage-info-2.9.4.zip" version="2.9.4">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252"/>
+        <change-notes><![CDATA[<ul><li>Restore Behat scenario paths under <code>app/raketa/features</code> for navigation and launches; normalize CI and local test names consistently so local re-runs replace their CI coverage</li><li>Normalize legacy <code>.cov4</code> file paths and test names on read without downloading artifacts again</li><li>Update the bundled PHP coverage extension and sample configs to repository-relative paths (<code>perLine.repoRoot</code>)</li><li>Remove the upper IDE build limit</li><li>Fix release notes generation in CI</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.3/per-line-coverage-info-2.9.3.zip" version="2.9.3">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>
