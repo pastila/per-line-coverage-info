@@ -258,7 +258,9 @@ class LocalCoverageService(private val project: Project) : Disposable {
         val root = gitRoot ?: findGitRoot()?.also { gitRoot = it }
             ?: throw CoverageApiException("Project is not inside a git repository", kind = CoverageErrorKind.GIT)
 
-        val covt = BinaryCoverageParser.parsePossiblyGzippedCovt(file.readBytes())
+        val covt = CoveragePathNormalizer.normalizeRaketaRun(
+            BinaryCoverageParser.parsePossiblyGzippedCovt(file.readBytes()), root,
+        )
 
         val coverage = LinkedHashMap<String, Map<Int, List<String>>>(covt.coverage.size)
         val snapshots = HashMap<String, String>(covt.coverage.size)

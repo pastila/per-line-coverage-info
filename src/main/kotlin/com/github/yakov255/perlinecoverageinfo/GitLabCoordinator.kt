@@ -86,8 +86,13 @@ class GitLabCoordinator : Disposable {
      * via [open] on first access. Readers are immutable and [Cov4Reader.close]
      * is a no-op, so sharing an instance across project windows is safe.
      */
-    fun sharedReader(commitHash: String, component: String, open: () -> Cov4Reader?): Cov4Reader? =
-        readerCache.getOrOpen("$commitHash|$component", open)
+    fun sharedReader(
+        commitHash: String,
+        component: String,
+        open: () -> Cov4Reader?,
+        variant: String = "",
+    ): Cov4Reader? =
+        readerCache.getOrOpen("$commitHash|$component|$variant", open)
 
     /**
      * Coalesces concurrent identical work: if another thread is already running

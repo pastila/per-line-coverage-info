@@ -3,6 +3,11 @@
 # per-line-coverage-info Changelog
 
 ## [Unreleased]
+- Restore Behat scenario paths under `app/raketa/features` for navigation and launches; normalize CI and local test names consistently so local re-runs replace their CI coverage
+- Normalize legacy `.cov4` file paths and test names on read without downloading artifacts again
+- Update the bundled PHP coverage extension and sample configs to repository-relative paths (`perLine.repoRoot`)
+- Remove the upper IDE build limit
+- Fix release notes generation in CI
 
 ## [2.9.3] - 2026-11-03
 - Fix coverage and local Behat paths after moving core to `app/raketa`

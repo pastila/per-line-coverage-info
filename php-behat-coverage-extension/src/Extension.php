@@ -124,7 +124,7 @@ class Extension implements ExtensionInterface
                         ->arrayNode('perLine')
                             ->children()
                                 ->scalarNode('target')->isRequired()->cannotBeEmpty()->end()
-                                ->scalarNode('pathToCoverageRoot')->isRequired()->cannotBeEmpty()->end()
+                                ->scalarNode('repoRoot')->isRequired()->cannotBeEmpty()->end()
                             ->end()
                         ->end()
                         ->arrayNode('clover')

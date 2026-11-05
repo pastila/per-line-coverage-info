@@ -64,25 +64,44 @@ class CoverageCacheService(private val project: Project) {
      * Returns a [Cov4Reader] for on-demand file access, or null if not cached.
      * The caller owns the reader lifecycle and must close it when done.
      */
-    fun get(commitHash: String, component: String): Cov4Reader? {
+    fun get(commitHash: String, component: String, gitRoot: File? = null): Cov4Reader? {
         val index = readIndex() ?: return null
         val entry = index.entries.find { it.commitHash == commitHash && it.component == component } ?: return null
         val cov4File = File(cacheDir(), cov4FileName(commitHash, component))
         if (!cov4File.exists()) return null
 
+        // Old .cov4 files were written before path normalization (and local .covt imports
+        // are still written as-is), so normalize keys and test names while reading.
+        // For the current repo-relative format this is a no-op.
+        val pathNormalizer: (String) -> String
+        val testNormalizer: (String) -> String
+        if (component == "raketa") {
+            val suites = CoveragePathNormalizer.raketaFeatureSuiteEntries(gitRoot)
+            pathNormalizer = { CoveragePathNormalizer.normalizeRaketaFilePath(it) }
+            testNormalizer = { CoveragePathNormalizer.normalizeRaketaBehatName(it, suites) }
+        } else {
+            pathNormalizer = { it }
+            testNormalizer = { it }
+        }
+
         // Share Cov4Reader instances across project windows so large files are read
         // once per commit, not once per open window. Readers are immutable and
         // close() is a no-op, so sharing an instance is safe.
-        return GitLabCoordinator.getInstance().sharedReader(commitHash, component) {
-            try {
-                Cov4Reader(cov4File).also {
-                    log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB, component=$component)")
+        return GitLabCoordinator.getInstance().sharedReader(
+            commitHash,
+            component,
+            open = {
+                try {
+                    Cov4Reader(cov4File, pathNormalizer, testNormalizer).also {
+                        log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB, component=$component)")
+                    }
+                } catch (e: Exception) {
+                    log.warn("Coverage cache: failed to open COV4 file for commit $commitHash (component=$component)", e)
+                    null
                 }
-            } catch (e: Exception) {
-                log.warn("Coverage cache: failed to open COV4 file for commit $commitHash (component=$component)", e)
-                null
-            }
-        }
+            },
+            variant = if (component == "raketa") "norm-v1" else "plain",
+        )
     }
 
     /**

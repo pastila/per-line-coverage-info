@@ -125,7 +125,7 @@ class ReportService
                     break;
                 case 'perLine':
                     $report = new PerLineCoverageReportBinary();
-                    $report->process($coverage, $config['target'], $config['pathToCoverageRoot']);
+                    $report->process($coverage, $config['target'], $config['repoRoot']);
                     break;
             }
         }

@@ -11,6 +11,30 @@ class LocalCoverageLayerTest {
     // --- merge ---
 
     @Test
+    fun `legacy local test names replace repo relative CI coverage including header only tests`() {
+        val local = CoveragePathNormalizer.normalizeRaketaRun(
+            BinaryCoverageParser.CovtData(
+                listOf("app/raketa/E2E/order.feature:10", "app/raketa/FeatureTest/client.feature:20"),
+                mapOf("app/raketa/web/src/A.php" to mapOf(2 to listOf("app/raketa/E2E/order.feature:10"))),
+            ),
+            null,
+        )
+        val order = "app/raketa/features/E2E/order.feature:10"
+        val client = "app/raketa/features/FeatureTest/client.feature:20"
+        val ci = mapOf(1 to listOf(order, client, "other"), 2 to emptyList())
+
+        assertEquals(setOf(order, client), local.tests.toSet())
+        assertEquals(
+            mapOf(1 to listOf("other"), 2 to listOf(order)),
+            LocalCoverageMerge.merge(ci, local.coverage["src/A.php"], local.tests.toSet()),
+        )
+        assertEquals(
+            mapOf(3 to listOf("other")),
+            LocalCoverageMerge.merge(mapOf(3 to listOf(client, "other")), null, local.tests.toSet()),
+        )
+    }
+
+    @Test
     fun `merge without local data returns CI coverage as is`() {
         val ci = mapOf(1 to listOf("ci1"), 2 to emptyList())
         assertSame(ci, LocalCoverageMerge.merge(ci, null, emptySet()))
