@@ -89,7 +89,7 @@ class CoverageLoadService(private val project: Project) {
         if (pinned != null) {
             val root = findGitRoot()
             val component = if (root != null) detectComponent(root) ?: "raketa" else "raketa"
-            val reader = cache.get(pinned, component)
+            val reader = cache.get(pinned, component, root)
             if (reader != null) {
                 val alreadyLoaded = dataService.coverageCommitHash == pinned && dataService.hasData()
                 log.info("Coverage: offline-first pinned — commit ${pinned.take(8)}, alreadyLoaded=$alreadyLoaded")
@@ -121,7 +121,7 @@ class CoverageLoadService(private val project: Project) {
                 if (commits.isNotEmpty()) {
                     val cachedCommit = cache.findCachedCommit(commits)
                     if (cachedCommit != null) {
-                        val reader = cache.get(cachedCommit, component)
+                        val reader = cache.get(cachedCommit, component, gitRoot)
                         if (reader != null) {
                             val alreadyLoaded = dataService.coverageCommitHash == cachedCommit && dataService.hasData()
                             log.info("Coverage: offline-first hit — commit ${cachedCommit.take(8)} (component=$component), alreadyLoaded=$alreadyLoaded")
@@ -153,7 +153,7 @@ class CoverageLoadService(private val project: Project) {
                 // No exact commit match — fall back to the most recently cached artifact for this component.
                 val latestArtifact = cache.listArtifacts().firstOrNull { it.component == component }
                 if (latestArtifact != null) {
-                    val reader = cache.get(latestArtifact.commitHash, latestArtifact.component)
+                    val reader = cache.get(latestArtifact.commitHash, latestArtifact.component, gitRoot)
                     if (reader != null) {
                         val alreadyLoaded = dataService.coverageCommitHash == latestArtifact.commitHash && dataService.hasData()
                         log.info("Coverage: offline-first fallback — commit ${latestArtifact.commitHash.take(8)} (component=$component), alreadyLoaded=$alreadyLoaded")
@@ -299,8 +299,8 @@ class CoverageLoadService(private val project: Project) {
             return
         }
 
-        val primaryCached = cache.get(resolved.commitHash, component)
-        val baselineCached = dual.baseline?.let { cache.get(it.commitHash, component) }
+        val primaryCached = cache.get(resolved.commitHash, component, resolved.gitRoot)
+        val baselineCached = dual.baseline?.let { cache.get(it.commitHash, component, it.gitRoot) }
 
         if (primaryCached != null && baselineCached != null) {
             // Both cached — apply silently, no progress shown
@@ -380,7 +380,7 @@ class CoverageLoadService(private val project: Project) {
                             cache.writeCov4(result.resolved.commitHash, result.resolved.pipelineId, cr.coverage, component = cr.component, branch = cr.branch)
                         }
 
-                        val freshReader = cache.get(result.resolved.commitHash, component)
+                        val freshReader = cache.get(result.resolved.commitHash, component, result.resolved.gitRoot)
                         if (freshReader != null) {
                             dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
                             computeAndStoreWarningContext(result.resolved.gitRoot)
@@ -466,20 +466,6 @@ class CoverageLoadService(private val project: Project) {
         if (CoverageGutterVisibilityService.getInstance(project).visible) {
             CoveragePipelinePoller.getInstance(project).start()
         }
-    }
-
-    /**
-     * Top-level entries of `app/raketa/features` that are not top-level entries of
-     * `app/raketa` — the behat suites whose `features/` segment is stripped by the
-     * coverage extension (E2E, FeatureTest, Stubs, Support, ...).
-     */
-    private fun raketaFeatureSuiteEntries(gitRoot: File): Set<String> {
-        val appDir = File(gitRoot, "app/raketa")
-        val featuresDir = File(appDir, "features")
-        if (!featuresDir.isDirectory) return emptySet()
-        val topLevel = appDir.list()?.toSet().orEmpty()
-        val features = featuresDir.list()?.toSet().orEmpty()
-        return features - topLevel
     }
 
     /**
@@ -632,13 +618,7 @@ class CoverageLoadService(private val project: Project) {
                 log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
                 val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
                 val normalized = if (artifactComponent == "raketa") {
-                    val suiteEntries = raketaFeatureSuiteEntries(resolved.gitRoot)
-                    parsed.entries.associate { (filePath, lineMap) ->
-                        CoveragePathNormalizer.normalizeRaketaFilePath(filePath) to
-                            lineMap.mapValues { (_, tests) ->
-                                tests.map { CoveragePathNormalizer.normalizeRaketaBehatName(it, suiteEntries) }
-                            }
-                    }
+                    CoveragePathNormalizer.normalizeRaketaCoverage(parsed, resolved.gitRoot)
                 } else {
                     parsed
                 }
@@ -811,7 +791,7 @@ class CoverageLoadService(private val project: Project) {
             return false
         }
         try {
-            val cached = preloadedReader ?: cache.get(baseline.commitHash, component)
+            val cached = preloadedReader ?: cache.get(baseline.commitHash, component, baseline.gitRoot)
             if (cached != null) {
                 cache.updateLastUsed(baseline.commitHash, component)
                 dataService.setBaselineCov4Reader(cached, baseline.commitHash)
@@ -837,7 +817,7 @@ class CoverageLoadService(private val project: Project) {
             }
             val baselineComponent = result.componentResults.first().component
             cache.writeCov4(baseline.commitHash, baseline.pipelineId, result.componentResults.first().coverage, component = baselineComponent, branch = CoverageApiSettings.getInstance().coverageBranch)
-            val freshReader = cache.get(baseline.commitHash, baselineComponent)
+            val freshReader = cache.get(baseline.commitHash, baselineComponent, baseline.gitRoot)
             if (freshReader != null) {
                 dataService.setBaselineCov4Reader(freshReader, baseline.commitHash)
                 log.info("Coverage: baseline downloaded and attached (commit ${baseline.commitHash.take(8)})")
@@ -900,14 +880,20 @@ class CoverageLoadService(private val project: Project) {
                     val sha1 = MessageDigest.getInstance("SHA-1").digest(bytes)
                     val hash = sha1.joinToString("") { "%02x".format(it) }
 
-                    val cache = CoverageCacheService.getInstance(project)
-                    cache.writeCov4(hash, pipelineId = 0L, coverage, component = "raketa")
-
                     val gitRoot = findGitRootFromFile(file.parentFile) ?: findGitRoot()
-                    val dataService = CoverageDataService.getInstance(project)
                     val component = if (gitRoot != null) detectComponent(gitRoot) ?: "raketa" else "raketa"
+                    val normalizedCoverage = if (component == "raketa") {
+                        CoveragePathNormalizer.normalizeRaketaCoverage(coverage, gitRoot)
+                    } else {
+                        coverage
+                    }
 
-                    val reader = cache.get(hash, component)
+                    val cache = CoverageCacheService.getInstance(project)
+                    cache.writeCov4(hash, pipelineId = 0L, normalizedCoverage, component = "raketa")
+
+                    val dataService = CoverageDataService.getInstance(project)
+
+                    val reader = cache.get(hash, component, gitRoot)
                     if (reader != null) {
                         if (gitRoot != null) {
                             dataService.setCoverageContext(hash, gitRoot, stale = false)
@@ -921,7 +907,7 @@ class CoverageLoadService(private val project: Project) {
                             dataService.setCoverageContext(hash, gitRoot, stale = false)
                             computeAndStoreWarningContext(gitRoot)
                         }
-                        dataService.setCoverageAll(coverage)
+                        dataService.setCoverageAll(normalizedCoverage)
                     }
 
                     ApplicationManager.getApplication().invokeLater {
@@ -960,7 +946,7 @@ class CoverageLoadService(private val project: Project) {
         CoverageUserSelectionService.getInstance(project).pinnedCommitHash = commitHash
 
         ApplicationManager.getApplication().executeOnPooledThread {
-            val reader = cache.get(commitHash, component)
+            val reader = cache.get(commitHash, component, gitRoot)
             if (reader == null) {
                 log.warn("Coverage: loadFromCache — no .cov4 found for commit $commitHash (component=$component)")
                 onComplete?.let { ApplicationManager.getApplication().invokeLater(it) }

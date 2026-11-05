@@ -65,8 +65,8 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `BinaryCoverageParser.kt` | Parses `.covt` binary and CI artifact ZIPs → `Map<file, Map<line, List<test>>>` |
 | `CoveragePathNormalizer.kt` | Normalizes raketa `.covt` keys/tests to git-root-relative paths: strips the CI container prefix (`app/raketa/web/`, legacy `core/web/`) and restores the `features/` segment stripped by the behat base (`app/raketa/E2E/...` → `app/raketa/features/E2E/...`) |
 | `Cov4Writer.kt` | Writes COV4 random-access cache file (spec: `coverage_storage_format_v4.md`) |
-| `Cov4Reader.kt` | Reads COV4 on demand (lazy per-file decoding); implements `Closeable` |
-| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<projectId>/`; key = commit hash + component; files named `hash-component.cov4`; manages index, cleanup (7 days by `lastUsedMs`), last-used tracking, in-JVM-synchronized writes, shared `Cov4Reader` via coordinator. `CacheEntry` stores component and branch per artifact. |
+| `Cov4Reader.kt` | Reads COV4 on demand (lazy per-file decoding); implements `Closeable`. Accepts optional path/test normalizers, so old raketa `.cov4` caches are normalized while reading |
+| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<projectId>/`; key = commit hash + component; files named `hash-component.cov4`; manages index, cleanup (7 days by `lastUsedMs`), last-used tracking, in-JVM-synchronized writes, shared `Cov4Reader` via coordinator. `CacheEntry` stores component and branch per artifact. Opens raketa readers with path/test normalizers so pre-upgrade caches keep working. |
 
 ### In-memory model
 | File | Purpose |
@@ -207,7 +207,7 @@ Rules:
 - **Shared GitLab access**: always go through `GitLabCoordinator.getInstance().api()` (cached/rate-limited worker) — never construct a raw `GitLabApiClient` for the loading flow. `CoverageResolver`, `CoverageLoadService`, `CoveragePipelinePoller` take the `GitLabApi` facade.
 - **Component**: `ComponentConfig.detectComponent()` maps project root → `raketa`, subdirectory → matching component. Only behat jobs for the detected component are downloaded.
 - **Coverage CI jobs**: coverage archives (`coverage-reports/coverage.covt.gz`) are published by the dedicated `test:behat:coverage:<component>` jobs (`coverage-test` stage). The legacy `test:behat:<component>` jobs (`test` stage) keep only trace/junit artifacts — never select them for coverage downloads. `ComponentEntry.jobName` is the component token; both job prefixes derive from it.
-- **Raketa coverage paths**: the CI coverage extension writes `<SERVICE_DIR>/web/<container path>`. After the `core` → `app/raketa` move, raketa keys are `app/raketa/web/app/raketa/...` (legacy: `core/web/...`), and behat test paths lose the `features/` segment. `CoveragePathNormalizer` converts both to git-root-relative; update it if `SERVICE_DIR` changes again in the raketa CI.
+- **Raketa coverage paths**: the CI coverage extension writes `<SERVICE_DIR>/web/<container path>`. After the `core` → `app/raketa` move, raketa keys are `app/raketa/web/app/raketa/...` (legacy: `core/web/...`), and behat test paths lose the `features/` segment. `CoveragePathNormalizer` converts both to git-root-relative; update it if `SERVICE_DIR` changes again in the raketa CI. Old `.cov4` caches are normalized on read (idempotent), so no re-download is needed after upgrading.
 - **Waiting**: `downloadArtifacts()` waits indefinitely for running behat jobs; cancelled via progress bar (`indicator.isCanceled`) or branch switch (`pendingReload`). The wait-loop calls `invalidateJobs()` to bypass the jobs TTL cache.
 - **Fallback**: when the primary pipeline has no jobs for the component, `startDownloadTask()` falls back to the baseline (master) pipeline and clears the baseline reader.
 - **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.

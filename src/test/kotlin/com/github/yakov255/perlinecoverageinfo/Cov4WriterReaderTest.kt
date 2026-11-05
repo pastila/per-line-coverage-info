@@ -171,4 +171,48 @@ class Cov4WriterReaderTest {
             tempFile.delete()
         }
     }
+
+    @Test
+    fun testReadsOldRaketaFormatWithNormalizedPaths() {
+        val coverage = mapOf(
+            "app/raketa/web/app/raketa/api/agency/src/Foo.php" to mapOf(
+                1 to listOf("app/raketa/E2E/Agency/feature.feature:10"),
+            ),
+            "app/raketa/web/cli/scripts/Bar.php" to mapOf(
+                2 to listOf("app/raketa/web/app/raketa/raketa/BoundedContext/Client/Features/x.feature:5"),
+            ),
+        )
+        val suites = setOf("E2E", "FeatureTest", "Stubs", "Support")
+
+        val tempFile = Files.createTempFile("test", ".cov4").toFile()
+        try {
+            Cov4Writer.write(coverage, tempFile)
+            val reader = Cov4Reader(
+                tempFile,
+                pathNormalizer = CoveragePathNormalizer::normalizeRaketaFilePath,
+                testNormalizer = { CoveragePathNormalizer.normalizeRaketaBehatName(it, suites) },
+            )
+            reader.use {
+                assertEquals(
+                    setOf("app/raketa/api/agency/src/Foo.php", "cli/scripts/Bar.php"),
+                    it.allFilePaths,
+                )
+                assertEquals(
+                    listOf("app/raketa/features/E2E/Agency/feature.feature:10"),
+                    it.getCoverage("app/raketa/api/agency/src/Foo.php")!![1],
+                )
+                assertEquals(
+                    listOf("app/raketa/raketa/BoundedContext/Client/Features/x.feature:5"),
+                    it.getCoverage("cli/scripts/Bar.php")!![2],
+                )
+                // The old key also resolves because lookup paths are normalized.
+                assertEquals(
+                    listOf("app/raketa/features/E2E/Agency/feature.feature:10"),
+                    it.getCoverage("app/raketa/web/app/raketa/api/agency/src/Foo.php")!![1],
+                )
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
 }

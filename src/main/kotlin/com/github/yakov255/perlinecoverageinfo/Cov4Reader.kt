@@ -16,13 +16,16 @@ import java.util.zip.CRC32
  * This avoids loading the entire coverage dataset into memory — only the requested
  * file's block is parsed when an editor needs it.
  */
-class Cov4Reader(private val file: File) : AutoCloseable {
+class Cov4Reader(
+    private val file: File,
+    private val pathNormalizer: (String) -> String = { it },
+    private val testNormalizer: (String) -> String = { it },
+) : AutoCloseable {
 
     private val log = CoverageLog.get(Cov4Reader::class.java)
 
     private val tests: List<String>
-    private val fileIndex: Map<Long, IndexEntry>  // pathHash → entry
-    private val pathsByHash: Map<Long, String>     // pathHash → filePath
+    private val entriesByPath: Map<String, IndexEntry>  // normalized path → entry
 
     data class IndexEntry(
         val pathHash: Long,
@@ -34,25 +37,33 @@ class Cov4Reader(private val file: File) : AutoCloseable {
     )
 
     init {
-        val (t, idx) = readHeaderAndIndex()
-        tests = t
-        fileIndex = idx.associateBy { it.pathHash }
-        pathsByHash = idx.associate { it.pathHash to it.filePath }
+        val (rawTests, idx) = readHeaderAndIndex()
+        tests = rawTests.map(testNormalizer)
+
+        val byPath = LinkedHashMap<String, IndexEntry>(idx.size)
+        for (entry in idx) {
+            val normalizedPath = pathNormalizer(entry.filePath)
+            val previous = byPath.putIfAbsent(normalizedPath, entry)
+            if (previous != null) {
+                log.warn(
+                    "COV4: duplicate normalized path '$normalizedPath' " +
+                        "(${previous.filePath} and ${entry.filePath}); keeping the first"
+                )
+            }
+        }
+        entriesByPath = byPath
     }
 
-    val allFilePaths: Set<String> get() = pathsByHash.values.toSet()
+    val allFilePaths: Set<String> get() = entriesByPath.keys
 
-    fun hasData(): Boolean = fileIndex.isNotEmpty()
+    fun hasData(): Boolean = entriesByPath.isNotEmpty()
 
     /**
      * Reads coverage for a single file on demand.
      * Returns lineNum → testNames, or null if file not found in this .cov4.
      */
     fun getCoverage(filePath: String): Map<Int, List<String>>? {
-        val hash = Cov4Writer.fnv1a64(filePath)
-        val entry = fileIndex[hash] ?: return null
-        // Verify path matches (hash collision check)
-        if (entry.filePath != filePath) return null
+        val entry = entriesByPath[pathNormalizer(filePath)] ?: return null
 
         return RandomAccessFile(file, "r").use { raf ->
             val bytes = ByteArray(entry.dataSize)

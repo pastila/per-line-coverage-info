@@ -1,5 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import java.io.File
+
 /**
  * Normalizes paths written by the PHP coverage extension into git-root-relative paths.
  *
@@ -19,6 +21,24 @@ object CoveragePathNormalizer {
 
     private const val RAKETA_ROOT = "app/raketa/"
     private const val RAKETA_FEATURES = "app/raketa/features/"
+
+    /** Fallback when the repository is not available (e.g. reading an old cache offline). */
+    private val DEFAULT_RAKETA_FEATURE_SUITES = setOf("E2E", "FeatureTest", "Stubs", "Support")
+
+    /**
+     * Top-level entries of `app/raketa/features` that are not top-level entries of
+     * `app/raketa` — the behat suites whose `features/` segment is stripped by the
+     * coverage extension (E2E, FeatureTest, Stubs, Support, ...).
+     */
+    fun raketaFeatureSuiteEntries(gitRoot: File?): Set<String> {
+        if (gitRoot == null) return DEFAULT_RAKETA_FEATURE_SUITES
+        val appDir = File(gitRoot, "app/raketa")
+        val featuresDir = File(appDir, "features")
+        if (!featuresDir.isDirectory) return DEFAULT_RAKETA_FEATURE_SUITES
+        val topLevel = appDir.list()?.toSet().orEmpty()
+        val features = featuresDir.list()?.toSet().orEmpty()
+        return (features - topLevel).ifEmpty { DEFAULT_RAKETA_FEATURE_SUITES }
+    }
 
     /** Maps a coverage file key to a git-root-relative path. */
     fun normalizeRaketaFilePath(path: String): String = when {
@@ -55,5 +75,18 @@ object CoveragePathNormalizer {
         }
 
         return withFeatures + suffix
+    }
+
+    /** Normalizes a whole coverage map (file paths and test names) for the raketa component. */
+    fun normalizeRaketaCoverage(
+        coverage: Map<String, Map<Int, List<String>>>,
+        gitRoot: File?,
+    ): Map<String, Map<Int, List<String>>> {
+        val suites = raketaFeatureSuiteEntries(gitRoot)
+        return coverage.entries.associate { (path, lineMap) ->
+            normalizeRaketaFilePath(path) to lineMap.mapValues { (_, tests) ->
+                tests.map { normalizeRaketaBehatName(it, suites) }
+            }
+        }
     }
 }

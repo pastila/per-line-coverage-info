@@ -81,4 +81,39 @@ class CoveragePathNormalizerTest {
         val name = "app/raketa/E2E/AgencyAPI/feature.feature"
         assertEquals(name, CoveragePathNormalizer.normalizeRaketaBehatName(name, suites))
     }
+
+    @Test
+    fun `default feature suites are used without a git root`() {
+        assertEquals(
+            setOf("E2E", "FeatureTest", "Stubs", "Support"),
+            CoveragePathNormalizer.raketaFeatureSuiteEntries(null),
+        )
+    }
+
+    @Test
+    fun `normalizes a whole coverage map`() {
+        val input = mapOf(
+            "app/raketa/web/app/raketa/api/agency/src/Foo.php" to mapOf(
+                1 to listOf("app/raketa/E2E/Agency/feature.feature:10"),
+            ),
+            "app/raketa/web/cli/scripts/Bar.php" to mapOf(
+                2 to listOf("app/raketa/web/app/raketa/raketa/BoundedContext/Client/Features/x.feature:5"),
+            ),
+        )
+
+        val normalized = CoveragePathNormalizer.normalizeRaketaCoverage(input, null)
+
+        assertEquals(
+            setOf("app/raketa/api/agency/src/Foo.php", "cli/scripts/Bar.php"),
+            normalized.keys,
+        )
+        assertEquals(
+            listOf("app/raketa/features/E2E/Agency/feature.feature:10"),
+            normalized["app/raketa/api/agency/src/Foo.php"]!![1],
+        )
+        assertEquals(
+            listOf("app/raketa/raketa/BoundedContext/Client/Features/x.feature:5"),
+            normalized["cli/scripts/Bar.php"]!![2],
+        )
+    }
 }
