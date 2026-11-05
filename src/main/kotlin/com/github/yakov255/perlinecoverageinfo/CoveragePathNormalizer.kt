@@ -1,6 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import java.io.File
+import java.util.IdentityHashMap
 
 /**
  * Normalizes paths written by the PHP coverage extension into git-root-relative paths.
@@ -74,28 +75,39 @@ object CoveragePathNormalizer {
             normalized
         }
 
-        return withFeatures + suffix
+        return if (withFeatures == path) name else withFeatures + suffix
     }
 
     /** Normalizes a whole coverage map (file paths and test names) for the raketa component. */
     fun normalizeRaketaCoverage(
         coverage: Map<String, Map<Int, List<String>>>,
         gitRoot: File?,
-    ): Map<String, Map<Int, List<String>>> {
-        val suites = raketaFeatureSuiteEntries(gitRoot)
-        return coverage.entries.associate { (path, lineMap) ->
-            normalizeRaketaFilePath(path) to lineMap.mapValues { (_, tests) ->
-                tests.map { normalizeRaketaBehatName(it, suites) }
-            }
-        }
-    }
+    ): Map<String, Map<Int, List<String>>> = RaketaNormalizer(raketaFeatureSuiteEntries(gitRoot)).coverage(coverage)
 
     /** Includes header-only tests so a local re-run also supersedes CI files it no longer reaches. */
     fun normalizeRaketaRun(data: BinaryCoverageParser.CovtData, gitRoot: File?): BinaryCoverageParser.CovtData {
-        val suites = raketaFeatureSuiteEntries(gitRoot)
+        val normalizer = RaketaNormalizer(raketaFeatureSuiteEntries(gitRoot))
         return BinaryCoverageParser.CovtData(
-            data.tests.map { normalizeRaketaBehatName(it, suites) },
-            normalizeRaketaCoverage(data.coverage, gitRoot),
+            data.tests.map(normalizer::testName),
+            normalizer.coverage(data.coverage),
         )
+    }
+
+    /** Caches belong to one report, so parallel downloads neither share state nor retain old reports. */
+    private class RaketaNormalizer(private val suites: Set<String>) {
+        private val names = HashMap<String, String>()
+
+        fun testName(name: String): String = names.getOrPut(name) { normalizeRaketaBehatName(name, suites) }
+
+        fun coverage(coverage: Map<String, Map<Int, List<String>>>): Map<String, Map<Int, List<String>>> {
+            // The parser shares a test set between all lines referencing it. Preserve that
+            // sharing without hashing/comparing a potentially large list for every line.
+            val testSets = IdentityHashMap<List<String>, List<String>>()
+            return coverage.entries.associate { (path, lineMap) ->
+                normalizeRaketaFilePath(path) to lineMap.mapValues { (_, tests) ->
+                    testSets.getOrPut(tests) { tests.map(::testName) }
+                }
+            }
+        }
     }
 }

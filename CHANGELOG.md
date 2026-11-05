@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Reduce CPU and allocation overhead when processing coverage artifacts: decode shared test sets once and normalize each unique test name once per report
+
 ## [2.9.4] - 2026-11-05
 - Restore Behat scenario paths under `app/raketa/features` for navigation and launches; normalize CI and local test names consistently so local re-runs replace their CI coverage
 - Normalize legacy `.cov4` file paths and test names on read without downloading artifacts again
