@@ -59,7 +59,7 @@ class ComponentConfigTest {
     fun `jobs of other components are not selected`() {
         val names = listOf(
             "test:behat:coverage:avia-8.5: [sprint:1]",
-            "test:behat:raketa-8.5: [sprint:1]",
+            "test:behat:avia-8.5: [sprint:1]",
         )
 
         assertTrue(ComponentConfig.selectCoverageJobNames(names, raketa).isEmpty())

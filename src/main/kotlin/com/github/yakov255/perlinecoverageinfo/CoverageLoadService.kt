@@ -469,6 +469,20 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
+     * Top-level entries of `app/raketa/features` that are not top-level entries of
+     * `app/raketa` — the behat suites whose `features/` segment is stripped by the
+     * coverage extension (E2E, FeatureTest, Stubs, Support, ...).
+     */
+    private fun raketaFeatureSuiteEntries(gitRoot: File): Set<String> {
+        val appDir = File(gitRoot, "app/raketa")
+        val featuresDir = File(appDir, "features")
+        if (!featuresDir.isDirectory) return emptySet()
+        val topLevel = appDir.list()?.toSet().orEmpty()
+        val features = featuresDir.list()?.toSet().orEmpty()
+        return features - topLevel
+    }
+
+    /**
      * Selects the behat jobs that publish coverage artifacts for [component].
      *
      * CI publishes coverage from dedicated `test:behat:coverage:<component>` jobs
@@ -618,7 +632,13 @@ class CoverageLoadService(private val project: Project) {
                 log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
                 val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
                 val normalized = if (artifactComponent == "raketa") {
-                    parsed.mapKeys { it.key.removePrefix("core/web/") }
+                    val suiteEntries = raketaFeatureSuiteEntries(resolved.gitRoot)
+                    parsed.entries.associate { (filePath, lineMap) ->
+                        CoveragePathNormalizer.normalizeRaketaFilePath(filePath) to
+                            lineMap.mapValues { (_, tests) ->
+                                tests.map { CoveragePathNormalizer.normalizeRaketaBehatName(it, suiteEntries) }
+                            }
+                    }
                 } else {
                     parsed
                 }
