@@ -181,11 +181,15 @@ tasks {
                     val bodyLines = section.lines().drop(1).dropWhile { it.isBlank() }
                     val rawNotes = bodyLines.joinToString("\n").trim()
                     val htmlNotes = if (rawNotes.isNotBlank()) markdownToHTML(rawNotes) else ""
+                    val untilBuildAttribute = untilBuild.orNull
+                        ?.takeIf { it.isNotBlank() }
+                        ?.let { """ until-build="$it"""" }
+                        ?: ""
 
                     appendLine("""    <plugin id="${pluginId.get()}" url="$repo/releases/download/$ver/per-line-coverage-info-$ver.zip" version="$ver">""")
                     appendLine("        <name>${pluginName.get()}</name>")
                     appendLine("        <vendor>yakov255</vendor>")
-                    appendLine("""        <idea-version since-build="${sinceBuild.get()}" until-build="${untilBuild.get()}"/>""")
+                    appendLine("""        <idea-version since-build="${sinceBuild.get()}"$untilBuildAttribute/>""")
                     if (htmlNotes.isNotBlank()) {
                         appendLine("        <change-notes><![CDATA[$htmlNotes]]></change-notes>")
                     }
