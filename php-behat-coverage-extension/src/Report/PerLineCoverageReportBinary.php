@@ -21,13 +21,14 @@ final readonly class PerLineCoverageReportBinary
      *
      * @param CodeCoverage $coverage The coverage data
      * @param resource $stream Output stream (file handle, php://output, etc.)
-     * @param string $pathToCoverageRoot Root path for the repository
+     * @param string $repoRoot Repository root in the container; all paths in the report are relative to it
      */
     public function processToStream(
         CodeCoverage $coverage,
         $stream,
-        string $pathToCoverageRoot
+        string $repoRoot
     ): void {
+        $repoPrefix = $this->repoPrefix($repoRoot);
         $report = $coverage->getReport();
 
         // First pass: collect all test identifiers from coverage data
@@ -68,7 +69,7 @@ final readonly class PerLineCoverageReportBinary
         $this->writeHeader($stream, $buffer);
 
         // Write test section
-        $this->writeTestSection($stream, $tests, $buffer, $pathToCoverageRoot);
+        $this->writeTestSection($stream, $tests, $buffer, $repoPrefix);
 
         // Second pass: write file coverage incrementally
         foreach ($report as $item) {
@@ -76,12 +77,11 @@ final readonly class PerLineCoverageReportBinary
                 continue;
             }
 
-            $filePath = $item->pathAsString();
-            $relativeFilePath = str_replace(rtrim($pathToCoverageRoot, '/') . DIRECTORY_SEPARATOR, '', $filePath);
+            $filePath = $this->toRepoPath($item->pathAsString(), $repoPrefix);
 
             $lineCoverageData = $item->lineCoverageData();
 
-            $this->writeFileCoverage($stream, $relativeFilePath, $lineCoverageData, $testIndexMap, $buffer);
+            $this->writeFileCoverage($stream, $filePath, $lineCoverageData, $testIndexMap, $buffer);
         }
 
         // Write end marker
@@ -109,16 +109,14 @@ final readonly class PerLineCoverageReportBinary
     /**
      * Write test section
      */
-    private function writeTestSection($stream, array $tests, string &$buffer, string $pathToCoverageRoot): void
+    private function writeTestSection($stream, array $tests, string &$buffer, string $repoPrefix): void
     {
         // Total test count
         $this->writeUint32ToBuffer($stream, count($tests), $buffer);
 
-        $repoRootPrefix = rtrim($pathToCoverageRoot, '/') . DIRECTORY_SEPARATOR;
-
         // Write each test
         foreach ($tests as $test) {
-            $this->writeStringToBuffer($stream, substr($test, strlen($repoRootPrefix)), $buffer);
+            $this->writeStringToBuffer($stream, $this->toRepoPath($test, $repoPrefix), $buffer);
         }
     }
 
@@ -269,7 +267,7 @@ final readonly class PerLineCoverageReportBinary
     public function process(
         CodeCoverage $coverage,
         string $target,
-        string $pathToCoverageRoot
+        string $repoRoot
     ): void {
         // Open file for writing
         $stream = fopen($target, 'wb');
@@ -281,10 +279,31 @@ final readonly class PerLineCoverageReportBinary
             $this->processToStream(
                 $coverage,
                 $stream,
-                $pathToCoverageRoot
+                $repoRoot
             );
         } finally {
             fclose($stream);
         }
+    }
+
+    private function repoPrefix(string $repoRoot): string
+    {
+        $resolved = realpath($repoRoot);
+        $root     = $resolved !== false ? $resolved : $repoRoot;
+
+        return rtrim(str_replace('\\', '/', $root), '/') . '/';
+    }
+
+    private function toRepoPath(string $path, string $repoPrefix): string
+    {
+        $normalized = str_replace('\\', '/', $path);
+
+        if (strpos($normalized, $repoPrefix) === 0) {
+            return substr($normalized, strlen($repoPrefix));
+        }
+
+        // Paths outside the repository cannot be expressed as repo-relative;
+        // keep them without a leading slash so the format stays uniform.
+        return ltrim($normalized, '/');
     }
 }

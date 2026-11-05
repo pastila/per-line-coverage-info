@@ -15,7 +15,7 @@ default:
       reports:
         perLine:
           target: ./calc/coverage.covt
-          pathToCoverageRoot: /app
+          repoRoot: /app
         text:
           showOnlySummary: true
           showColors: true
