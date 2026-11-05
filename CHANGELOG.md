@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.9.5] - 2026-11-05
+
 - Reduce CPU and allocation overhead when processing coverage artifacts: decode shared test sets once and normalize each unique test name once per report
 
 ## [2.9.4] - 2026-11-05
