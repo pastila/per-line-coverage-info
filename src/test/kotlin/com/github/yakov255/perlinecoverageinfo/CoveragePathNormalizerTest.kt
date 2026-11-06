@@ -1,6 +1,8 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertSame
 import org.junit.Test
 
 class CoveragePathNormalizerTest {
@@ -68,6 +70,7 @@ class CoveragePathNormalizerTest {
     fun `does not insert features twice`() {
         val name = "app/raketa/features/E2E/AgencyAPI/feature.feature:7"
         assertEquals(name, CoveragePathNormalizer.normalizeRaketaBehatName(name, suites))
+        assertSame(name, CoveragePathNormalizer.normalizeRaketaBehatName(name, suites))
     }
 
     @Test
@@ -115,5 +118,36 @@ class CoveragePathNormalizerTest {
             listOf("app/raketa/raketa/BoundedContext/Client/Features/x.feature:5"),
             normalized["cli/scripts/Bar.php"]!![2],
         )
+    }
+
+    @Test
+    fun `reuses normalized test sets and names across lines and files`() {
+        val name = "app/raketa/E2E/Agency/feature.feature:10"
+        val sharedTests = listOf(name)
+        // Equal names in distinct lists must also share their normalized string.
+        val otherTests = listOf(String(name.toCharArray()))
+        val input = mapOf(
+            "core/web/src/Foo.php" to (1..10_000).associateWith { sharedTests },
+            "core/web/src/Bar.php" to mapOf(1 to sharedTests, 2 to otherTests, 3 to emptyList()),
+        )
+
+        val normalized = CoveragePathNormalizer.normalizeRaketaCoverage(input, null)
+        val foo = normalized.getValue("src/Foo.php")
+        val bar = normalized.getValue("src/Bar.php")
+        val expected = listOf("app/raketa/features/E2E/Agency/feature.feature:10")
+        foo.values.forEach {
+            assertEquals(expected, it)
+            assertSame(foo.getValue(1), it)
+        }
+        assertSame(foo.getValue(1), bar.getValue(1))
+        assertEquals(expected, bar.getValue(2))
+        assertSame(foo.getValue(1)[0], bar.getValue(2)[0])
+        assertEquals(emptyList<String>(), bar.getValue(3))
+        assertEquals(normalized, CoveragePathNormalizer.normalizeRaketaCoverage(normalized, null))
+
+        // A second report must not reuse or retain the first report's caches.
+        val next = CoveragePathNormalizer.normalizeRaketaCoverage(input, null)
+        assertEquals(normalized, next)
+        assertNotSame(foo.getValue(1), next.getValue("src/Foo.php").getValue(1))
     }
 }

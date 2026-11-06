@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Reduce memory and CPU overhead when processing coverage artifacts: decode shared test sets once and normalize each unique test name once per report
+
 ## [2.7.2] - 2026-11-05
 - Fix raketa coverage paths after the `core` → `app/raketa` move: strip the new `app/raketa/web/` CI prefix (legacy `core/web/` still supported)
 - Restore the `features/` segment in raketa behat test paths so test navigation and run work again
