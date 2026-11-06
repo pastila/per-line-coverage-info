@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.6/per-line-coverage-info-2.9.6.zip" version="2.9.6">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252"/>
+        <change-notes><![CDATA[<ul><li>Fix <code>Expected FILE marker</code> errors after coverage cache rewrites: keep each reader's index and binary data in one immutable snapshot and publish cache files atomically</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.5/per-line-coverage-info-2.9.5.zip" version="2.9.5">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>

@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.9.6] - 2026-11-06
+
 - Fix `Expected FILE marker` errors after coverage cache rewrites: keep each reader's index and binary data in one immutable snapshot and publish cache files atomically
 
 ## [2.9.5] - 2026-11-05
