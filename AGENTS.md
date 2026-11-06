@@ -195,8 +195,9 @@ Log tab):
 Enabled by default; `-Dcoverage.perf.log=false` disables it and Gradle sets it for unit tests.
 Find Action **Open Coverage Performance Log Folder** reveals the directory. Instrumented:
 `load.offlineFirst`, `load.resolvePhase`, `artifact.process` (`covt.parse`, `normalize.raketa`,
-`covt.parseFile`), `cov4.open`/`cov4.write`/`cov4.init`/`cov4.readFile`, `highlight.*`,
-`linemap.gitShow`, and `plugin.start` (JVM args, `-Xmx`).
+`covt.parseFile`), `artifact.merge`, `cov4.buildTestIndex`/`dirStats`/`fileSections`/`auxSections`/
+`backPatch`/`fileIo`/`open`/`write`/`init`/`readFile`, `highlight.*`, `linemap.gitShow`, and
+`plugin.start` (JVM args, `-Xmx`).
 
 ## Release
 

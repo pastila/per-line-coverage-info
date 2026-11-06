@@ -35,7 +35,10 @@ object Cov4Writer {
      * @param outputFile destination file
      */
     fun write(coverage: Map<String, Map<Int, List<String>>>, outputFile: File) {
-        outputFile.writeBytes(toBytes(coverage))
+        val bytes = toBytes(coverage)
+        CoveragePerfLog.span("cov4.fileIo", "bytes" to bytes.size) {
+            outputFile.writeBytes(bytes)
+        }
     }
 
     /**
@@ -43,18 +46,20 @@ object Cov4Writer {
      */
     fun toBytes(coverage: Map<String, Map<Int, List<String>>>): ByteArray {
         // Build global test list
-        val testToIndex = LinkedHashMap<String, Int>()
-        for ((_, lineMap) in coverage) {
-            for ((_, tests) in lineMap) {
-                for (test in tests) {
-                    testToIndex.putIfAbsent(test, testToIndex.size)
+        val (testToIndex, globalTests) = CoveragePerfLog.span("cov4.buildTestIndex", "files" to coverage.size) {
+            val index = LinkedHashMap<String, Int>()
+            for ((_, lineMap) in coverage) {
+                for ((_, tests) in lineMap) {
+                    for (test in tests) {
+                        index.putIfAbsent(test, index.size)
+                    }
                 }
             }
+            index to index.keys.toList()
         }
-        val globalTests = testToIndex.keys.toList()
 
         // Compute directory coverage stats
-        val dirCoverage = calculateDirectoryCoverage(coverage)
+        val dirCoverage = CoveragePerfLog.span("cov4.dirStats") { calculateDirectoryCoverage(coverage) }
 
         val buf = ByteArrayOutputStream()
 
@@ -83,113 +88,127 @@ object Cov4Writer {
 
         val fileEntries = mutableListOf<FileEntry>()
 
-        for ((filePath, lineMap) in coverage) {
-            val dataOffset = buf.size()
+        CoveragePerfLog.span("cov4.fileSections", "files" to coverage.size) {
+            for ((filePath, lineMap) in coverage) {
+                val dataOffset = buf.size()
 
-            // FILE marker
-            buf.writeInt32(MARKER_FILE)
+                // FILE marker
+                buf.writeInt32(MARKER_FILE)
 
-            // File path
-            buf.writeString(filePath)
+                // File path
+                buf.writeString(filePath)
 
-            // Build deduplicated test sets for this file
-            val setKeyToIndex = LinkedHashMap<String, Int>()
-            val testSets = mutableListOf<List<Int>>()
-            val lineSetIndices = LinkedHashMap<Int, Int>() // lineNum → setIndex
+                // Build deduplicated test sets for this file
+                val setKeyToIndex = LinkedHashMap<String, Int>()
+                val testSets = mutableListOf<List<Int>>()
+                val lineSetIndices = LinkedHashMap<Int, Int>() // lineNum → setIndex
 
-            for ((lineNum, tests) in lineMap.entries.sortedBy { it.key }) {
-                if (tests.isEmpty()) {
-                    lineSetIndices[lineNum] = -1
-                } else {
-                    val globalIndices = tests.mapNotNull { testToIndex[it] }.sorted()
-                    val setKey = globalIndices.joinToString(",")
-                    val setIdx = setKeyToIndex.getOrPut(setKey) {
-                        testSets.add(globalIndices)
-                        testSets.size - 1
+                for ((lineNum, tests) in lineMap.entries.sortedBy { it.key }) {
+                    if (tests.isEmpty()) {
+                        lineSetIndices[lineNum] = -1
+                    } else {
+                        val globalIndices = tests.mapNotNull { testToIndex[it] }.sorted()
+                        val setKey = globalIndices.joinToString(",")
+                        val setIdx = setKeyToIndex.getOrPut(setKey) {
+                            testSets.add(globalIndices)
+                            testSets.size - 1
+                        }
+                        lineSetIndices[lineNum] = setIdx
                     }
-                    lineSetIndices[lineNum] = setIdx
                 }
-            }
 
-            // Test sets count
-            buf.writeInt32(testSets.size)
-            for (set in testSets) {
-                buf.writeInt32(set.size)
-                for (idx in set) {
-                    buf.writeInt32(idx)
+                // Test sets count
+                buf.writeInt32(testSets.size)
+                for (set in testSets) {
+                    buf.writeInt32(set.size)
+                    for (idx in set) {
+                        buf.writeInt32(idx)
+                    }
                 }
-            }
 
-            // Line mappings (already sorted by key)
-            buf.writeInt32(lineSetIndices.size)
-            for ((lineNum, setIdx) in lineSetIndices) {
-                buf.writeInt32(lineNum)
-                buf.writeSignedInt32(setIdx)
-            }
+                // Line mappings (already sorted by key)
+                buf.writeInt32(lineSetIndices.size)
+                for ((lineNum, setIdx) in lineSetIndices) {
+                    buf.writeInt32(lineNum)
+                    buf.writeSignedInt32(setIdx)
+                }
 
-            val dataSize = buf.size() - dataOffset
-            fileEntries.add(FileEntry(filePath, dataOffset, dataSize))
+                val dataSize = buf.size() - dataOffset
+                fileEntries.add(FileEntry(filePath, dataOffset, dataSize))
+            }
         }
 
         // --- INDX SECTION ---
-        val indexOffset = buf.size()
-        buf.writeInt32(MARKER_INDEX)
-        buf.writeInt32(fileEntries.size)
+        var indexOffset = 0
+        var dirSectionOffset = 0
+        var indexEntriesStart = 0
+        val sortedEntries = CoveragePerfLog.span(
+            "cov4.auxSections",
+            "files" to fileEntries.size,
+            "dirs" to dirCoverage.size,
+        ) {
+            indexOffset = buf.size()
+            buf.writeInt32(MARKER_INDEX)
+            buf.writeInt32(fileEntries.size)
 
-        // Sort by FNV-1a hash for binary search
-        val sortedEntries = fileEntries.sortedBy { fnv1a64(it.path).toULong() }
+            // Sort by FNV-1a hash for binary search
+            val sorted = fileEntries.sortedBy { fnv1a64(it.path).toULong() }
 
-        // Write index entries (24 bytes each), CRC placeholders
-        val indexEntriesStart = buf.size()
-        for (entry in sortedEntries) {
-            buf.writeInt64(fnv1a64(entry.path))     // path hash (uint64)
-            buf.writeInt32(4)                        // pathOffset (always 4, path follows FILE marker)
-            buf.writeInt32(entry.dataOffset)         // dataOffset (absolute)
-            buf.writeInt32(entry.dataSize)            // dataSize
-            buf.writeInt32(0)                        // CRC32 placeholder
+            // Write index entries (24 bytes each), CRC placeholders
+            indexEntriesStart = buf.size()
+            for (entry in sorted) {
+                buf.writeInt64(fnv1a64(entry.path))     // path hash (uint64)
+                buf.writeInt32(4)                        // pathOffset (always 4, path follows FILE marker)
+                buf.writeInt32(entry.dataOffset)         // dataOffset (absolute)
+                buf.writeInt32(entry.dataSize)           // dataSize
+                buf.writeInt32(0)                        // CRC32 placeholder
+            }
+
+            // --- DIRC SECTION ---
+            dirSectionOffset = buf.size()
+            buf.writeInt32(MARKER_DIR)
+            buf.writeInt32(dirCoverage.size)
+
+            for ((dirPath, stats) in dirCoverage.entries.sortedBy { it.key }) {
+                buf.writeString(dirPath)
+                buf.writeInt32(stats.covered)
+                buf.writeInt32(stats.uncovered)
+                buf.writeInt32(stats.covered + stats.uncovered)
+            }
+
+            // --- ENDF TRAILER ---
+            buf.writeInt32(MARKER_END)
+            buf.writeInt32(0)  // overall CRC32 placeholder
+
+            sorted
         }
-
-        // --- DIRC SECTION ---
-        val dirSectionOffset = buf.size()
-        buf.writeInt32(MARKER_DIR)
-        buf.writeInt32(dirCoverage.size)
-
-        for ((dirPath, stats) in dirCoverage.entries.sortedBy { it.key }) {
-            buf.writeString(dirPath)
-            buf.writeInt32(stats.covered)
-            buf.writeInt32(stats.uncovered)
-            buf.writeInt32(stats.covered + stats.uncovered)
-        }
-
-        // --- ENDF TRAILER ---
-        buf.writeInt32(MARKER_END)
-        buf.writeInt32(0)  // overall CRC32 placeholder
 
         // --- BACK-PATCH ---
-        val data = buf.toByteArray()
-        val le = ByteOrder.LITTLE_ENDIAN
+        return CoveragePerfLog.span("cov4.backPatch", "files" to fileEntries.size) {
+            val data = buf.toByteArray()
+            val le = ByteOrder.LITTLE_ENDIAN
 
-        // Patch index offset in header
-        ByteBuffer.wrap(data, indexOffsetPos, 4).order(le).putInt(indexOffset)
+            // Patch index offset in header
+            ByteBuffer.wrap(data, indexOffsetPos, 4).order(le).putInt(indexOffset)
 
-        // Patch directory offset in header
-        ByteBuffer.wrap(data, dirOffsetPos, 4).order(le).putInt(dirSectionOffset)
+            // Patch directory offset in header
+            ByteBuffer.wrap(data, dirOffsetPos, 4).order(le).putInt(dirSectionOffset)
 
-        // Patch per-file CRC32s in index entries
-        for ((i, entry) in sortedEntries.withIndex()) {
-            val fileData = data.copyOfRange(entry.dataOffset, entry.dataOffset + entry.dataSize)
-            val crc = CRC32()
-            crc.update(fileData)
-            val crcPos = indexEntriesStart + i * 24 + 20 // 24 bytes/entry, CRC at offset +20
-            ByteBuffer.wrap(data, crcPos, 4).order(le).putInt(crc.value.toInt())
+            // Patch the per-file CRC in the index entries
+            for ((i, entry) in sortedEntries.withIndex()) {
+                val crc = CRC32()
+                crc.update(data, entry.dataOffset, entry.dataSize)
+                val crcPos = indexEntriesStart + i * 24 + 20 // 24 bytes/entry, CRC at offset +20
+                ByteBuffer.wrap(data, crcPos, 4).order(le).putInt(crc.value.toInt())
+            }
+
+            // Patch overall CRC32 (covers everything except last 4 bytes)
+            val overallCrc = CRC32()
+            overallCrc.update(data, 0, data.size - 4)
+            ByteBuffer.wrap(data, data.size - 4, 4).order(le).putInt(overallCrc.value.toInt())
+
+            data
         }
-
-        // Patch overall CRC32 (covers everything except last 4 bytes)
-        val overallCrc = CRC32()
-        overallCrc.update(data, 0, data.size - 4)
-        ByteBuffer.wrap(data, data.size - 4, 4).order(le).putInt(overallCrc.value.toInt())
-
-        return data
     }
 
     /**

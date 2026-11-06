@@ -377,31 +377,51 @@ class CoverageLoadService(private val project: Project) {
                                 log.info("Coverage: no ${component} jobs in primary pipeline, falling back to baseline pipeline ${dual.baseline.pipelineId}")
                                 dataService.clearBaseline()
                                 fellBackToBaseline = true
-                                coordinator.singleFlight("download:${dual.baseline.commitHash}:$component") {
-                                    downloadArtifacts(indicator, gitLabClient, dual.baseline,
-                                        fractionStart = 0.0, fractionEnd = 0.6)
+                                val cachedBaseline = baselineCached
+                                if (cachedBaseline != null) {
+                                    // The baseline artifact is already on disk: reuse it instead of
+                                    // downloading and rewriting the same report on every refresh.
+                                    log.info("Coverage: baseline commit ${dual.baseline.commitHash.take(8)} is cached, skipping download")
+                                    cache.updateLastUsed(dual.baseline.commitHash, component)
+                                    dataService.setCoverageContext(dual.baseline.commitHash, dual.baseline.gitRoot, stale = false)
+                                    computeAndStoreWarningContext(dual.baseline.gitRoot)
+                                    dataService.setCov4Reader(cachedBaseline)
+                                    CoveragePerfLog.event(
+                                        "load.fallbackCached",
+                                        "commit" to dual.baseline.commitHash.take(8),
+                                        "component" to component,
+                                        "files" to cachedBaseline.allFilePaths.size,
+                                    )
+                                    null
+                                } else {
+                                    coordinator.singleFlight("download:${dual.baseline.commitHash}:$component") {
+                                        downloadArtifacts(indicator, gitLabClient, dual.baseline,
+                                            fractionStart = 0.0, fractionEnd = 0.6)
+                                    }
                                 }
                             } else {
                                 throw e
                             }
                         }
 
-                        for (cr in result.componentResults) {
-                            cache.writeCov4(result.resolved.commitHash, result.resolved.pipelineId, cr.coverage, component = cr.component, branch = cr.branch)
-                        }
+                        if (result != null) {
+                            for (cr in result.componentResults) {
+                                cache.writeCov4(result.resolved.commitHash, result.resolved.pipelineId, cr.coverage, component = cr.component, branch = cr.branch)
+                            }
 
-                        val freshReader = cache.get(result.resolved.commitHash, component, result.resolved.gitRoot)
-                        if (freshReader != null) {
-                            dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
-                            computeAndStoreWarningContext(result.resolved.gitRoot)
-                            dataService.setCov4Reader(freshReader)
-                        } else {
-                            log.warn("Coverage: failed to reopen freshly-written .cov4, falling back to in-memory map")
-                            val fallback = result.componentResults.firstOrNull { it.component == component }
-                                ?: result.componentResults.first()
-                            dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
-                            computeAndStoreWarningContext(result.resolved.gitRoot)
-                            dataService.setCoverageAll(fallback.coverage)
+                            val freshReader = cache.get(result.resolved.commitHash, component, result.resolved.gitRoot)
+                            if (freshReader != null) {
+                                dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
+                                computeAndStoreWarningContext(result.resolved.gitRoot)
+                                dataService.setCov4Reader(freshReader)
+                            } else {
+                                log.warn("Coverage: failed to reopen freshly-written .cov4, falling back to in-memory map")
+                                val fallback = result.componentResults.firstOrNull { it.component == component }
+                                    ?: result.componentResults.first()
+                                dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
+                                computeAndStoreWarningContext(result.resolved.gitRoot)
+                                dataService.setCoverageAll(fallback.coverage)
+                            }
                         }
 
                         if (!fellBackToBaseline) {
@@ -683,38 +703,44 @@ class CoverageLoadService(private val project: Project) {
             indicator.fraction = fractionStart + span * 0.95
         }
 
-        val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
-        for ((futureIndex, future) in futures.withIndex()) {
-            val parsed = try {
-                future.join()
-            } catch (e: CompletionException) {
-                val cause = e.cause ?: e
-                if (cause is CoverageApiException) throw cause
-                throw CoverageApiException(
-                    "Failed to download coverage artifacts",
-                    cause,
-                    kind = CoverageErrorKind.NETWORK,
-                )
-            }
-            for ((filePath, lineMap) in parsed) {
-                val existingFileMap = mergedCoverage.getOrPut(filePath) { mutableMapOf() }
-                for ((lineNum, testNames) in lineMap) {
-                    val existingTests = existingFileMap.getOrPut(lineNum) { mutableListOf() }
-                    val unionSet = mutableSetOf<String>()
-                    unionSet.addAll(existingTests)
-                    unionSet.addAll(testNames)
-                    existingTests.clear()
-                    existingTests.addAll(unionSet)
+        val finalCoverage: Map<String, Map<Int, List<String>>> = CoveragePerfLog.span(
+            "artifact.merge",
+            "artifacts" to futures.size,
+            "component" to artifactComponent,
+        ) {
+            val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
+            for ((futureIndex, future) in futures.withIndex()) {
+                val parsed = try {
+                    future.join()
+                } catch (e: CompletionException) {
+                    val cause = e.cause ?: e
+                    if (cause is CoverageApiException) throw cause
+                    throw CoverageApiException(
+                        "Failed to download coverage artifacts",
+                        cause,
+                        kind = CoverageErrorKind.NETWORK,
+                    )
+                }
+                for ((filePath, lineMap) in parsed) {
+                    val existingFileMap = mergedCoverage.getOrPut(filePath) { mutableMapOf() }
+                    for ((lineNum, testNames) in lineMap) {
+                        val existingTests = existingFileMap.getOrPut(lineNum) { mutableListOf() }
+                        val unionSet = mutableSetOf<String>()
+                        unionSet.addAll(existingTests)
+                        unionSet.addAll(testNames)
+                        existingTests.clear()
+                        existingTests.addAll(unionSet)
+                    }
+                }
+                val processFraction = fractionStart + span * (0.95 + 0.04 * ((futureIndex + 1).toDouble() / totalFutures))
+                ApplicationManager.getApplication().invokeLater {
+                    indicator.fraction = processFraction
                 }
             }
-            val processFraction = fractionStart + span * (0.95 + 0.04 * ((futureIndex + 1).toDouble() / totalFutures))
-            ApplicationManager.getApplication().invokeLater {
-                indicator.fraction = processFraction
-            }
-        }
 
-        val finalCoverage: Map<String, Map<Int, List<String>>> = mergedCoverage.mapValues { (_, lineMap) ->
-            lineMap.mapValues { (_, tests) -> tests.toList() }
+            mergedCoverage.mapValues { (_, lineMap) ->
+                lineMap.mapValues { (_, tests) -> tests.toList() }
+            }
         }
 
         val headBranch = CoverageResolver.runGitCommand(resolved.gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
