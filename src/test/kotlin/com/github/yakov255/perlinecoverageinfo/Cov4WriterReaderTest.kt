@@ -55,6 +55,23 @@ class Cov4WriterReaderTest {
     }
 
     @Test
+    fun `writer removes duplicate test names from a line`() {
+        val tempFile = Files.createTempFile("test", ".cov4").toFile()
+        try {
+            Cov4Writer.write(
+                mapOf("src/a.php" to mapOf(1 to listOf("t1", "t1", "t2", "t2", "t3"))),
+                tempFile,
+            )
+
+            Cov4Reader(tempFile).use { reader ->
+                assertEquals(listOf("t1", "t2", "t3"), reader.getCoverage("src/a.php")!![1])
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
     fun `deduplicates identical test sets in the written file`() {
         val tests = (1..50).map { "t$it" }
         val coverage = mapOf("src/a.php" to (1..2_000).associateWith { tests })

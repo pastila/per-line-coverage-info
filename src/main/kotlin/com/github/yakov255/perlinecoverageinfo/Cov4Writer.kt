@@ -120,6 +120,7 @@ object Cov4Writer {
         )
 
         val fileEntries = mutableListOf<FileEntry>()
+        var removedDuplicates = 0L
 
         CoveragePerfLog.span("cov4.fileSections", "files" to coverage.size) {
             for ((filePath, lineMap) in coverage) {
@@ -155,7 +156,9 @@ object Cov4Writer {
                         }
                         val set = if (count == indices.size) indices else indices.copyOf(count)
                         set.sort()
-                        IntArrayKey(set)
+                        val unique = dedupeSorted(set)
+                        removedDuplicates += set.size - unique.size
+                        IntArrayKey(unique)
                     }
                     if (key.values.isEmpty()) {
                         lineSetIndices[lineNum] = -1
@@ -187,6 +190,10 @@ object Cov4Writer {
                 val dataSize = buf.size() - dataOffset
                 fileEntries.add(FileEntry(filePath, dataOffset, dataSize))
             }
+        }
+
+        if (removedDuplicates > 0) {
+            CoveragePerfLog.event("cov4.duplicates", "count" to removedDuplicates, "files" to coverage.size)
         }
 
         // --- INDX SECTION ---
@@ -322,6 +329,18 @@ object Cov4Writer {
         val bytes = s.toByteArray(Charsets.UTF_8)
         writeInt32(bytes.size)
         write(bytes)
+    }
+
+    /** Collapses repeated values in an already sorted array, in place. */
+    private fun dedupeSorted(values: IntArray): IntArray {
+        if (values.size < 2) return values
+        var writeIndex = 1
+        for (readIndex in 1 until values.size) {
+            if (values[readIndex] != values[writeIndex - 1]) {
+                values[writeIndex++] = values[readIndex]
+            }
+        }
+        return if (writeIndex == values.size) values else values.copyOf(writeIndex)
     }
 
     /** Content-keyed wrapper so test sets can deduplicate without formatting a string key. */

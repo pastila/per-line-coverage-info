@@ -8,7 +8,7 @@ import org.junit.Test
 class CoverageMergeTest {
 
     @Test
-    fun `unions tests per line in first-seen order`() {
+    fun `concatenates per-line tests in report order`() {
         val first = mapOf(
             "src/a.php" to mapOf(
                 1 to listOf("t1", "t2"),
@@ -29,9 +29,10 @@ class CoverageMergeTest {
 
         assertEquals(setOf("src/a.php", "src/b.php"), merged.keys)
         val a = merged.getValue("src/a.php")
-        assertEquals(listOf("t1", "t2", "t3"), a.getValue(1))
+        // Duplicates are removed by the writer, not by the merge.
+        assertEquals(listOf("t1", "t2", "t3", "t1"), a.getValue(1))
         assertEquals(listOf("t9"), a.getValue(2))
-        assertEquals(listOf("t4"), merged.getValue("src/b.php").getValue(5))
+        assertEquals(listOf("t4", "t4"), merged.getValue("src/b.php").getValue(5))
     }
 
     @Test
@@ -71,8 +72,25 @@ class CoverageMergeTest {
         assertEquals(listOf("t1", "t2", "t3"), lines.getValue(1))
         assertSame("lines with the same set combination share one list", lines.getValue(1), lines.getValue(2))
         assertEquals(listOf("t1", "t2", "t4"), lines.getValue(3))
-        assertTrue("out of two combinations only one may be shared", result.stats.unions in 2..3)
         assertEquals(3, result.stats.lines)
+        assertEquals(2, result.stats.unions)
+    }
+
+    @Test
+    fun `dedupe per line removes repeated names for the in-memory fallback`() {
+        val coverage = mapOf(
+            "src/e.php" to mapOf(
+                1 to listOf("t1", "t1", "t2", "t2", "t3"),
+                2 to emptyList(),
+                3 to listOf("t4"),
+            ),
+        )
+
+        val deduped = CoverageMerge.dedupePerLine(coverage)
+
+        assertEquals(listOf("t1", "t2", "t3"), deduped.getValue("src/e.php").getValue(1))
+        assertEquals(emptyList<String>(), deduped.getValue("src/e.php").getValue(2))
+        assertEquals(listOf("t4"), deduped.getValue("src/e.php").getValue(3))
     }
 
     @Test
@@ -80,5 +98,6 @@ class CoverageMergeTest {
         val merged = CoverageMerge.merge(emptyList())
         assertEquals(emptyMap<String, Map<Int, List<String>>>(), merged.coverage)
         assertEquals(0, merged.stats.lines)
+        assertTrue(merged.coverage.isEmpty())
     }
 }

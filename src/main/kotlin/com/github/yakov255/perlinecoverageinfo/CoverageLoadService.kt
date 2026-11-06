@@ -435,7 +435,7 @@ class CoverageLoadService(private val project: Project) {
                                     ?: result.componentResults.first()
                                 dataService.setCoverageContext(result.resolved.commitHash, result.resolved.gitRoot, stale = false)
                                 computeAndStoreWarningContext(result.resolved.gitRoot)
-                                dataService.setCoverageAll(fallback.coverage)
+                                dataService.setCoverageAll(CoverageMerge.dedupePerLine(fallback.coverage))
                             }
                         }
 
@@ -757,8 +757,7 @@ class CoverageLoadService(private val project: Project) {
                 CoveragePerfLog.event(
                     "artifact.merge.stats",
                     "lines" to merged.stats.lines,
-                    "refsIn" to merged.stats.refsIn,
-                    "refsOut" to merged.stats.refsOut,
+                    "refs" to merged.stats.refs,
                     "unions" to merged.stats.unions,
                 )
                 merged.coverage
