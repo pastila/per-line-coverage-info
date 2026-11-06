@@ -173,6 +173,10 @@ class CoverageCacheService(private val project: Project) {
             val updated = index.entries.filter { it.commitHash != commitHash || it.component != component } + newEntry
             writeIndex(CacheIndex(entries = updated))
 
+            // The cache file was just replaced: drop readers that still point at the old
+            // bytes so the next lookup reopens the new file.
+            GitLabCoordinator.getInstance().evictSharedReaders(commitHash, component)
+
             log.info("Coverage cache: stored commit $commitHash as COV4 (${cov4File.length() / 1024}KB, component=$component, $totalFiles files, $coveredLines/$totalLines lines covered)")
         }
     }

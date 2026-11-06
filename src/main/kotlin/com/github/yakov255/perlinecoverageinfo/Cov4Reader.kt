@@ -27,6 +27,13 @@ class Cov4Reader(
     private val tests: List<String>
     private val entriesByPath: Map<String, IndexEntry>  // normalized path → entry
 
+    /** Size and mtime captured at open time; a rewrite invalidates the index offsets. */
+    private val openedLength = file.length()
+    private val openedModifiedMs = file.lastModified()
+
+    private fun isFileReplaced(): Boolean =
+        file.length() != openedLength || file.lastModified() != openedModifiedMs
+
     data class IndexEntry(
         val pathHash: Long,
         val pathOffset: Int,
@@ -65,6 +72,10 @@ class Cov4Reader(
      * Returns lineNum → testNames, or null if file not found in this .cov4.
      */
     fun getCoverage(filePath: String): Map<Int, List<String>>? {
+        if (isFileReplaced()) {
+            log.warn("COV4: ${file.name} was replaced after this reader was opened, refusing to read stale offsets")
+            return null
+        }
         val entry = entriesByPath[pathNormalizer(filePath)] ?: return null
 
         return CoveragePerfLog.counted("cov4.readFile") {

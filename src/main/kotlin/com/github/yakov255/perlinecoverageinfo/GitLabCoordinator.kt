@@ -95,6 +95,15 @@ class GitLabCoordinator : Disposable {
         readerCache.getOrOpen("$commitHash|$component|$variant", open)
 
     /**
+     * Drops cached readers for a rewritten .cov4 file so the next lookup reopens it
+     * against the new bytes. Old readers stay valid for their current holders because
+     * the cache file is replaced atomically.
+     */
+    fun evictSharedReaders(commitHash: String, component: String) {
+        readerCache.removeAll("$commitHash|$component|")
+    }
+
+    /**
      * Coalesces concurrent identical work: if another thread is already running
      * [key], this call joins that in-flight work instead of running [loader]
      * again. On success/failure the result is shared with all waiters.
@@ -221,6 +230,13 @@ private class ReaderLruCache(private val maxEntries: Int, private val log: Cover
     }
 
     fun size(): Int = synchronized(lock) { map.size }
+
+    /** Removes every entry whose key starts with [keyPrefix]. */
+    fun removeAll(keyPrefix: String) {
+        synchronized(lock) {
+            map.keys.removeAll { it.startsWith(keyPrefix) }
+        }
+    }
 
     fun clear() {
         synchronized(lock) {

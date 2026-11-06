@@ -55,6 +55,28 @@ class Cov4WriterReaderTest {
     }
 
     @Test
+    fun `reader refuses stale offsets after the cache file is rewritten`() {
+        val tempFile = Files.createTempFile("test", ".cov4").toFile()
+        try {
+            Cov4Writer.write(mapOf("src/a.php" to mapOf(1 to listOf("t1"))), tempFile)
+            val stale = Cov4Reader(tempFile)
+            assertEquals(listOf("t1"), stale.getCoverage("src/a.php")!![1])
+
+            Cov4Writer.write(
+                mapOf("src/a.php" to mapOf(1 to listOf("t1", "t2", "t3", "t4"))),
+                tempFile,
+            )
+
+            assertNull("stale reader must not read offsets from the new bytes", stale.getCoverage("src/a.php"))
+            Cov4Reader(tempFile).use { fresh ->
+                assertEquals(listOf("t1", "t2", "t3", "t4"), fresh.getCoverage("src/a.php")!![1])
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
     fun `reuses one expanded test set across lines of a file`() {
         val shared = listOf("calc/features/a.feature:1", "calc/features/b.feature:2")
         val coverage = mapOf("src/big.php" to (1..5_000).associateWith { shared })

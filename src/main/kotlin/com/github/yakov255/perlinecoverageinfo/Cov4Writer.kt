@@ -4,6 +4,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.zip.CRC32
 
 /**
@@ -37,7 +40,24 @@ object Cov4Writer {
     fun write(coverage: Map<String, Map<Int, List<String>>>, outputFile: File) {
         val bytes = toBytes(coverage)
         CoveragePerfLog.span("cov4.fileIo", "bytes" to bytes.size) {
-            outputFile.writeBytes(bytes)
+            // Write through a sibling temp file and move it into place so a reader never
+            // observes a half-written cache file.
+            val temp = File(outputFile.parentFile, "${outputFile.name}.${System.nanoTime()}.tmp")
+            try {
+                temp.writeBytes(bytes)
+                try {
+                    Files.move(
+                        temp.toPath(),
+                        outputFile.toPath(),
+                        StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE,
+                    )
+                } catch (_: AtomicMoveNotSupportedException) {
+                    Files.move(temp.toPath(), outputFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+            } finally {
+                temp.delete()
+            }
         }
     }
 
