@@ -120,8 +120,9 @@ object BinaryCoverageParser {
                                 val testNames = resolvedTestSets.getOrPut(setIndex) {
                                     testSets[setIndex].map { testIdx ->
                                         if (testIdx !in tests.indices) {
+                                            val expected = if (tests.isEmpty()) "no tests in report" else "expected 0..${tests.size - 1}"
                                             throw CoverageApiException(
-                                                "Invalid test index $testIdx in set $setIndex for line $lineNumber in $filePath (expected 0..${tests.size - 1})",
+                                                "Invalid test index $testIdx in set $setIndex for line $lineNumber in $filePath ($expected)",
                                                 kind = CoverageErrorKind.ARTIFACT_PARSE,
                                             )
                                         }

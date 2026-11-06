@@ -95,9 +95,9 @@ class GitLabCoordinator : Disposable {
         readerCache.getOrOpen("$commitHash|$component|$variant", open)
 
     /**
-     * Drops cached readers for a rewritten .cov4 file so the next lookup reopens it
-     * against the new bytes. Old readers stay valid for their current holders because
-     * the cache file is replaced atomically.
+     * Drops cached readers for a rewritten .cov4 file so the next lookup reopens it against
+     * the new bytes. Existing holders are not broken: a reader notices that its file was
+     * replaced and reloads its index on the next read.
      */
     fun evictSharedReaders(commitHash: String, component: String) {
         readerCache.removeAll("$commitHash|$component|")

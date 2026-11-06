@@ -31,6 +31,9 @@ object Cov4Writer {
     private const val MARKER_DIR = 0x44495243     // "DIRC"
     private const val MARKER_END = 0x454E4446     // "ENDF"
 
+    private const val MOVE_ATTEMPTS = 5
+    private const val MOVE_RETRY_MS = 40L
+
     /**
      * Writes merged coverage data to a COV4 file.
      *
@@ -45,15 +48,25 @@ object Cov4Writer {
             val temp = File(outputFile.parentFile, "${outputFile.name}.${System.nanoTime()}.tmp")
             try {
                 temp.writeBytes(bytes)
-                try {
-                    Files.move(
-                        temp.toPath(),
-                        outputFile.toPath(),
-                        StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE,
-                    )
-                } catch (_: AtomicMoveNotSupportedException) {
-                    Files.move(temp.toPath(), outputFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                var attempt = 0
+                while (true) {
+                    try {
+                        try {
+                            Files.move(
+                                temp.toPath(),
+                                outputFile.toPath(),
+                                StandardCopyOption.REPLACE_EXISTING,
+                                StandardCopyOption.ATOMIC_MOVE,
+                            )
+                        } catch (_: AtomicMoveNotSupportedException) {
+                            Files.move(temp.toPath(), outputFile.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                        }
+                        return@span
+                    } catch (e: java.io.IOException) {
+                        // On Windows an open reader can block the replace; retry briefly.
+                        if (++attempt >= MOVE_ATTEMPTS) throw e
+                        Thread.sleep(MOVE_RETRY_MS)
+                    }
                 }
             } finally {
                 temp.delete()

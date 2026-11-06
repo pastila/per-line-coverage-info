@@ -9,6 +9,9 @@ package com.github.yakov255.perlinecoverageinfo
  *
  * Implemented as concatenate-then-deduplicate: rebuilding a set and a list per line per
  * artifact was the dominant cost of loading large reports.
+ *
+ * A single report is returned as is: the COVT parser already guarantees unique test names
+ * per line, so there is nothing to deduplicate and no copy to make.
  */
 object CoverageMerge {
 

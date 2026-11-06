@@ -34,6 +34,7 @@ object CoveragePerfLog {
     private const val MAX_BYTES = 256L * 1024 * 1024
     private const val SAMPLE_INTERVAL_MS = 1_000L
     private const val IDLE_STOP_MS = 10L * 60L * 1_000L
+    private const val RETAIN_LOGS_MS = 7L * 24L * 60L * 60L * 1_000L
     private const val TAG = "CoveragePerf"
 
     private val TIME_FORMAT: DateTimeFormatter =
@@ -286,6 +287,7 @@ object CoveragePerfLog {
         return try {
             val dir = perfDir()
             dir.mkdirs()
+            pruneOldLogs(dir)
             val file = File(dir, "run-${timestampForFile()}-${ProcessHandle.current().pid()}.log")
             logFile = file
             BufferedOutputStream(FileOutputStream(file, true), 64 * 1024).also {
@@ -302,6 +304,18 @@ object CoveragePerfLog {
         val override = System.getProperty("coverage.perf.dir")
         if (!override.isNullOrBlank()) return File(override)
         return File(System.getProperty("user.home"), ".cache/coverage-plugin/perf")
+    }
+
+    /** Keeps the newest logs only; the directory otherwise grows by a file per IDE run. */
+    private fun pruneOldLogs(dir: File) {
+        try {
+            val cutoff = System.currentTimeMillis() - RETAIN_LOGS_MS
+            dir.listFiles { f -> f.isFile && f.name.startsWith("run-") && f.name.endsWith(".log") }
+                ?.filter { it.lastModified() < cutoff }
+                ?.forEach { it.delete() }
+        } catch (_: Throwable) {
+            // Diagnostics must never break the caller.
+        }
     }
 
     private fun timestampForFile(): String =

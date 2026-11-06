@@ -290,6 +290,15 @@ class CoverageCacheService(private val project: Project) {
                 }
             }
 
+            // Remove temp files left behind by an interrupted atomic write (older than an hour).
+            val tempCutoff = System.currentTimeMillis() - 60 * 60 * 1000L
+            dir.listFiles { f -> f.isFile && f.name.endsWith(".tmp") && f.lastModified() < tempCutoff }
+                ?.forEach { file ->
+                    if (file.delete()) {
+                        log.info("Coverage cache: deleted stale temp file ${file.name}")
+                    }
+                }
+
             val finalEntries = existing + expiredRetained
             if (finalEntries.size != index.entries.size) {
                 writeIndex(CacheIndex(entries = finalEntries))

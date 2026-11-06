@@ -5,7 +5,6 @@ import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import java.lang.management.ManagementFactory
-
 /**
  * Triggers offline-first coverage loading after the IDE has fully started.
  * Implements [DumbAware] so it runs immediately on project open without
@@ -25,7 +24,9 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
                 "project" to project.name,
                 "jvm" to System.getProperty("java.version"),
                 "xmxMB" to (Runtime.getRuntime().maxMemory() / 1_048_576),
-                "jvmArgs" to ManagementFactory.getRuntimeMXBean().inputArguments.joinToString(","),
+                "jvmArgs" to ManagementFactory.getRuntimeMXBean().inputArguments
+                    .filter { it.startsWith("-Xm") || it.startsWith("-XX:") }
+                    .joinToString(","),
             )
             promptForTokenIfNeeded(project)
 
