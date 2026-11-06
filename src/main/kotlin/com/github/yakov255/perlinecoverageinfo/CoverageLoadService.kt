@@ -720,39 +720,27 @@ class CoverageLoadService(private val project: Project) {
             "artifacts" to futures.size,
             "component" to artifactComponent,
         ) {
-            val mergedCoverage = mutableMapOf<String, MutableMap<Int, MutableList<String>>>()
+            val reports = ArrayList<Map<String, Map<Int, List<String>>>>(futures.size)
             for ((futureIndex, future) in futures.withIndex()) {
-                val parsed = try {
-                    future.join()
-                } catch (e: CompletionException) {
-                    val cause = e.cause ?: e
-                    if (cause is CoverageApiException) throw cause
-                    throw CoverageApiException(
-                        "Failed to download coverage artifacts",
-                        cause,
-                        kind = CoverageErrorKind.NETWORK,
-                    )
-                }
-                for ((filePath, lineMap) in parsed) {
-                    val existingFileMap = mergedCoverage.getOrPut(filePath) { mutableMapOf() }
-                    for ((lineNum, testNames) in lineMap) {
-                        val existingTests = existingFileMap.getOrPut(lineNum) { mutableListOf() }
-                        val unionSet = mutableSetOf<String>()
-                        unionSet.addAll(existingTests)
-                        unionSet.addAll(testNames)
-                        existingTests.clear()
-                        existingTests.addAll(unionSet)
+                reports.add(
+                    try {
+                        future.join()
+                    } catch (e: CompletionException) {
+                        val cause = e.cause ?: e
+                        if (cause is CoverageApiException) throw cause
+                        throw CoverageApiException(
+                            "Failed to download coverage artifacts",
+                            cause,
+                            kind = CoverageErrorKind.NETWORK,
+                        )
                     }
-                }
+                )
                 val processFraction = fractionStart + span * (0.95 + 0.04 * ((futureIndex + 1).toDouble() / totalFutures))
                 ApplicationManager.getApplication().invokeLater {
                     indicator.fraction = processFraction
                 }
             }
-
-            mergedCoverage.mapValues { (_, lineMap) ->
-                lineMap.mapValues { (_, tests) -> tests.toList() }
-            }
+            CoverageMerge.merge(reports)
         }
 
         val headBranch = CoverageResolver.runGitCommand(resolved.gitRoot, "rev-parse", "--abbrev-ref", "HEAD")
