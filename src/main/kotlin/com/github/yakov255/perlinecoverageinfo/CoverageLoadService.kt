@@ -1121,7 +1121,12 @@ class CoverageLoadService(private val project: Project) {
      * every line and hashes every test name, which must not happen in a normal load.
      */
     private fun perfStats(coverage: Map<String, Map<Int, List<String>>>): Array<Pair<String, Any?>> =
-        if (CoveragePerfLog.isEnabled()) coverageStats(coverage) else EMPTY_STATS
+        if (CoveragePerfLog.isEnabled()) {
+            // Logged as its own span so its diagnostic cost is visible in the profile.
+            CoveragePerfLog.span("covt.stats", "files" to coverage.size) { coverageStats(coverage) }
+        } else {
+            EMPTY_STATS
+        }
 
     /**
      * Cheap summary of a parsed coverage map, recorded in the performance log.
