@@ -11,6 +11,40 @@ import java.util.zip.GZIPOutputStream
 class BinaryCoverageParserTest {
 
     @Test
+    fun testGzipDoesNotNeedDecompressedSizeInHeap() {
+        val sample = File("php-sample-code/calc/coverage.covt").readBytes()
+        val output = ByteArrayOutputStream()
+        GZIPOutputStream(output).use { gzip ->
+            gzip.write(sample)
+            // The parser allows trailing bytes after ENDF, but must still validate the gzip
+            // trailer. This expands beyond the 64 MB heap used by the memory regression run.
+            val padding = ByteArray(1024 * 1024)
+            repeat(128) { gzip.write(padding) }
+        }
+        assertEquals(
+            BinaryCoverageParser.parseCovtBytes(sample),
+            BinaryCoverageParser.parsePossiblyGzippedCovtBytes(output.toByteArray()),
+        )
+    }
+
+    @Test
+    fun testGzipTrailerIsValidatedAfterEndMarker() {
+        val output = ByteArrayOutputStream()
+        GZIPOutputStream(output).use { gzip ->
+            gzip.write(File("php-sample-code/calc/coverage.covt").readBytes())
+            gzip.write(ByteArray(100_000))
+        }
+        val bytes = output.toByteArray()
+        bytes[bytes.size - 8] = (bytes[bytes.size - 8].toInt() xor 1).toByte()
+        try {
+            BinaryCoverageParser.parsePossiblyGzippedCovtBytes(bytes)
+            fail("Expected corrupt gzip checksum to be rejected")
+        } catch (_: java.io.IOException) {
+            // GZIPInputStream validates its trailer even beyond ENDF.
+        }
+    }
+
+    @Test
     fun `decodes repeated test sets once and keeps sets scoped to their file`() {
         val bytes = ByteArrayOutputStream()
         fun int(value: Int) { bytes.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()) }

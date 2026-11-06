@@ -1,5 +1,6 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
@@ -16,7 +17,10 @@ import com.intellij.util.messages.Topic
  * are parsed from the .cov4 binary only when an editor requests them.
  */
 @Service(Service.Level.PROJECT)
-class CoverageDataService(private val project: Project) {
+class CoverageDataService(private val project: Project) : Disposable {
+
+    private val readerLock = Any()
+    private var disposed = false
 
     private val log = CoverageLog.get(CoverageDataService::class.java)
 
@@ -66,8 +70,8 @@ class CoverageDataService(private val project: Project) {
     var baselineBehindBy: Int? = null
         private set
 
-    fun setCoverage(filePath: String, lines: Map<Int, List<String>>) {
-        data[filePath] = lines
+    fun setCoverage(filePath: String, lines: Map<Int, List<String>>) = synchronized(readerLock) {
+        if (!disposed) data[filePath] = lines
     }
 
     /**
@@ -76,20 +80,27 @@ class CoverageDataService(private val project: Project) {
      */
     fun setCoverageAll(allData: Map<String, Map<Int, List<String>>>) {
         log.info("CoverageDataService: setCoverageAll — ${allData.size} files")
-        closeCov4Reader()
-        data.clear()
-        data.putAll(allData)
+        synchronized(readerLock) {
+            if (disposed) return
+            closeCov4Reader()
+            data.clear()
+            data.putAll(allData)
+        }
         notifyChanged()
     }
 
     /**
      * Sets a COV4 reader for on-demand file coverage (from disk cache).
-     * Clears any in-memory data.
+     * Clears any in-memory data. Retains independent ownership; the caller closes its handle.
      */
     fun setCov4Reader(reader: Cov4Reader) {
-        closeCov4Reader()
-        data.clear()
-        cov4Reader = reader
+        synchronized(readerLock) {
+            if (disposed) return
+            val owned = reader.retain()
+            closeCov4Reader()
+            data.clear()
+            cov4Reader = owned
+        }
         log.info("Coverage: using COV4 reader with ${reader.allFilePaths.size} files")
         notifyChanged()
     }
@@ -99,9 +110,13 @@ class CoverageDataService(private val project: Project) {
      * The baseline commit may differ from the primary [coverageCommitHash].
      */
     fun setBaselineCov4Reader(reader: Cov4Reader?, commitHash: String?) {
-        closeBaselineReader()
-        baselineReader = reader
-        baselineCommitHash = commitHash
+        synchronized(readerLock) {
+            if (disposed) return
+            val owned = reader?.retain()
+            closeBaselineReader()
+            baselineReader = owned
+            baselineCommitHash = commitHash
+        }
         if (reader != null) {
             log.info("Coverage: baseline reader set with ${reader.allFilePaths.size} files (commit ${commitHash?.take(8)})")
         }
@@ -122,9 +137,11 @@ class CoverageDataService(private val project: Project) {
     }
 
     fun clearBaseline() {
-        closeBaselineReader()
-        baselineReader = null
-        baselineCommitHash = null
+        synchronized(readerLock) {
+            if (disposed) return
+            closeBaselineReader()
+            baselineCommitHash = null
+        }
         notifyChanged()
     }
 
@@ -132,23 +149,28 @@ class CoverageDataService(private val project: Project) {
 
     /** Returns baseline coverage for the given file, or null if no baseline or file missing. */
     fun getBaselineCoverage(filePath: String): Map<Int, List<String>>? {
-        return baselineReader?.getCoverage(filePath)
+        val reader = synchronized(readerLock) { baselineReader?.retain() }
+        return reader.use { it?.getCoverage(filePath) }
     }
 
     /**
      * Gets coverage for a file. Checks in-memory data first, then COV4 reader.
      */
     fun getCoverage(filePath: String): Map<Int, List<String>>? {
-        data[filePath]?.let { return it }
-        return cov4Reader?.getCoverage(filePath)
+        val reader = synchronized(readerLock) {
+            data[filePath]?.let { return it }
+            cov4Reader?.retain()
+        }
+        return reader.use { it?.getCoverage(filePath) }
     }
 
     /**
      * Returns all file paths with coverage data.
      */
     fun allFiles(): Set<String> {
-        if (data.isNotEmpty()) return data.keys
-        return cov4Reader?.allFilePaths ?: emptySet()
+        return synchronized(readerLock) {
+            if (data.isNotEmpty()) data.keys.toSet() else cov4Reader?.allFilePaths ?: emptySet()
+        }
     }
 
     fun clear() {
@@ -166,6 +188,7 @@ class CoverageDataService(private val project: Project) {
         primaryBehindBy = null
         baselineBehindBy = null
         LineMappingService.getInstance(project).clear()
+        GitLabCoordinator.getInstance().clearReaders()
         notifyChanged()
     }
 
@@ -182,7 +205,7 @@ class CoverageDataService(private val project: Project) {
         LineMappingService.getInstance(project).pruneToCommits(keep)
     }
 
-    private fun closeCov4Reader() {
+    private fun closeCov4Reader() = synchronized(readerLock) {
         try {
             cov4Reader?.close()
         } catch (e: Exception) {
@@ -191,13 +214,24 @@ class CoverageDataService(private val project: Project) {
         cov4Reader = null
     }
 
-    private fun closeBaselineReader() {
+    private fun closeBaselineReader() = synchronized(readerLock) {
         try {
             baselineReader?.close()
         } catch (e: Exception) {
             log.warn("Failed to close baseline COV4 reader", e)
         }
         baselineReader = null
+    }
+
+    override fun dispose() {
+        synchronized(readerLock) {
+            disposed = true
+            closeCov4Reader()
+            closeBaselineReader()
+            data.clear()
+        }
+        com.intellij.openapi.application.ApplicationManager.getApplication()?.takeUnless { it.isDisposed }
+            ?.getServiceIfCreated(GitLabCoordinator::class.java)?.clearReaders()
     }
 
     private fun notifyChanged() {

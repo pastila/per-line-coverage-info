@@ -1,7 +1,14 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import java.io.BufferedOutputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.OutputStream
+import java.nio.channels.Channels
+import java.nio.channels.FileChannel
+import java.nio.file.Path
+import java.nio.file.StandardOpenOption.READ
+import java.nio.file.StandardOpenOption.WRITE
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.file.Files
@@ -38,13 +45,12 @@ object Cov4Writer {
      * @param outputFile destination file
      */
     fun write(coverage: Map<String, Map<Int, List<String>>>, outputFile: File) {
-        val data = toBytes(coverage)
         val destination = outputFile.toPath().toAbsolutePath()
         // Publish only complete snapshots, including to readers in other IDE
         // processes. A failed write must leave the previous cache file intact.
         val temporary = Files.createTempFile(destination.parent, ".cov4-", ".tmp")
         try {
-            Files.write(temporary, data)
+            FileOutput(temporary).use { serialize(coverage, it) }
             Files.move(temporary, destination, ATOMIC_MOVE, REPLACE_EXISTING)
         } finally {
             Files.deleteIfExists(temporary)
@@ -55,6 +61,12 @@ object Cov4Writer {
      * Serializes coverage data to COV4 binary format bytes.
      */
     fun toBytes(coverage: Map<String, Map<Int, List<String>>>): ByteArray {
+        val output = MemoryOutput()
+        serialize(coverage, output)
+        return output.bytes()
+    }
+
+    private fun serialize(coverage: Map<String, Map<Int, List<String>>>, buf: BinaryOutput) {
         // Build global test list
         val testToIndex = LinkedHashMap<String, Int>()
         for ((_, lineMap) in coverage) {
@@ -68,8 +80,6 @@ object Cov4Writer {
 
         // Compute directory coverage stats
         val dirCoverage = calculateDirectoryCoverage(coverage)
-
-        val buf = ByteArrayOutputStream()
 
         // --- HEADER (28 bytes) with placeholders ---
         buf.writeInt32(MAGIC)
@@ -92,12 +102,15 @@ object Cov4Writer {
             val path: String,
             val dataOffset: Int,
             val dataSize: Int,
+            val crc32: Int,
         )
 
         val fileEntries = mutableListOf<FileEntry>()
 
         for ((filePath, lineMap) in coverage) {
             val dataOffset = buf.size()
+            val crc = CRC32()
+            buf.sectionCrc = crc
 
             // FILE marker
             buf.writeInt32(MARKER_FILE)
@@ -141,7 +154,8 @@ object Cov4Writer {
             }
 
             val dataSize = buf.size() - dataOffset
-            fileEntries.add(FileEntry(filePath, dataOffset, dataSize))
+            buf.sectionCrc = null
+            fileEntries.add(FileEntry(filePath, dataOffset, dataSize, crc.value.toInt()))
         }
 
         // --- INDX SECTION ---
@@ -152,14 +166,13 @@ object Cov4Writer {
         // Sort by FNV-1a hash for binary search
         val sortedEntries = fileEntries.sortedBy { fnv1a64(it.path).toULong() }
 
-        // Write index entries (24 bytes each), CRC placeholders
-        val indexEntriesStart = buf.size()
+        // Write index entries (24 bytes each), including CRCs computed while streaming FILEs.
         for (entry in sortedEntries) {
             buf.writeInt64(fnv1a64(entry.path))     // path hash (uint64)
             buf.writeInt32(4)                        // pathOffset (always 4, path follows FILE marker)
             buf.writeInt32(entry.dataOffset)         // dataOffset (absolute)
             buf.writeInt32(entry.dataSize)            // dataSize
-            buf.writeInt32(0)                        // CRC32 placeholder
+            buf.writeInt32(entry.crc32)
         }
 
         // --- DIRC SECTION ---
@@ -178,31 +191,11 @@ object Cov4Writer {
         buf.writeInt32(MARKER_END)
         buf.writeInt32(0)  // overall CRC32 placeholder
 
-        // --- BACK-PATCH ---
-        val data = buf.toByteArray()
-        val le = ByteOrder.LITTLE_ENDIAN
-
-        // Patch index offset in header
-        ByteBuffer.wrap(data, indexOffsetPos, 4).order(le).putInt(indexOffset)
-
-        // Patch directory offset in header
-        ByteBuffer.wrap(data, dirOffsetPos, 4).order(le).putInt(dirSectionOffset)
-
-        // Patch per-file CRC32s in index entries
-        for ((i, entry) in sortedEntries.withIndex()) {
-            val fileData = data.copyOfRange(entry.dataOffset, entry.dataOffset + entry.dataSize)
-            val crc = CRC32()
-            crc.update(fileData)
-            val crcPos = indexEntriesStart + i * 24 + 20 // 24 bytes/entry, CRC at offset +20
-            ByteBuffer.wrap(data, crcPos, 4).order(le).putInt(crc.value.toInt())
-        }
-
-        // Patch overall CRC32 (covers everything except last 4 bytes)
-        val overallCrc = CRC32()
-        overallCrc.update(data, 0, data.size - 4)
-        ByteBuffer.wrap(data, data.size - 4, 4).order(le).putInt(overallCrc.value.toInt())
-
-        return data
+        // Patch offsets before calculating the overall checksum. File-backed output uses a
+        // fixed-size buffer for both writing and the checksum pass, regardless of archive size.
+        buf.patchInt32(indexOffsetPos, indexOffset)
+        buf.patchInt32(dirOffsetPos, dirSectionOffset)
+        buf.patchInt32(buf.size() - 4, buf.crc32(buf.size() - 4))
     }
 
     /**
@@ -245,25 +238,85 @@ object Cov4Writer {
         return dirStats
     }
 
-    private fun ByteArrayOutputStream.writeInt32(value: Int) {
-        val buf = ByteArray(4)
-        ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).putInt(value)
-        write(buf)
+    private abstract class BinaryOutput(private val output: OutputStream) {
+        private var position = 0
+        var sectionCrc: CRC32? = null
+
+        fun size(): Int = position
+
+        private fun writeByte(value: Int) {
+            output.write(value)
+            sectionCrc?.update(value)
+            position = Math.addExact(position, 1)
+        }
+
+        fun writeInt32(value: Int) {
+            for (shift in 0 until 32 step 8) writeByte((value ushr shift) and 0xff)
+        }
+
+        fun writeSignedInt32(value: Int) = writeInt32(value)
+
+        fun writeInt64(value: Long) {
+            for (shift in 0 until 64 step 8) writeByte(((value ushr shift) and 0xff).toInt())
+        }
+
+        fun writeString(value: String) {
+            val bytes = value.toByteArray(Charsets.UTF_8)
+            writeInt32(bytes.size)
+            output.write(bytes)
+            sectionCrc?.update(bytes)
+            position = Math.addExact(position, bytes.size)
+        }
+
+        abstract fun patchInt32(offset: Int, value: Int)
+        abstract fun crc32(length: Int): Int
     }
 
-    private fun ByteArrayOutputStream.writeSignedInt32(value: Int) {
-        writeInt32(value)
+    private class ByteBufferOutput : ByteArrayOutputStream() {
+        fun patchInt32(offset: Int, value: Int) {
+            ByteBuffer.wrap(buf, offset, 4).order(ByteOrder.LITTLE_ENDIAN).putInt(value)
+        }
+
+        fun crc32(length: Int): Int = CRC32().apply { update(buf, 0, length) }.value.toInt()
     }
 
-    private fun ByteArrayOutputStream.writeInt64(value: Long) {
-        val buf = ByteArray(8)
-        ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).putLong(value)
-        write(buf)
+    private class MemoryOutput(private val buffer: ByteBufferOutput = ByteBufferOutput()) : BinaryOutput(buffer) {
+        override fun patchInt32(offset: Int, value: Int) = buffer.patchInt32(offset, value)
+        override fun crc32(length: Int): Int = buffer.crc32(length)
+        fun bytes(): ByteArray = buffer.toByteArray()
     }
 
-    private fun ByteArrayOutputStream.writeString(s: String) {
-        val bytes = s.toByteArray(Charsets.UTF_8)
-        writeInt32(bytes.size)
-        write(bytes)
+    private class FileOutput private constructor(
+        private val channel: FileChannel,
+        private val buffer: BufferedOutputStream,
+    ) : BinaryOutput(buffer), AutoCloseable {
+        private constructor(channel: FileChannel) : this(channel, BufferedOutputStream(Channels.newOutputStream(channel), 64 * 1024))
+        constructor(path: Path) : this(FileChannel.open(path, READ, WRITE))
+
+        override fun patchInt32(offset: Int, value: Int) {
+            buffer.flush()
+            val bytes = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value)
+            bytes.flip()
+            var position = offset.toLong()
+            while (bytes.hasRemaining()) position += channel.write(bytes, position)
+        }
+
+        override fun crc32(length: Int): Int {
+            buffer.flush()
+            val bytes = ByteBuffer.allocate(64 * 1024)
+            val crc = CRC32()
+            var position = 0L
+            while (position < length) {
+                bytes.clear()
+                bytes.limit(minOf(bytes.capacity().toLong(), length - position).toInt())
+                val count = channel.read(bytes, position)
+                check(count > 0) { "Unexpected end of COV4 output" }
+                crc.update(bytes.array(), 0, count)
+                position += count
+            }
+            return crc.value.toInt()
+        }
+
+        override fun close() = buffer.close()
     }
 }

@@ -3,9 +3,108 @@ package com.github.yakov255.perlinecoverageinfo
 import org.junit.Test
 import org.junit.Assert.*
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.util.zip.CRC32
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 import java.nio.file.Files
 
 class Cov4WriterReaderTest {
+
+    @Test
+    fun testConcurrentLookupsKeepIndependentPositions() {
+        val coverage = (1..10).associate { file ->
+            "src/file$file.php" to (1..100).associateWith { listOf("test_$file") }
+        }
+        val tempFile = Files.createTempFile("concurrent-coverage", ".cov4").toFile()
+        val executor = Executors.newFixedThreadPool(4)
+        try {
+            Cov4Writer.write(coverage, tempFile)
+            Cov4Reader(tempFile).use { reader ->
+                val futures = (1..100).map { lookup ->
+                    executor.submit {
+                        val path = "src/file${lookup % 10 + 1}.php"
+                        assertEquals(coverage[path], reader.getCoverage(path))
+                    }
+                }
+                futures.forEach { it.get(10, TimeUnit.SECONDS) }
+            }
+        } finally {
+            executor.shutdownNow()
+            tempFile.delete()
+        }
+    }
+
+    @Test
+    fun testWritingCoverageLargerThanHeap() {
+        val sharedLines = (1..10_000).associateWith { listOf("shared_test") }
+        val coverage = (1..1000).associate { "src/file$it.php" to sharedLines }
+        val tempFile = Files.createTempFile("large-streamed-coverage", ".cov4").toFile()
+        try {
+            Cov4Writer.write(coverage, tempFile)
+            assertTrue(tempFile.length() > 64L * 1024 * 1024)
+            Cov4Reader(tempFile).use { reader ->
+                assertEquals(1000, reader.allFilePaths.size)
+                assertEquals(sharedLines, reader.getCoverage("src/file1000.php"))
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
+    fun testLargeSnapshotDoesNotNeedFileSizedHeap() {
+        val coverage = mapOf("src/main.php" to mapOf(1 to listOf("test")))
+        val tempFile = Files.createTempFile("large-coverage", ".cov4").toFile()
+        try {
+            Cov4Writer.write(coverage, tempFile)
+            // Sparse trailing bytes do not change indexed coverage. Run this test with -Xmx64m:
+            // reading the entire file into a byte array would exhaust the heap.
+            RandomAccessFile(tempFile, "rw").use { it.setLength(128L * 1024 * 1024) }
+            Cov4Reader(tempFile).use { reader ->
+                assertEquals(coverage["src/main.php"], reader.getCoverage("src/main.php"))
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
+    fun testStreamedOutputMatchesFormatAndChecksums() {
+        val coverage = (1..40).associate { file ->
+            "dir/file$file.php" to (1..100).associateWith { line ->
+                if (line % 3 == 0) emptyList() else listOf("test_$file", "shared_test")
+            }
+        }
+        val tempFile = Files.createTempFile("streamed-coverage", ".cov4").toFile()
+        try {
+            Cov4Writer.write(coverage, tempFile)
+            val bytes = tempFile.readBytes()
+            assertArrayEquals(Cov4Writer.toBytes(coverage), bytes)
+            val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+            val indexOffset = buffer.getInt(20)
+            val count = buffer.getInt(indexOffset + 4)
+            assertEquals(coverage.size, count)
+            repeat(count) { index ->
+                val entry = indexOffset + 8 + index * 24
+                val offset = buffer.getInt(entry + 12)
+                val length = buffer.getInt(entry + 16)
+                val expected = CRC32().apply { update(bytes, offset, length) }.value.toInt()
+                assertEquals(expected, buffer.getInt(entry + 20))
+            }
+            val expected = CRC32().apply { update(bytes, 0, bytes.size - 4) }.value.toInt()
+            assertEquals(expected, buffer.getInt(bytes.size - 4))
+            Cov4Reader(tempFile).use { reader ->
+                coverage.forEach { (path, lines) ->
+                    assertEquals(lines.mapValues { it.value.toSet() }, reader.getCoverage(path)!!.mapValues { it.value.toSet() })
+                }
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
 
     @Test
     fun testOpenReaderKeepsSnapshotWhenCacheIsRewritten() {
@@ -217,6 +316,8 @@ class Cov4WriterReaderTest {
                 assertEquals(sharedTests, cov[1])
                 assertEquals(sharedTests, cov[2])
                 assertEquals(sharedTests, cov[3])
+                assertSame("Lines using one test set must share its decoded list", cov[1], cov[2])
+                assertSame(cov[1], cov[3])
                 assertEquals(listOf("test_c"), cov[4])
             }
         } finally {

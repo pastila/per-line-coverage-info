@@ -85,8 +85,8 @@ class CoverageCacheService(private val project: Project) {
         }
 
         // Share Cov4Reader instances across project windows so large files are read
-        // once per commit, not once per open window. Readers are immutable and
-        // close() is a no-op, so sharing an instance is safe.
+        // once per commit, not once per open window. Each caller owns a handle;
+        // closing it leaves the cache and other project owners intact.
         return GitLabCoordinator.getInstance().sharedReader(
             commitHash,
             component,

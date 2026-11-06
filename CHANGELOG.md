@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+- Close GitLab HTTP/retry executors and cancel pending requests when replacing the client or unloading the plugin
+- Explicitly release shared coverage archives on clear, eviction and project disposal while allowing active reads to finish
+- Coalesce highlighting to one running task and the latest pending request per editor, cancel stale work and discard queued results when documents or coverage change
+- Store local coverage runs and source snapshots in disk archives, decode files on demand, and filter superseded tests lazily so repeated runs and stale coverage do not retain full reports in memory
+- Bound GitLab metadata, resolution and refresh cooldown caches, and remove expired entries on reads and writes to prevent accumulation across commits and pipelines
+- Reduce coverage memory usage: keep immutable COV4 snapshots on disk, share decoded test sets between lines, process CI reports one at a time, and stream gzip decoding and COV4 writes
+
 ## [2.9.6] - 2026-11-06
 
 - Fix `Expected FILE marker` errors after coverage cache rewrites: keep each reader's index and binary data in one immutable snapshot and publish cache files atomically

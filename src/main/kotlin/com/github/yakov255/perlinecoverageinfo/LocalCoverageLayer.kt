@@ -7,30 +7,62 @@ package com.github.yakov255.perlinecoverageinfo
  * which is why every covered file keeps its [snapshots] content: it is later diffed against the
  * current editor text, the same way CI coverage is diffed against `git show <commit>:path`.
  */
-class LocalCoverageRun(
+class LocalCoverageRun private constructor(
     /** Every test executed in the run — also the tests whose CI data this run supersedes. */
     val tests: Set<String>,
     /** Git-root-relative path → 1-based line → covering tests (empty list = coverable, not covered). */
-    val coverage: Map<String, Map<Int, List<String>>>,
+    coverage: Map<String, Map<Int, List<String>>>,
     /** Git-root-relative path → file content the line numbers in [coverage] refer to. */
     val snapshots: Map<String, String>,
     /** HEAD commit the run was collected on; null when it could not be resolved. */
-    val commit: String? = null,
-) {
+    val commit: String?,
+    private val filterToTests: Boolean,
+    private val archiveReader: Cov4Reader?,
+) : AutoCloseable {
+    constructor(
+        tests: Set<String>,
+        coverage: Map<String, Map<Int, List<String>>>,
+        snapshots: Map<String, String>,
+        commit: String? = null,
+    ) : this(tests, coverage, snapshots, commit, filterToTests = false, archiveReader = null)
+
+    private val originalCoverage = coverage
+
+    /** Filter superseded tests on lookup, retaining the archive instead of decoded file maps. */
+    val coverage: Map<String, Map<Int, List<String>>> = if (!filterToTests) coverage else {
+        LazyFileMap(coverage.keys) { path ->
+            originalCoverage[path]?.let { lines ->
+                val filteredSets = java.util.IdentityHashMap<List<String>, List<String>>()
+                lines.mapValues { (_, lineTests) ->
+                    CoverageCancellation.check()
+                    filteredSets.getOrPut(lineTests) { lineTests.filter { it in tests } }
+                }
+            }
+        }
+    }
+
     /** Returns this run with [superseded] tests removed, or null if no tests are left. */
     fun without(superseded: Set<String>): LocalCoverageRun? {
         if (tests.none { it in superseded }) return this
         val remaining = tests - superseded
         if (remaining.isEmpty()) return null
-        val filtered = coverage.mapValues { (_, lines) ->
-            lines.mapValues { (_, lineTests) -> lineTests.filter { it !in superseded } }
-        }
-        return LocalCoverageRun(remaining, filtered, snapshots, commit)
+        return LocalCoverageRun(remaining, originalCoverage, snapshots, commit, filterToTests = true, archiveReader)
     }
 
     /** Returns this run stamped with [commit], so it counts as collected on that HEAD. */
     fun restampedTo(commit: String?): LocalCoverageRun =
-        if (this.commit == commit) this else LocalCoverageRun(tests, coverage, snapshots, commit)
+        if (this.commit == commit) this else LocalCoverageRun(tests, originalCoverage, snapshots, commit, filterToTests, archiveReader)
+
+    internal fun sharesArchive(other: LocalCoverageRun): Boolean = archiveReader != null && archiveReader === other.archiveReader
+    internal fun retainArchive(): AutoCloseable? = archiveReader?.retain()
+    override fun close() { archiveReader?.close() }
+
+    companion object {
+        internal fun archived(
+            tests: Set<String>, coverage: Map<String, Map<Int, List<String>>>,
+            snapshots: Map<String, String>, commit: String?, reader: Cov4Reader,
+        ) = LocalCoverageRun(tests, coverage, snapshots, commit, false, reader)
+    }
 
     /**
      * Whether the run belongs to a different commit than [head] — its file snapshots and the
@@ -56,14 +88,25 @@ class LocalCoverageLayer {
     private var runs: List<LocalCoverageRun> = emptyList()
 
     fun add(run: LocalCoverageRun) {
+        if (run.tests.isEmpty()) {
+            run.close()
+            return
+        }
         synchronized(this) {
-            runs = runs.mapNotNull { it.without(run.tests) } + run
+            val removed = ArrayList<LocalCoverageRun>()
+            val surviving = runs.mapNotNull { old ->
+                old.without(run.tests).also { if (it == null) removed.add(old) }
+            }
+            runs = surviving + run
+            removed.filterNot { old -> runs.any { it.sharesArchive(old) } }.forEach { it.close() }
         }
     }
 
     fun clear() {
         synchronized(this) {
+            val old = runs
             runs = emptyList()
+            old.forEach { it.close() }
         }
     }
 
@@ -73,6 +116,19 @@ class LocalCoverageLayer {
 
     /** Runs collected on [head] — the only ones that may be merged over CI coverage. */
     fun activeRuns(head: String?): List<LocalCoverageRun> = runs.filterNot { it.isStale(head) }
+
+    /** Keeps archives alive across all lookups, even if a concurrent clear supersedes the runs. */
+    fun <T> withActiveRuns(head: String?, read: (List<LocalCoverageRun>) -> T): T {
+        val leases = ArrayList<AutoCloseable>()
+        try {
+            val active = synchronized(this) {
+                activeRuns(head).also { active -> active.forEach { it.retainArchive()?.let(leases::add) } }
+            }
+            return read(active)
+        } finally {
+            leases.forEach { it.close() }
+        }
+    }
 
     /** Runs collected on another commit; kept, but excluded from the merge until restored. */
     fun staleRuns(head: String?): List<LocalCoverageRun> = runs.filter { it.isStale(head) }
@@ -117,9 +173,11 @@ object LocalCoverageMerge {
 
         val result = LinkedHashMap<Int, List<String>>(ci.size + (local?.size ?: 0))
         for ((line, tests) in ci) {
+            CoverageCancellation.check()
             result[line] = tests.filter { it !in localTests }
         }
         local?.forEach { (line, tests) ->
+            CoverageCancellation.check()
             result[line] = CoverageDiff.union(result[line] ?: emptyList(), tests)
         }
         return result
@@ -132,6 +190,7 @@ object LocalCoverageMerge {
         val result = LinkedHashMap<Int, List<String>>()
         for (lines in perRun) {
             for ((line, tests) in lines) {
+                CoverageCancellation.check()
                 result[line] = CoverageDiff.union(result[line] ?: emptyList(), tests)
             }
         }

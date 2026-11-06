@@ -41,7 +41,7 @@ class GitLabCoordinator : Disposable {
     private val readerCache = ReaderLruCache(MAX_READER_CACHE_ENTRIES, log)
     private val singleFlight = ConcurrentHashMap<String, CompletableFuture<*>>()
     private val memoizedCaches = ConcurrentHashMap<String, TtlCache<String, Any>>()
-    private val refreshCooldowns = ConcurrentHashMap<String, Long>()
+    private val refreshCooldowns = TtlCache<String, Unit>(REFRESH_COOLDOWN_MS)
 
     /**
      * Returns the shared, cached, rate-limited GitLab API for the current
@@ -83,8 +83,8 @@ class GitLabCoordinator : Disposable {
 
     /**
      * Returns a shared [Cov4Reader] for the given commit/component, opening it
-     * via [open] on first access. Readers are immutable and [Cov4Reader.close]
-     * is a no-op, so sharing an instance across project windows is safe.
+     * via [open] on first access. Each caller owns an independent handle and must
+     * close it; the cache and other projects retain their own handles.
      */
     fun sharedReader(
         commitHash: String,
@@ -93,6 +93,9 @@ class GitLabCoordinator : Disposable {
         variant: String = "",
     ): Cov4Reader? =
         readerCache.getOrOpen("$commitHash|$component|$variant", open)
+
+    /** Drops cache ownership without interrupting projects or in-flight reads. */
+    fun clearReaders() = readerCache.clear()
 
     /**
      * Coalesces concurrent identical work: if another thread is already running
@@ -152,14 +155,12 @@ class GitLabCoordinator : Disposable {
 
     /** Records a successful coverage refresh of [gitRoot] at [headSha]. */
     fun markRefreshed(gitRoot: File, headSha: String) {
-        refreshCooldowns["$gitRoot|$headSha"] = System.currentTimeMillis()
+        refreshCooldowns.put("$gitRoot|$headSha", Unit)
     }
 
-    /** True if [gitRoot]@[headSha] was refreshed less than [cooldownMs] ago. */
-    fun isWithinRefreshCooldown(gitRoot: File, headSha: String, cooldownMs: Long): Boolean {
-        val last = refreshCooldowns["$gitRoot|$headSha"] ?: return false
-        return System.currentTimeMillis() - last < cooldownMs
-    }
+    /** True if [gitRoot]@[headSha] was refreshed less than [REFRESH_COOLDOWN_MS] ago. */
+    fun isWithinRefreshCooldown(gitRoot: File, headSha: String): Boolean =
+        refreshCooldowns.get("$gitRoot|$headSha") != null
 
     override fun dispose() {
         synchronized(lock) {
@@ -174,6 +175,7 @@ class GitLabCoordinator : Disposable {
 
     companion object {
         private const val MAX_READER_CACHE_ENTRIES = 6
+        private const val REFRESH_COOLDOWN_MS = 60_000L
 
         fun getInstance(): GitLabCoordinator = service()
     }
@@ -188,35 +190,34 @@ private fun <T> CompletableFuture<T>.joinAndUnwrap(): T {
 }
 
 /**
- * Small LRU for [Cov4Reader] instances. [Cov4Reader.close] is a no-op, so
- * evicted readers are simply dropped (their underlying byte arrays become
- * garbage collectable).
+ * Small LRU owning one handle per reader. Eviction closes only the cache's handle;
+ * project owners and in-flight reads keep the snapshot alive independently.
  */
 private class ReaderLruCache(private val maxEntries: Int, private val log: CoverageLog) {
 
-    private val map = object : LinkedHashMap<String, Cov4Reader>(16, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Cov4Reader>?): Boolean =
-            size > maxEntries
-    }
+    private val map = LinkedHashMap<String, Cov4Reader>(16, 0.75f, true)
     private val lock = Any()
 
     fun getOrOpen(key: String, open: () -> Cov4Reader?): Cov4Reader? {
         synchronized(lock) {
             map[key]?.let {
                 log.debug("GitLab coordinator: reusing cached reader ($key)")
-                return it
+                return it.retain()
             }
         }
         val reader = open() ?: return null
         synchronized(lock) {
-            map[key]?.let { return it }
+            map[key]?.let {
+                reader.close()
+                return it.retain()
+            }
             if (map.size >= maxEntries) {
                 val eldest = map.entries.first()
                 log.debug("GitLab coordinator: evicting reader (${eldest.key})")
-                map.remove(eldest.key)
+                map.remove(eldest.key)?.close()
             }
             map[key] = reader
-            return reader
+            return reader.retain()
         }
     }
 
@@ -224,6 +225,7 @@ private class ReaderLruCache(private val maxEntries: Int, private val log: Cover
 
     fun clear() {
         synchronized(lock) {
+            map.values.forEach { it.close() }
             map.clear()
         }
     }

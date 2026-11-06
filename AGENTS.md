@@ -45,7 +45,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageResolver.kt` | Picks the best pipeline for current HEAD via three-tier merge-base resolution; `resolveDual()` returns `DualResolved(primary, baseline?)` for dual-coverage mode. Works against the shared `GitLabApi` facade |
 | `CachedGitLabApi.kt` | Shared "worker" facade implementing `GitLabApi`: serializes metadata calls (pipelines/jobs/merge-base) on one dedicated worker thread, TTL-caches results, rate-limits actual requests. Artifact downloads pass through. `invalidateJobs()` forces fresh job status for the wait-loop |
 | `GitLabCoordinator.kt` | App-level (`Service.Level.APP`) coordinator owning the single shared worker for the whole JVM: `api()` (recreates client on settings change, clears caches), `singleFlight()`/`memoize()` (cross-window coalescing + TTL memoization), `sharedReader()` (LRU of `Cov4Reader`), `markRefreshed()`/`isWithinRefreshCooldown()` (refresh cooldown) |
-| `TtlCache.kt` | Generic thread-safe TTL cache (lazy expiry) |
+| `TtlCache.kt` | Bounded thread-safe TTL cache (256 entries by default); monotonic TTL, expired entries removed on reads/writes, oldest-write capacity eviction |
 | `RateLimiter.kt` | Token-bucket rate limiter (`tryAcquire`/`acquire(timeout)`) |
 
 ### Loading pipeline
@@ -70,8 +70,10 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | File | Purpose |
 |------|---------|
 | `BinaryCoverageParser.kt` | Parses `.covt` binary and CI artifact ZIPs → `Map<file, Map<line, List<test>>>` |
-| `Cov4Writer.kt` | Writes COV4 random-access cache file (spec: `coverage_storage_format_v4.md`) |
-| `Cov4Reader.kt` | Reads COV4 on demand (lazy per-file decoding); implements `Closeable` |
+| `Cov4Writer.kt` | Streams the COV4 random-access cache to disk, computes checksums and publishes atomically (spec: `coverage_storage_format_v4.md`) |
+| `Cov4Snapshot.kt` / `SharedLifetime.kt` | Private disk snapshots with explicit shared ownership; active reads retain the resource until they finish, Cleaner is a fallback |
+| `CoverageReportMerger.kt` | Incrementally merges CI reports, preserving shared test sets without retaining completed shards |
+| `Cov4Reader.kt` | Reads immutable disk snapshots on demand; `retain()` creates an independently owned handle, `close()` releases it |
 | `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<projectId>/`; key = commit hash + component; files named `hash-component.cov4`; manages index, cleanup (7 days by `lastUsedMs`), last-used tracking, in-JVM-synchronized writes, shared `Cov4Reader` via coordinator. `CacheEntry` stores component and branch per artifact. |
 
 ### In-memory model
@@ -81,13 +83,14 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `LineMappingService.kt` | Maps old coverage line numbers to current document lines via `git show` + `ComparisonManager` diff; supports both primary and baseline commits; LRU cache of file contents |
 | `CoverageLineMapper.kt` | Pure functions: diff old/new content, build old→new line map |
 | `LocalCoverageLayer.kt` | Pure model of local runs: `LocalCoverageRun` (tests + coverage + file snapshots + the commit it was collected on), `LocalCoverageLayer` (newer run supersedes the same tests in older runs; `activeRuns`/`staleRuns`/`restampTo` split runs by commit), `LocalCoverageMerge` (CI ⊕ local), `LocalCoveragePaths` (`core/web/app/…` → `app/…`) |
+| `LocalCoverageArchive.kt` | Stores local coverage and UTF-8 source snapshots in a private disk archive; exposes lazy per-file maps |
 | `LocalCoverageService.kt` | Project service holding the local layer: loads `.covt` runs (manual or auto via IDE file watcher on `localCoverageDir`, loaded once size+mtime settle), maps each run from its snapshot onto the current document |
 | `CoverageDiff.kt` | Pure helpers: `featureOnly(primary, baseline)` (set-diff by test name) and `union(primary, baseline)` (distinct, primary first) |
 
 ### Rendering
 | File | Purpose |
 |------|---------|
-| `CoverageHighlighter.kt` | Applies line-background highlighters and gutter renderers; classifies each line as `COVERED` (green) / `UNCOVERED` (red) / `FEATURE_ONLY` (blue) when baseline is present |
+| `CoverageHighlighter.kt` | Coalesces editor requests via `LatestTaskQueue`, cancels stale CPU/disk/git work via `CoverageCancellation`, and checks document/coverage generations before applying results; classifies each line as `COVERED` (green) / `UNCOVERED` (red) / `FEATURE_ONLY` (blue) when baseline is present |
 | `CoverageGutterRenderer.kt` | Gutter strip coloured by `CoverageCategory`; tooltip shows count of feature-only tests; click opens "Covering Line" panel |
 | `CoverageEditorListener.kt` | Applies highlights on editor open; re-applies on document change (debounced 300 ms) |
 | `CoverageGutterVisibilityService.kt` | Persists gutter visible/hidden toggle across restarts; gates all loading activity when hidden |
@@ -168,7 +171,7 @@ effective = (ci − localTests) ∪ local
 
 `localTests` is the full test list from the `.covt` headers: a scenario re-run locally replaces its CI data everywhere, including files the local run no longer reaches; scenarios not run locally keep their CI data. Line numbers: CI is mapped from `git show <commit>:path`, each local run from the file snapshot taken when the run was loaded (the run executed the on-disk files, which may be uncommitted). `CoverageHighlighter` merges via `LocalCoverageMerge.merge` before rendering, so dual-mode classification works unchanged — local tests missing on master show as blue.
 
-**Staleness on checkout.** Every run remembers the HEAD it was collected on. `CoverageHeadTracker` calls `LocalCoverageService.onHeadChanged()` on each HEAD move (before the gutter-visibility gate): runs of another commit become **stale** — kept in memory but excluded from the merge, because their file snapshots and the CI coverage they supersede describe the previous checkout. A balloon reports it, and the "Restore Stale Local Coverage" button appears in the Covering Line toolbar (`restoreStale()` re-stamps them onto the current HEAD). `hasActiveData()` / `tests()` / `getMappedCoverage()` see only non-stale runs; `hasData()` / `runCount()` still count everything, so "Clear Local Coverage" stays available.
+**Staleness on checkout.** Every run remembers the HEAD it was collected on. `CoverageHeadTracker` calls `LocalCoverageService.onHeadChanged()` on each HEAD move (before the gutter-visibility gate): runs of another commit become **stale** — kept in the local layer with payloads on disk, but excluded from the merge, because their file snapshots and the CI coverage they supersede describe the previous checkout. A balloon reports it, and the "Restore Stale Local Coverage" button appears in the Covering Line toolbar (`restoreStale()` re-stamps them onto the current HEAD). `hasActiveData()` / `tests()` / `getMappedCoverage()` see only non-stale runs; `hasData()` / `runCount()` still count everything, so "Clear Local Coverage" stays available.
 
 Auto-load: `LocalFileSystem.addRootToWatch(<git root>/<localCoverageDir>)` + `VFS_CHANGES` listener; the directory and its parent get their VFS children loaded so events arrive even when it is excluded from the project. Files already present at startup are not loaded (their snapshots are unknown). Collecting: with `collectLocalCoverage` on, `LocalCoverageRunExtension` rewrites every Behat launch from the IDE to write `<git root>/<localCoverageDir>/local.covt` (interpreter-side path), which the watcher then loads. Not yet merged: MCP tools, "Affected by Changes".
 
@@ -248,6 +251,8 @@ Rules:
 - **Errors**: throw `CoverageApiException(CoverageErrorKind.*)`. Auto-triggered callers only log (silent mode).
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
+- **Reader ownership**: `CoverageCacheService.get()` / `GitLabCoordinator.sharedReader()` return owned handles: close them with `use`. `CoverageDataService` retains its own handle; eviction/clear closes cache ownership without breaking other readers.
+- **Local archive ownership**: `LocalCoverageLayer.add()` takes ownership of the run; supersession and clear release archives. Use `withActiveRuns(head) { ... }` for coverage/snapshot reads so concurrent clear cannot interrupt an active reader.
 - **Local runs are per-commit**: `LocalCoverageRun.commit` is the HEAD at load time; anything that reads the layer for rendering must go through `activeRuns`/`activeTests` (the `head`-aware API), never the raw `runs()`/`tests()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.
 - **HEAD tracker**: `CoverageHeadTracker` skits the initial `null → revision` event to avoid duplicating `CoverageStartupActivity`.

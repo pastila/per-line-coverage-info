@@ -34,6 +34,7 @@ class CoverageEditorListener : EditorFactoryListener {
 
     override fun editorReleased(event: EditorFactoryEvent) {
         val editor = event.editor
+        CoverageHighlighter.editorReleased(editor)
         val disposable = editor.getUserData(COVERAGE_DOC_DISPOSABLE_KEY)
         if (disposable != null) {
             Disposer.dispose(disposable)
@@ -73,6 +74,7 @@ private class CoverageDocumentListener(
     private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
 
     override fun documentChanged(event: DocumentEvent) {
+        CoverageHighlighter.cancelPending(editor)
         alarm.cancelAllRequests()
         alarm.addRequest({
             if (!project.isDisposed && !editor.isDisposed) {

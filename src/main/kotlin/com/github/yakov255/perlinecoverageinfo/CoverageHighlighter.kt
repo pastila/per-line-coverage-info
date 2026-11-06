@@ -1,5 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.application.ReadAction
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.EditorFactory
@@ -8,12 +10,18 @@ import com.intellij.openapi.editor.markup.HighlighterTargetArea
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.progress.ProcessCanceledException
+import com.intellij.openapi.progress.ProgressManager
+import com.intellij.openapi.progress.util.ProgressIndicatorBase
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.util.Key
 import java.io.File
 import java.nio.file.Paths
 
 object CoverageHighlighter {
 
+    private val log = CoverageLog.get(CoverageHighlighter::class.java)
+    private val TASK_KEY = Key.create<EditorTask>("PER_LINE_COVERAGE_TASK")
     private const val COVERAGE_LAYER = HighlighterLayer.LAST + 1
     val COVERAGE_HIGHLIGHTER_KEY = Key.create<Boolean>("PER_LINE_COVERAGE_HIGHLIGHTER")
 
@@ -50,78 +58,119 @@ object CoverageHighlighter {
      * subsequent [CoverageDocumentListener] alarm will retrigger.
      */
     fun applyToEditor(editor: Editor, project: Project) {
-        val dataService = CoverageDataService.getInstance(project)
-        val localService = LocalCoverageService.getInstance(project)
-        if (!dataService.hasData() && !localService.hasActiveData()) {
-            return
-        }
-        if (!CoverageGutterVisibilityService.getInstance(project).visible) {
+        if (editor.isDisposed || project.isDisposed) return
+        val data = CoverageDataService.getInstance(project)
+        val local = LocalCoverageService.getInstance(project)
+        if ((!data.hasData() && !local.hasActiveData()) || !CoverageGutterVisibilityService.getInstance(project).visible) {
             clearCoverageHighlighters(editor)
             return
         }
+        val file = FileDocumentManager.getInstance().getFile(editor.document) ?: return
+        val task = synchronized(editor) {
+            editor.getUserData(TASK_KEY) ?: EditorTask(editor, project).also {
+                editor.putUserData(TASK_KEY, it)
+                if (!Disposer.tryRegister(CoveragePluginDisposable.getInstance(project), it)) it.dispose()
+            }
+        }
+        val snapshot = ReadAction.compute<HighlightSnapshot, RuntimeException> {
+            HighlightSnapshot(editor.document.text, editor.document.modificationStamp, data.hasBaseline(), file.path,
+                data.coverageGeneration, local.coverageGeneration)
+        }
+        task.submit(snapshot)
+    }
 
-        val document = editor.document
-        val virtualFile = FileDocumentManager.getInstance().getFile(document)
-        if (virtualFile == null) {
-            return
+    fun cancelPending(editor: Editor) { editor.getUserData(TASK_KEY)?.cancel() }
+
+    fun editorReleased(editor: Editor) {
+        editor.getUserData(TASK_KEY)?.let { Disposer.dispose(it) }
+    }
+
+    private class EditorTask(private val editor: Editor, private val project: Project) : Disposable {
+        private data class Result(
+            val snapshot: HighlightSnapshot, val ticket: LatestTaskQueue.Ticket,
+            val lines: Map<Int, List<String>>, val baseline: Map<Int, List<String>>?, val localTests: Set<String>,
+        )
+        private var result: Result? = null
+        private var applyQueued = false
+        private var disposed = false
+        private val queue = LatestTaskQueue<HighlightSnapshot>(
+            java.util.concurrent.Executor { ApplicationManager.getApplication().executeOnPooledThread(it) },
+            { log.warn("Coverage: highlight task failed", it) },
+        ) { snapshot, ticket ->
+            val indicator = ProgressIndicatorBase()
+            ticket.onCancel(indicator::cancel)
+            try {
+                ProgressManager.getInstance().runProcess(Runnable {
+                    CoverageCancellation.withIndicator(indicator) { compute(snapshot, ticket) }
+                }, indicator)
+            } catch (_: ProcessCanceledException) {
+                // Cooperative cancellation keeps shared file channels intact.
+            }
         }
 
-        val snapshot = HighlightSnapshot(
-            text = document.text,
-            lineCount = document.lineCount,
-            hasBaseline = dataService.hasBaseline(),
-            filePath = virtualFile.path,
-        )
+        @Synchronized fun submit(snapshot: HighlightSnapshot) {
+            if (disposed) return
+            result = null
+            queue.submit(snapshot)
+        }
 
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val lineMappingService = LineMappingService.getInstance(project)
-            val ciLines = if (dataService.hasData()) {
-                lineMappingService.getMappedCoverage(snapshot.filePath, snapshot.text)
-                    ?: findCoverageForFile(snapshot.filePath, project)
-            } else {
-                null
+        @Synchronized fun cancel() {
+            result = null
+            queue.cancel()
+        }
+
+        @Synchronized override fun dispose() {
+            if (disposed) return
+            disposed = true
+            result = null
+            queue.close()
+            editor.putUserData(TASK_KEY, null)
+        }
+
+        private fun compute(snapshot: HighlightSnapshot, ticket: LatestTaskQueue.Ticket) {
+            CoverageCancellation.check()
+            if (project.isDisposed || editor.isDisposed) return
+            val data = CoverageDataService.getInstance(project)
+            val local = LocalCoverageService.getInstance(project)
+            val mapper = LineMappingService.getInstance(project)
+            val ci = if (data.hasData()) mapper.getMappedCoverage(snapshot.filePath, snapshot.text)
+                ?: findCoverageForFile(snapshot.filePath, project) else null
+            CoverageCancellation.check()
+            val tests = local.tests()
+            val localLines = local.getMappedCoverage(snapshot.filePath, snapshot.text)
+            val lines = LocalCoverageMerge.merge(ci, localLines, tests) ?: return
+            CoverageCancellation.check()
+            val baseline = if (snapshot.hasBaseline) mapper.getMappedBaselineCoverage(snapshot.filePath, snapshot.text)
+                ?: findBaselineCoverageForFile(snapshot.filePath, project) else null
+            CoverageCancellation.check()
+            synchronized(this) {
+                if (disposed || ticket.cancelled) return
+                result = Result(snapshot, ticket, lines, baseline, tests)
+                if (applyQueued) return
+                applyQueued = true
             }
-            val localTests = localService.tests()
-            val localLines = localService.getMappedCoverage(snapshot.filePath, snapshot.text)
-            val coverageLines = LocalCoverageMerge.merge(ciLines, localLines, localTests)
-            if (coverageLines == null) {
-                return@executeOnPooledThread
-            }
+            // The queued closure holds only the task; replaced results release their maps immediately.
+            ApplicationManager.getApplication().invokeLater { applyResult() }
+        }
 
-            val baselineLines: Map<Int, List<String>>? = if (snapshot.hasBaseline) {
-                lineMappingService.getMappedBaselineCoverage(snapshot.filePath, snapshot.text)
-                    ?: findBaselineCoverageForFile(snapshot.filePath, project)
-            } else {
-                null
-            }
-
-            ApplicationManager.getApplication().invokeLater {
-                if (project.isDisposed || editor.isDisposed) return@invokeLater
-                if (document.text != snapshot.text) {
-                    return@invokeLater
-                }
-
-                clearCoverageHighlighters(editor)
-
-                val warnings = CoverageWarningService.getInstance(project).getWarnings()
-                val renderer = FileCoverageRenderer(
-                    filePath = snapshot.filePath,
-                    project = project,
-                    coverageLines = coverageLines,
-                    baselineLines = baselineLines,
-                    hasBaseline = snapshot.hasBaseline,
-                    warnings = warnings,
-                    localTests = localTests,
-                )
-
-                val highlighter = editor.markupModel.addRangeHighlighter(
-                    0, document.textLength, COVERAGE_LAYER,
-                    TextAttributes(null, null, null, null, 0),
-                    HighlighterTargetArea.LINES_IN_RANGE
-                )
-                highlighter.lineMarkerRenderer = renderer
-                highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
-            }
+        @Synchronized private fun applyResult() {
+            applyQueued = false
+            val ready = result.also { result = null } ?: return
+            if (disposed || ready.ticket.cancelled || project.isDisposed || editor.isDisposed) return
+            val snapshot = ready.snapshot
+            if (editor.document.modificationStamp != snapshot.modificationStamp ||
+                CoverageDataService.getInstance(project).coverageGeneration != snapshot.ciGeneration ||
+                LocalCoverageService.getInstance(project).coverageGeneration != snapshot.localGeneration ||
+                !CoverageGutterVisibilityService.getInstance(project).visible) return
+            removeCoverageHighlighters(editor)
+            val renderer = FileCoverageRenderer(snapshot.filePath, project, ready.lines, ready.baseline,
+                snapshot.hasBaseline, CoverageWarningService.getInstance(project).getWarnings(), ready.localTests)
+            val highlighter = editor.markupModel.addRangeHighlighter(
+                0, editor.document.textLength, COVERAGE_LAYER, TextAttributes(null, null, null, null, 0),
+                HighlighterTargetArea.LINES_IN_RANGE,
+            )
+            highlighter.lineMarkerRenderer = renderer
+            highlighter.putUserData(COVERAGE_HIGHLIGHTER_KEY, true)
         }
     }
 
@@ -158,6 +207,11 @@ object CoverageHighlighter {
         CoverageDataService.getInstance(project).hasData() || LocalCoverageService.getInstance(project).hasActiveData()
 
     fun clearCoverageHighlighters(editor: Editor) {
+        cancelPending(editor)
+        removeCoverageHighlighters(editor)
+    }
+
+    private fun removeCoverageHighlighters(editor: Editor) {
         val toRemove = editor.markupModel.allHighlighters.filter {
             it.getUserData(COVERAGE_HIGHLIGHTER_KEY) == true
         }
@@ -195,8 +249,10 @@ object CoverageHighlighter {
  */
 private data class HighlightSnapshot(
     val text: String,
-    val lineCount: Int,
+    val modificationStamp: Long,
     val hasBaseline: Boolean,
     val filePath: String,
+    val ciGeneration: Long,
+    val localGeneration: Long,
 )
 

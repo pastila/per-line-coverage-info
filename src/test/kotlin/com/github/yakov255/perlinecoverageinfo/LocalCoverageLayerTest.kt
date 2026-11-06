@@ -115,6 +115,43 @@ class LocalCoverageLayerTest {
     // --- layer ---
 
     @Test
+    fun `partial supersession decodes only the requested file and does not stack filters`() {
+        val reads = mutableListOf<String>()
+        val data = mapOf(
+            "a.php" to mapOf(1 to listOf("t1", "t2", "t3"), 2 to emptyList()),
+            "b.php" to mapOf(5 to listOf("t3")),
+        )
+        val original = LocalCoverageRun(setOf("t1", "t2", "t3"), LazyFileMap(data.keys) { path ->
+            reads.add(path)
+            data[path]
+        }, emptyMap(), "old-head")
+        val remaining = original.without(setOf("t1"))!!.without(setOf("t2"))!!.restampedTo("new-head")
+        assertTrue(reads.isEmpty())
+        assertEquals(setOf("a.php", "b.php"), remaining.coverage.keys)
+        assertTrue(reads.isEmpty())
+        assertEquals(mapOf(1 to listOf("t3"), 2 to emptyList()), remaining.coverage["a.php"])
+        assertEquals(listOf("a.php"), reads)
+        assertEquals(setOf("t3"), remaining.tests)
+        assertEquals("new-head", remaining.commit)
+    }
+
+    @Test
+    fun `filtered lines continue sharing identical test sets`() {
+        val shared = listOf("t1", "t2")
+        val run = run(setOf("t1", "t2"), "a.php" to (1..1000).associateWith { shared })
+        val lines = run.without(setOf("t1"))!!.coverage.getValue("a.php")
+        assertEquals(listOf("t2"), lines[1])
+        assertSame(lines[1], lines[1000])
+    }
+
+    @Test
+    fun `runs without executed tests do not accumulate`() {
+        val layer = LocalCoverageLayer()
+        repeat(1000) { layer.add(run(emptySet())) }
+        assertTrue(layer.isEmpty())
+    }
+
+    @Test
     fun `newer run supersedes the same test in older runs`() {
         val layer = LocalCoverageLayer()
         layer.add(run(setOf("t1", "t2"), "src/A.php" to mapOf(1 to listOf("t1", "t2"), 2 to listOf("t1"))))

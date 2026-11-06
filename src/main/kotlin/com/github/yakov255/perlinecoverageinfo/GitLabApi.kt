@@ -14,7 +14,9 @@ import java.util.concurrent.CompletableFuture
  * from [GitLabCoordinator.api] so that concurrent callers (multiple project
  * windows, poller, resolver) are coalesced into a single worker.
  */
-interface GitLabApi {
+interface GitLabApi : AutoCloseable {
+
+    override fun close() {}
 
     fun searchProjects(query: String): List<GitLabProject>
 

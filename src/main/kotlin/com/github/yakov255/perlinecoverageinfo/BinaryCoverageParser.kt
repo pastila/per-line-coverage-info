@@ -1,7 +1,10 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
+import java.io.BufferedInputStream
+import java.io.DataInputStream
+import java.io.EOFException
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.zip.GZIPInputStream
 
 /**
@@ -31,19 +34,12 @@ object BinaryCoverageParser {
      * Same as [parseCovtBytes], but also returns the full test list from the header —
      * every test that was executed in the run, including ones that hit no included file.
      */
-    fun parseCovt(data: ByteArray): CovtData {
-        if (data.isEmpty()) {
-            throw CoverageApiException(
-                "COVT data is empty",
-                kind = CoverageErrorKind.ARTIFACT_PARSE,
-            )
-        }
+    fun parseCovt(data: ByteArray): CovtData = parseCovt(data.inputStream())
 
-        val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-
+    private fun parseCovt(input: InputStream): CovtData {
+        val buf = DataInputStream(BufferedInputStream(input))
         try {
             // --- HEADER (12 bytes) ---
-            ensureRemaining(buf, 12, "header")
             val magic = buf.int.toUInt()
             if (magic != MAGIC) {
                 throw CoverageApiException(
@@ -64,7 +60,6 @@ object BinaryCoverageParser {
             val flags = buf.int.toUInt() // reserved
 
             // --- TEST SECTION ---
-            ensureRemaining(buf, 4, "test count")
             val testCount = buf.int.toUInt().toInt()
             val tests = ArrayList<String>(testCount)
             for (i in 0 until testCount) {
@@ -76,7 +71,6 @@ object BinaryCoverageParser {
             val result = LinkedHashMap<String, Map<Int, List<String>>>()
 
             while (buf.hasRemaining()) {
-                ensureRemaining(buf, 4, "file/end marker")
                 val marker = buf.int.toUInt()
 
                 when (marker) {
@@ -88,13 +82,10 @@ object BinaryCoverageParser {
                         val filePath = readString(buf, "file path")
 
                         // Test sets for this file
-                        ensureRemaining(buf, 4, "test sets count for $filePath")
                         val testSetsCount = buf.int.toUInt().toInt()
                         val testSets = ArrayList<List<Int>>(testSetsCount)
                         for (s in 0 until testSetsCount) {
-                            ensureRemaining(buf, 4, "test set[$s] size for $filePath")
                             val setSize = buf.int.toUInt().toInt()
-                            ensureRemaining(buf, setSize * 4, "test set[$s] indices for $filePath")
                             val indices = ArrayList<Int>(setSize)
                             for (idx in 0 until setSize) {
                                 indices.add(buf.int.toUInt().toInt())
@@ -106,11 +97,9 @@ object BinaryCoverageParser {
                         // A set is usually referenced by many lines. Decode its names once
                         // rather than expanding the same list for every line in the file.
                         val resolvedTestSets = arrayOfNulls<List<String>>(testSetsCount)
-                        ensureRemaining(buf, 4, "line count for $filePath")
                         val lineCount = buf.int.toUInt().toInt()
                         val lineMap = LinkedHashMap<Int, List<String>>(lineCount)
                         for (l in 0 until lineCount) {
-                            ensureRemaining(buf, 8, "line[$l] for $filePath")
                             val lineNumber = buf.int.toUInt().toInt()
                             val setIndex = buf.int // signed: -1 means uncovered
 
@@ -140,7 +129,7 @@ object BinaryCoverageParser {
                     }
                     else -> {
                         throw CoverageApiException(
-                            "Unknown COVT marker: 0x${marker.toString(16).uppercase()} at position ${buf.position() - 4}",
+                            "Unknown COVT marker: 0x${marker.toString(16).uppercase()}",
                             kind = CoverageErrorKind.ARTIFACT_PARSE,
                         )
                     }
@@ -154,6 +143,8 @@ object BinaryCoverageParser {
             )
         } catch (e: CoverageApiException) {
             throw e
+        } catch (e: EOFException) {
+            throw CoverageApiException("Unexpected end of COVT data", e, kind = CoverageErrorKind.ARTIFACT_PARSE)
         } catch (e: Exception) {
             throw CoverageApiException(
                 "Failed to parse COVT binary data",
@@ -169,17 +160,21 @@ object BinaryCoverageParser {
      * Auto-detects GZIP via the magic bytes `0x1F 0x8B`.
      */
     fun parsePossiblyGzippedCovtBytes(bytes: ByteArray): Map<String, Map<Int, List<String>>> =
-        parseCovtBytes(gunzipIfNeeded(bytes))
+        parsePossiblyGzippedCovt(bytes).coverage
 
-    /** [parseCovt] for input that may be gzipped. */
-    fun parsePossiblyGzippedCovt(bytes: ByteArray): CovtData = parseCovt(gunzipIfNeeded(bytes))
-
-    private fun gunzipIfNeeded(bytes: ByteArray): ByteArray {
+    /** [parseCovt] for input that may be gzipped; decompression uses a fixed-size buffer. */
+    fun parsePossiblyGzippedCovt(bytes: ByteArray): CovtData {
         if (bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()) {
             log.info("COVT: input is gzipped, decompressing")
-            return GZIPInputStream(bytes.inputStream()).use { it.readBytes() }
+            return GZIPInputStream(bytes.inputStream()).use { input ->
+                parseCovt(input).also {
+                    // Reach the gzip trailer even when ENDF was in an earlier read buffer.
+                    // This preserves checksum/truncation validation from full decompression.
+                    input.copyTo(OutputStream.nullOutputStream())
+                }
+            }
         }
-        return bytes
+        return parseCovt(bytes)
     }
 
     /** Parsed `.covt`: all executed tests plus file → line → covering tests. */
@@ -188,21 +183,20 @@ object BinaryCoverageParser {
         val coverage: Map<String, Map<Int, List<String>>>,
     )
 
-    private fun readString(buf: ByteBuffer, context: String): String {
-        ensureRemaining(buf, 4, "string length for $context")
-        val length = buf.int.toUInt().toInt()
-        ensureRemaining(buf, length, "string data for $context")
-        val bytes = ByteArray(length)
-        buf.get(bytes)
-        return String(bytes, Charsets.UTF_8)
+    private val DataInputStream.int: Int get() = Integer.reverseBytes(readInt())
+
+    private fun DataInputStream.hasRemaining(): Boolean {
+        mark(1)
+        val next = read()
+        reset()
+        return next != -1
     }
 
-    private fun ensureRemaining(buf: ByteBuffer, needed: Int, context: String) {
-        if (buf.remaining() < needed) {
-            throw CoverageApiException(
-                "Unexpected end of COVT data: need $needed bytes for $context, but only ${buf.remaining()} remaining",
-                kind = CoverageErrorKind.ARTIFACT_PARSE,
-            )
-        }
+    private fun readString(buf: DataInputStream, context: String): String {
+        val length = buf.int
+        require(length >= 0) { "Invalid COVT string length for $context" }
+        val bytes = ByteArray(length)
+        buf.readFully(bytes)
+        return String(bytes, Charsets.UTF_8)
     }
 }

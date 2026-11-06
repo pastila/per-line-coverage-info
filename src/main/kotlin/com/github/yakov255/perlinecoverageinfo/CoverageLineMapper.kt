@@ -2,7 +2,6 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.diff.comparison.ComparisonManager
 import com.intellij.diff.comparison.ComparisonPolicy
-import com.intellij.openapi.progress.DumbProgressIndicator
 
 /**
  * Maps line numbers from a coverage commit to current editor content.
@@ -41,7 +40,7 @@ object CoverageLineMapper {
         val ranges = comparisonManager.compareLines(
             oldContent, newContent,
             ComparisonPolicy.DEFAULT,
-            DumbProgressIndicator.INSTANCE
+            CoverageCancellation.indicator()
         )
 
         // Walk through both files in parallel, building old→new mapping for unchanged lines.
@@ -57,6 +56,7 @@ object CoverageLineMapper {
         for (range in sortedRanges) {
             // Map unchanged lines before this range
             while (oldIdx < range.startLine1 && newIdx < range.startLine2) {
+                if (oldIdx % 256 == 0) CoverageCancellation.check()
                 mapping[oldIdx + 1] = newIdx + 1 // convert to 1-based
                 oldIdx++
                 newIdx++
@@ -68,6 +68,7 @@ object CoverageLineMapper {
 
         // Map remaining unchanged lines after the last range
         while (oldIdx < oldLines.size && newIdx < newLines.size) {
+            if (oldIdx % 256 == 0) CoverageCancellation.check()
             mapping[oldIdx + 1] = newIdx + 1
             oldIdx++
             newIdx++
@@ -87,6 +88,7 @@ object CoverageLineMapper {
     fun mapCoverage(originalCoverage: Map<Int, List<String>>, lineMapping: Map<Int, Int>): Map<Int, List<String>> {
         val result = mutableMapOf<Int, List<String>>()
         for ((oldLine, tests) in originalCoverage) {
+            if (oldLine % 256 == 0) CoverageCancellation.check()
             val newLine = lineMapping[oldLine] ?: continue // line was changed/deleted — skip
             result[newLine] = tests
         }

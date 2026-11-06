@@ -10,6 +10,23 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 class CachedGitLabApiTest {
+    @Test
+    fun `shutdown closes the delegate once and rejects new metadata calls`() {
+        val closes = AtomicInteger()
+        val fake = object : GitLabApi by FakeGitLabApi() {
+            override fun close() { closes.incrementAndGet() }
+        }
+        val api = CachedGitLabApi(fake, rateLimiter = fastLimiter())
+        api.listPipelines(1, "master")
+        api.shutdown()
+        api.shutdown()
+        assertEquals(1, closes.get())
+        try {
+            api.listPipelines(1, "master")
+            org.junit.Assert.fail("Closed facade must reject requests")
+        } catch (_: java.util.concurrent.CancellationException) { }
+    }
+
 
     private fun fastLimiter() = RateLimiter(capacity = 1000.0, tokensPerSecond = 1000.0)
 

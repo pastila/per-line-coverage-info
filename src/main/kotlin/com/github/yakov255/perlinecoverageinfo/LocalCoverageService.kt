@@ -36,6 +36,10 @@ class LocalCoverageService(private val project: Project) : Disposable {
     private val log = CoverageLog.get(LocalCoverageService::class.java)
 
     private val layer = LocalCoverageLayer()
+    private val version = java.util.concurrent.atomic.AtomicLong()
+    val coverageGeneration: Long get() = version.get()
+    private var generation = 0L
+    private var disposed = false
 
     @Volatile
     private var gitRoot: File? = null
@@ -79,19 +83,21 @@ class LocalCoverageService(private val project: Project) : Disposable {
      * snapshot, so coverage stays aligned while the file is edited after the run.
      */
     fun getMappedCoverage(absolutePath: String, currentContent: String): Map<Int, List<String>>? {
-        val runs = layer.activeRuns(headCommit)
-        if (runs.isEmpty()) return null
-        val root = gitRoot ?: return null
-        val relativePath = toGitRelative(absolutePath, root) ?: return null
+        return layer.withActiveRuns(headCommit) { runs ->
+            if (runs.isEmpty()) return@withActiveRuns null
+            val root = gitRoot ?: return@withActiveRuns null
+            val relativePath = toGitRelative(absolutePath, root) ?: return@withActiveRuns null
 
-        val perRun = runs.mapNotNull { run ->
-            val lines = run.coverage[relativePath] ?: return@mapNotNull null
-            val snapshot = run.snapshots[relativePath] ?: return@mapNotNull lines
-            val mapping = CoverageLineMapper.computeMappingFromContent(snapshot, currentContent)
-                ?: return@mapNotNull lines
-            CoverageLineMapper.mapCoverage(lines, mapping)
+            val perRun = runs.mapNotNull { run ->
+                CoverageCancellation.check()
+                val lines = run.coverage[relativePath] ?: return@mapNotNull null
+                val snapshot = run.snapshots[relativePath] ?: return@mapNotNull lines
+                val mapping = CoverageLineMapper.computeMappingFromContent(snapshot, currentContent)
+                    ?: return@mapNotNull lines
+                CoverageLineMapper.mapCoverage(lines, mapping)
+            }
+            LocalCoverageMerge.unionRuns(perRun)
         }
-        return LocalCoverageMerge.unionRuns(perRun)
     }
 
     /** Loads a `.covt` / `.covt.gz` chosen by the user, with a progress indicator. */
@@ -120,6 +126,7 @@ class LocalCoverageService(private val project: Project) : Disposable {
         if (revision == null || revision == headCommit) return
         val previouslyActive = layer.activeRuns(headCommit).size
         headCommit = revision
+        version.incrementAndGet()
         val stale = layer.staleRuns(revision).size
         if (stale == 0) return
         log.info("LocalCoverage: HEAD is now ${revision.take(8)} — $stale run(s) marked stale (was $previouslyActive active)")
@@ -138,12 +145,17 @@ class LocalCoverageService(private val project: Project) : Disposable {
         if (restored == 0) return
         log.info("LocalCoverage: restoring $restored stale run(s) onto ${headCommit?.take(8)}")
         layer.restampTo(headCommit)
+        version.incrementAndGet()
         refreshEditors()
     }
 
     fun clear() {
         log.info("LocalCoverage: clearing ${layer.runs().size} run(s)")
-        layer.clear()
+        synchronized(this) {
+            generation++
+            layer.clear()
+            version.incrementAndGet()
+        }
         refreshEditors()
     }
 
@@ -196,7 +208,12 @@ class LocalCoverageService(private val project: Project) : Disposable {
     }
 
     override fun dispose() {
+        synchronized(loaded) { loaded.clear() }
         synchronized(this) {
+            disposed = true
+            generation++
+            layer.clear()
+            version.incrementAndGet()
             watchRequest?.let { LocalFileSystem.getInstance().removeWatchedRoot(it) }
             watchRequest = null
         }
@@ -255,6 +272,10 @@ class LocalCoverageService(private val project: Project) : Disposable {
     }
 
     private fun load(file: File) {
+        val loadGeneration = synchronized(this) {
+            if (disposed || project.isDisposed) return
+            generation
+        }
         val root = gitRoot ?: findGitRoot()?.also { gitRoot = it }
             ?: throw CoverageApiException("Project is not inside a git repository", kind = CoverageErrorKind.GIT)
 
@@ -262,8 +283,12 @@ class LocalCoverageService(private val project: Project) : Disposable {
             BinaryCoverageParser.parsePossiblyGzippedCovt(file.readBytes()), root,
         )
 
+        if (covt.tests.isEmpty()) {
+            log.info("LocalCoverage: ${file.name} contains no executed tests, skipping")
+            return
+        }
+
         val coverage = LinkedHashMap<String, Map<Int, List<String>>>(covt.coverage.size)
-        val snapshots = HashMap<String, String>(covt.coverage.size)
         var skipped = 0
         for ((path, lines) in covt.coverage) {
             val relativePath = LocalCoveragePaths.normalize(path) { File(root, it).isFile }
@@ -271,18 +296,27 @@ class LocalCoverageService(private val project: Project) : Disposable {
                 skipped++
                 continue
             }
-            // The run executed the files as they are on disk now (not the unsaved editor text).
-            snapshots[relativePath] = File(root, relativePath).readText()
             coverage[relativePath] = lines
         }
         if (skipped > 0) {
             log.warn("LocalCoverage: $skipped file(s) from ${file.name} not found under $root")
         }
 
-        // The run executed the working tree of the current HEAD — remember it, so the run can be
-        // recognised as stale after a checkout.
-        val head = resolveHead(root)?.also { headCommit = it } ?: headCommit
-        layer.add(LocalCoverageRun(covt.tests.toSet(), coverage, snapshots, head))
+        // Keep source text on disk and read one file at a time. The run executed the on-disk
+        // working tree, not unsaved editor text; future lookups use this immutable snapshot.
+        val run = LocalCoverageArchive.store(covt.tests.toSet(), coverage, commit = null) { path ->
+            File(root, path).readText()
+        }
+        val head = resolveHead(root) ?: headCommit
+        synchronized(this) {
+            if (disposed || project.isDisposed || generation != loadGeneration) {
+                run.close()
+                return
+            }
+            headCommit = head
+            layer.add(run.restampedTo(head))
+            version.incrementAndGet()
+        }
         log.info("LocalCoverage: loaded ${file.path} — ${covt.tests.size} test(s), ${coverage.size} file(s) at ${head?.take(8) ?: "unknown commit"}; layer now has ${layer.runs().size} run(s)")
 
         ApplicationManager.getApplication().invokeLater {

@@ -38,11 +38,12 @@ class GitLabApiClientRateLimitTest {
         }
         server.start()
         try {
-            val client = GitLabApiClient("http://127.0.0.1:${server.address.port}", "token")
-            val pipelines = client.listPipelines(335, "master", "success", 100)
-            assertEquals(2, requests.get())
-            assertEquals(1, pipelines.size)
-            assertEquals("abc", pipelines[0].sha)
+            GitLabApiClient("http://127.0.0.1:${server.address.port}", "token").use { client ->
+                val pipelines = client.listPipelines(335, "master", "success", 100)
+                assertEquals(2, requests.get())
+                assertEquals(1, pipelines.size)
+                assertEquals("abc", pipelines[0].sha)
+            }
         } finally {
             server.stop(0)
         }
@@ -62,12 +63,13 @@ class GitLabApiClientRateLimitTest {
         }
         server.start()
         try {
-            val client = GitLabApiClient("http://127.0.0.1:${server.address.port}", "token")
-            val started = System.currentTimeMillis()
-            client.listPipelines(335, "master", "success", 100)
-            val elapsed = System.currentTimeMillis() - started
-            assertTrue("expected ~1s Retry-After delay, took $elapsed ms", elapsed >= 900)
-            assertEquals(2, requests.get())
+            GitLabApiClient("http://127.0.0.1:${server.address.port}", "token").use { client ->
+                val started = System.currentTimeMillis()
+                client.listPipelines(335, "master", "success", 100)
+                val elapsed = System.currentTimeMillis() - started
+                assertTrue("expected ~1s Retry-After delay, took $elapsed ms", elapsed >= 900)
+                assertEquals(2, requests.get())
+            }
         } finally {
             server.stop(0)
         }
@@ -84,13 +86,14 @@ class GitLabApiClientRateLimitTest {
         }
         server.start()
         try {
-            val client = GitLabApiClient("http://127.0.0.1:${server.address.port}", "token")
-            client.listPipelines(335, "master", "success", 100)
-            assertNotNull("User-Agent header must be present", userAgent)
-            assertTrue(
-                "expected plugin UA, got '$userAgent'",
-                userAgent!!.startsWith("Per-Line-Coverage-Info/"),
-            )
+            GitLabApiClient("http://127.0.0.1:${server.address.port}", "token").use { client ->
+                client.listPipelines(335, "master", "success", 100)
+                assertNotNull("User-Agent header must be present", userAgent)
+                assertTrue(
+                    "expected plugin UA, got '$userAgent'",
+                    userAgent!!.startsWith("Per-Line-Coverage-Info/"),
+                )
+            }
         } finally {
             server.stop(0)
         }

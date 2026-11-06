@@ -1,6 +1,9 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.openapi.project.Project
+import com.intellij.execution.configurations.GeneralCommandLine
+import com.intellij.execution.process.CapturingProcessHandler
+import com.intellij.openapi.progress.ProcessCanceledException
 import com.github.yakov255.perlinecoverageinfo.CoverageLog
 import java.io.File
 
@@ -337,19 +340,29 @@ class CoverageResolver(
 
         fun runGitCommand(gitRoot: File, vararg args: String): String? {
             return try {
-                val process = ProcessBuilder("git", *args)
-                    .directory(gitRoot)
-                    .redirectErrorStream(false)
-                    .start()
-                val output = process.inputStream.bufferedReader().readText().trim()
-                val errorOutput = process.errorStream.bufferedReader().readText().trim()
-                val exitCode = process.waitFor()
+                CoverageCancellation.check()
+                val indicator = CoverageCancellation.currentIndicator()
+                val (output, errorOutput, exitCode) = if (indicator != null) {
+                    val command = GeneralCommandLine(listOf("git", *args)).withWorkDirectory(gitRoot)
+                    val handler = CapturingProcessHandler(command)
+                    val captured = handler.runProcessWithProgressIndicator(indicator)
+                    indicator.checkCanceled()
+                    Triple(captured.stdout.trim(), captured.stderr.trim(), captured.exitCode)
+                } else {
+                    // Preserve ordinary callers, including actions invoked on the EDT.
+                    val process = ProcessBuilder("git", *args).directory(gitRoot).redirectErrorStream(false).start()
+                    val stdout = process.inputStream.bufferedReader().readText().trim()
+                    val stderr = process.errorStream.bufferedReader().readText().trim()
+                    Triple(stdout, stderr, process.waitFor())
+                }
                 if (exitCode == 0 && output.isNotEmpty()) {
                     output
                 } else {
                     log.warn("CoverageResolver: 'git ${args.joinToString(" ")}' failed (exit=$exitCode): $errorOutput")
                     null
                 }
+            } catch (e: ProcessCanceledException) {
+                throw e
             } catch (e: Exception) {
                 log.warn("CoverageResolver: git command failed: ${e.message}")
                 null

@@ -28,6 +28,7 @@ class CachedGitLabApi(
     private val rateLimiter: RateLimiter = RateLimiter(DEFAULT_CAPACITY, DEFAULT_TOKENS_PER_SECOND),
 ) : GitLabApi {
 
+    private val closed = java.util.concurrent.atomic.AtomicBoolean()
     private val log = CoverageLog.get(CachedGitLabApi::class.java)
 
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { r ->
@@ -43,6 +44,7 @@ class CachedGitLabApi(
 
     /** Runs [block] on the single worker thread (re-entrant safe). */
     private fun <T> onWorker(block: () -> T): T {
+        if (closed.get()) throw java.util.concurrent.CancellationException("GitLab worker closed")
         if (Thread.currentThread() === workerThread) return block()
         val future = executor.submit(Callable<T> {
             if (workerThread == null) workerThread = Thread.currentThread()
@@ -152,8 +154,13 @@ class CachedGitLabApi(
         log.debug("GitLab worker: invalidated jobs cache for pipeline $pipelineId")
     }
 
-    fun shutdown() {
-        executor.shutdown()
+    fun shutdown() = close()
+
+    override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        executor.shutdownNow().forEach { (it as? java.util.concurrent.Future<*>)?.cancel(true) }
+        invalidate()
+        delegate.close()
     }
 
     companion object {

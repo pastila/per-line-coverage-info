@@ -140,8 +140,7 @@ class CoverageApiSettingsConfigurable : Configurable {
 
             ApplicationManager.getApplication().executeOnPooledThread {
                 try {
-                    val client = GitLabApiClient("https://$domain", token)
-                    val projects = client.listMemberProjects()
+                    val projects = GitLabApiClient("https://$domain", token).use { it.listMemberProjects() }
                     log.debug("listMemberProjects returned ${projects.size} results")
 
                     SwingUtilities.invokeLater {

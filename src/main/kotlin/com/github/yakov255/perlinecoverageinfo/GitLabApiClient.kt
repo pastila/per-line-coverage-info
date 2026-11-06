@@ -10,6 +10,10 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.ByteBuffer
 import java.time.Duration
+import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
 import java.util.concurrent.CompletionStage
@@ -22,7 +26,6 @@ import java.net.http.HttpResponse.BodyHandler
 import java.net.http.HttpResponse.BodyHandlers
 import java.net.http.HttpResponse.BodySubscriber
 import java.net.http.HttpResponse.BodySubscribers
-import java.net.http.HttpResponse.ResponseInfo
 
 class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLabApi {
 
@@ -42,12 +45,18 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
 
     private val json = Json { ignoreUnknownKeys = true }
 
+    private val closed = AtomicBoolean(false)
+    private val requests = ConcurrentHashMap.newKeySet<CompletableFuture<*>>()
+    private val asyncExecutor: ExecutorService = Executors.newFixedThreadPool(5) { task ->
+        Thread(task, "Coverage-GitLab-HTTP").apply { isDaemon = true }
+    }
+    private val retryScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "Coverage-GitLab-Retry").apply { isDaemon = true }
+    }
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
+        .executor(asyncExecutor)
         .build()
-
-    private val asyncExecutor: ExecutorService = Executors.newFixedThreadPool(5)
-    private val retryScheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
     private val retryDelays = listOf(1000L, 3000L)
 
@@ -80,9 +89,15 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
     private fun <T> retrySync(url: String, block: () -> T): T {
         val maxAttempts = 3
         for (attempt in 1..maxAttempts) {
+            ensureOpen()
             try {
                 return block()
             } catch (e: Exception) {
+                ensureOpen()
+                if (Thread.currentThread().isInterrupted || e is InterruptedException || e is CancellationException) {
+                    Thread.currentThread().interrupt()
+                    throw CancellationException("GitLab request interrupted").apply { initCause(e) }
+                }
                 if (!isRetryable(e) || attempt == maxAttempts) throw e
                 val delayMs = retryDelayMs(e, attempt)
                 log.info("Coverage: retrying $url after ${delayMs}ms (attempt $attempt/$maxAttempts)")
@@ -106,6 +121,10 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
             val response = try {
                 httpClient.send(request, HttpResponse.BodyHandlers.ofString())
             } catch (e: Exception) {
+                if (e is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw CancellationException("GitLab request interrupted").apply { initCause(e) }
+                }
                 log.warn("GitLab API network error for $url", e)
                 throw CoverageApiException(
                     "Network error contacting GitLab API",
@@ -156,6 +175,10 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
             val response = try {
                 httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray())
             } catch (e: Exception) {
+                if (e is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw CancellationException("GitLab request interrupted").apply { initCause(e) }
+                }
                 log.warn("GitLab API network error for $url", e)
                 throw CoverageApiException(
                     "Network error contacting GitLab API",
@@ -276,67 +299,105 @@ class GitLabApiClient(baseUrl: String, private val privateToken: String) : GitLa
     ): CompletableFuture<ByteArray> {
         val url = "${this.baseUrl}$endpoint"
 
-        fun attempt(n: Int): CompletableFuture<ByteArray> {
-            log.info("GitLab API raw request (async): GET $url (attempt $n)")
-            val request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .GET()
-                .header("User-Agent", userAgent)
-                .header("PRIVATE-TOKEN", privateToken)
-                .timeout(Duration.ofSeconds(30))
-                .build()
-
-            val bodyHandler: BodyHandler<ByteArray> = if (onProgress != null) {
-                BodyHandler { responseInfo: ResponseInfo ->
-                    val total = responseInfo.headers()
-                        .firstValue("content-length")
-                        .map(String::toLong)
-                        .orElse(-1L)
-                    ProgressBodySubscriber(total) { received -> onProgress(received, total) }
-                }
-            } else {
-                BodyHandlers.ofByteArray()
+        val result = CompletableFuture<ByteArray>()
+        val state = Any()
+        var activeRequest: CompletableFuture<*>? = null
+        var retry: ScheduledFuture<*>? = null
+        requests.add(result)
+        result.whenComplete { _, _ ->
+            requests.remove(result)
+            synchronized(state) {
+                activeRequest?.cancel(true)
+                retry?.cancel(false)
+                activeRequest = null
+                retry = null
             }
-
-            return httpClient.sendAsync(request, bodyHandler)
-                .orTimeout(30, TimeUnit.SECONDS)
-                .thenApplyAsync({ response ->
-                    log.info("GitLab API raw response: HTTP ${response.statusCode()} for $url (${response.body().size} bytes) (attempt $n)")
-                    if (response.statusCode() != 200) {
-                        log.warn("GitLab API returned HTTP ${response.statusCode()} for $url (attempt $n)")
-                        throw CoverageApiException(
-                            "GitLab API returned HTTP ${response.statusCode()}",
-                            details = mapOf(
-                                "url" to url,
-                                "httpStatus" to response.statusCode().toString(),
-                                "retryAfterMs" to retryAfterMs(response),
-                            ),
-                            kind = CoverageErrorKind.GITLAB_API,
-                        )
-                    }
-                    response.body()
-                }, asyncExecutor)
-                .exceptionallyComposeAsync({ raw ->
-                    val e = (raw as? CompletionException)?.cause ?: raw
-                    if (isRetryable(e) && n < 3) {
-                        val explicit = (e as? CoverageApiException)?.details?.get("retryAfterMs")?.toLongOrNull()
-                        val delayMs = explicit ?: retryDelays[n - 1]
-                        log.info("Coverage: retrying $url after ${delayMs}ms (attempt $n/3)")
-                        val delayed = CompletableFuture<ByteArray>()
-                        retryScheduler.schedule({
-                            attempt(n + 1).whenComplete { r, ex ->
-                                if (ex != null) delayed.completeExceptionally(ex)
-                                else delayed.complete(r)
-                            }
-                        }, delayMs, TimeUnit.MILLISECONDS)
-                        delayed
-                    } else {
-                        CompletableFuture.failedFuture(e)
-                    }
-                }, asyncExecutor)
         }
 
-        return attempt(1)
+        fun attempt(n: Int) {
+            synchronized(state) {
+                if (result.isDone) return
+                if (closed.get()) {
+                    result.cancel(false)
+                    return
+                }
+                retry = null
+                try {
+                    log.info("GitLab API raw request (async): GET $url (attempt $n)")
+                    val request = HttpRequest.newBuilder()
+                        .uri(URI.create(url)).GET()
+                        .header("User-Agent", userAgent)
+                        .header("PRIVATE-TOKEN", privateToken)
+                        .timeout(Duration.ofSeconds(30)).build()
+                    val bodyHandler: BodyHandler<ByteArray> = if (onProgress != null) {
+                        BodyHandler { responseInfo ->
+                            val total = responseInfo.headers().firstValue("content-length")
+                                .map(String::toLong).orElse(-1L)
+                            ProgressBodySubscriber(total) { received -> onProgress(received, total) }
+                        }
+                    } else BodyHandlers.ofByteArray()
+                    val httpRequest = httpClient.sendAsync(request, bodyHandler)
+                    activeRequest = httpRequest
+                    httpRequest.thenApply { it }.orTimeout(30, TimeUnit.SECONDS).whenComplete { response, failure ->
+                        synchronized(state) {
+                            if (result.isDone) return@whenComplete
+                            if (response != null) {
+                                log.info("GitLab API raw response: HTTP ${response.statusCode()} for $url (${response.body().size} bytes) (attempt $n)")
+                            }
+                            val error = if (failure != null) {
+                                httpRequest.cancel(true)
+                                (failure as? CompletionException)?.cause ?: failure
+                            } else if (response.statusCode() != 200) {
+                                CoverageApiException(
+                                    "GitLab API returned HTTP ${response.statusCode()}",
+                                    details = mapOf(
+                                        "url" to url, "httpStatus" to response.statusCode().toString(),
+                                        "retryAfterMs" to retryAfterMs(response),
+                                    ), kind = CoverageErrorKind.GITLAB_API,
+                                )
+                            } else null
+                            if (error == null) {
+                                result.complete(response.body())
+                            } else if (!closed.get() && error !is CancellationException && isRetryable(error) && n < 3) {
+                                val delayMs = (error as? CoverageApiException)?.details?.get("retryAfterMs")
+                                    ?.toLongOrNull() ?: retryDelays[n - 1]
+                                log.info("Coverage: retrying $url after ${delayMs}ms (attempt $n/3)")
+                                try {
+                                    retry = retryScheduler.schedule({ attempt(n + 1) }, delayMs, TimeUnit.MILLISECONDS)
+                                } catch (e: java.util.concurrent.RejectedExecutionException) {
+                                    result.completeExceptionally(if (closed.get()) CancellationException("GitLab client closed") else e)
+                                }
+                            } else {
+                                result.completeExceptionally(error)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    result.completeExceptionally(e)
+                }
+            }
+        }
+        attempt(1)
+        return result
+    }
+
+    private fun ensureOpen() {
+        if (closed.get()) throw CancellationException("GitLab client closed")
+    }
+
+    override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        requests.toList().forEach { it.cancel(false) }
+        retryScheduler.shutdownNow()
+        // The plugin targets JDK 21+ IDEs but is compiled against JDK 17. Use the public
+        // JDK 21 non-blocking shutdown method without raising the bytecode/API baseline.
+        try {
+            HttpClient::class.java.getMethod("shutdownNow").invoke(httpClient)
+        } catch (_: NoSuchMethodException) {
+            // JDK 17 test/CLI runtime: cancelling requests and stopping our executor suffices.
+        } finally {
+            asyncExecutor.shutdownNow()
+        }
     }
 
     override fun getPipelineCommits(projectId: Long, ref: String): List<PipelineCommit> =
