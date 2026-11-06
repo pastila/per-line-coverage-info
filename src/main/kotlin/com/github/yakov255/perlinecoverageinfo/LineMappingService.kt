@@ -142,7 +142,9 @@ class LineMappingService(private val project: Project) {
         }
 
         val gitPath = toGitRelativePath(relativePath) ?: return null
-        val oldContent = CoverageResolver.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
+        val oldContent = CoveragePerfLog.counted("linemap.gitShow") {
+            CoverageResolver.runGitCommand(gitRoot, "show", "$commitHash:$gitPath")
+        }
         if (oldContent != null) {
             synchronized(oldContentCache) {
                 oldContentCache[key] = oldContent

@@ -66,27 +66,41 @@ object CoverageHighlighter {
             return
         }
 
-        val snapshot = HighlightSnapshot(
-            text = document.text,
-            lineCount = document.lineCount,
-            hasBaseline = dataService.hasBaseline(),
-            filePath = virtualFile.path,
-        )
+        val snapshot = CoveragePerfLog.span("highlight.snapshot", "file" to virtualFile.path) {
+            HighlightSnapshot(
+                text = document.text,
+                lineCount = document.lineCount,
+                hasBaseline = dataService.hasBaseline(),
+                filePath = virtualFile.path,
+            )
+        }
 
         ApplicationManager.getApplication().executeOnPooledThread {
             val lineMappingService = LineMappingService.getInstance(project)
-            val coverageLines = lineMappingService.getMappedCoverage(snapshot.filePath, snapshot.text)
-                ?: findCoverageForFile(snapshot.filePath, project)
+            val coverageLines = CoveragePerfLog.counted("highlight.lookupPrimary") {
+                lineMappingService.getMappedCoverage(snapshot.filePath, snapshot.text)
+                    ?: findCoverageForFile(snapshot.filePath, project)
+            }
             if (coverageLines == null) {
                 return@executeOnPooledThread
             }
 
             val baselineLines: Map<Int, List<String>>? = if (snapshot.hasBaseline) {
-                lineMappingService.getMappedBaselineCoverage(snapshot.filePath, snapshot.text)
-                    ?: findBaselineCoverageForFile(snapshot.filePath, project)
+                CoveragePerfLog.counted("highlight.lookupBaseline") {
+                    lineMappingService.getMappedBaselineCoverage(snapshot.filePath, snapshot.text)
+                        ?: findBaselineCoverageForFile(snapshot.filePath, project)
+                }
             } else {
                 null
             }
+
+            CoveragePerfLog.event(
+                "highlight.apply",
+                "file" to snapshot.filePath,
+                "lines" to snapshot.lineCount,
+                "covered" to coverageLines.values.count { it.isNotEmpty() },
+                "baseline" to (baselineLines != null),
+            )
 
             ApplicationManager.getApplication().invokeLater {
                 if (project.isDisposed || editor.isDisposed) return@invokeLater

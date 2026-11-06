@@ -205,8 +205,12 @@ tasks {
     }
 }
 
-intellijPlatformTesting {
-    runIde {
+tasks.withType(org.gradle.api.tasks.testing.Test::class.java).configureEach {
+    // Performance instrumentation is opt-in for real IDE runs; unit tests stay quiet.
+    systemProperty("coverage.perf.log", "false")
+}
+
+intellijPlatformTesting {    runIde {
         register("runIdeForUiTests") {
             task {
                 jvmArgumentProviders += CommandLineArgumentProvider {

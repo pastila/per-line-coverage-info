@@ -66,5 +66,9 @@
                 text="Show Coverage" description="Show coverage annotations in all editors">
             <add-to-group group-id="EditorGutterPopupMenu" anchor="after" relative-to-action="HideCoverageFromGutter"/>
         </action>
+        <action id="OpenCoveragePerfLog" class="com.github.yakov255.perlinecoverageinfo.OpenCoveragePerfLogAction"
+                text="Open Coverage Performance Log Folder"
+                description="Reveal the directory with per-run memory and CPU logs of coverage processing">
+        </action>
     </actions>
 </idea-plugin>

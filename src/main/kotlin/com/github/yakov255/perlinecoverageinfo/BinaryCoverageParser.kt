@@ -78,7 +78,7 @@ object BinaryCoverageParser {
                         log.info("COVT: end marker reached, parsed ${result.size} file(s)")
                         return result
                     }
-                    MARKER_FILE -> {
+                    MARKER_FILE -> CoveragePerfLog.counted("covt.parseFile") {
                         val filePath = readString(buf, "file path")
 
                         // Test sets for this file

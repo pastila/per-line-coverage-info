@@ -180,6 +180,24 @@ Tool: `list_files` — lists files with coverage data under a directory.
 ./gradlew generateUpdatePluginsXml # regenerate docs/updatePlugins.xml
 ```
 
+## Performance diagnostics
+
+`CoveragePerfLog` writes structured `key=value` lines to
+`~/.cache/coverage-plugin/perf/run-<timestamp>-<pid>.log` (separate from `idea.log` and the
+Log tab):
+
+- `ev=span` — wall time, current-thread CPU, bytes allocated by the thread, heap before/after,
+  GC count/ms delta, plus caller-provided details, with a `ph=start`/`ph=end` pair and nesting depth.
+- `ev=counter` — aggregated count/avg/max/total for high-frequency work, flushed once per second.
+- `ev=sample` — 1 Hz samples: heap used/committed/max, non-heap, threads, process CPU %, load
+  average, GC deltas, JVM uptime.
+
+Enabled by default; `-Dcoverage.perf.log=false` disables it and Gradle sets it for unit tests.
+Find Action **Open Coverage Performance Log Folder** reveals the directory. Instrumented:
+`load.offlineFirst`, `load.resolvePhase`, `artifact.process` (`covt.parse`, `normalize.raketa`,
+`covt.parseFile`), `cov4.open`/`cov4.write`/`cov4.init`/`cov4.readFile`, `highlight.*`,
+`linemap.gitShow`, and `plugin.start` (JVM args, `-Xmx`).
+
 ## Release
 
 Version lives in `gradle.properties` (`pluginVersion`, SemVer) — single source of truth.

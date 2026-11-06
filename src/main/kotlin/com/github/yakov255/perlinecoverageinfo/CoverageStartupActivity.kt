@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
+import java.lang.management.ManagementFactory
 
 /**
  * Triggers offline-first coverage loading after the IDE has fully started.
@@ -19,6 +20,13 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
 
     override suspend fun execute(project: Project) {
         try {
+            CoveragePerfLog.event(
+                "plugin.start",
+                "project" to project.name,
+                "jvm" to System.getProperty("java.version"),
+                "xmxMB" to (Runtime.getRuntime().maxMemory() / 1_048_576),
+                "jvmArgs" to ManagementFactory.getRuntimeMXBean().inputArguments.joinToString(","),
+            )
             promptForTokenIfNeeded(project)
 
             val loadService = CoverageLoadService.getInstance(project)

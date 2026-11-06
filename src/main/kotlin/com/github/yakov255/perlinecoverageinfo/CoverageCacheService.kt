@@ -92,8 +92,10 @@ class CoverageCacheService(private val project: Project) {
             component,
             open = {
                 try {
-                    Cov4Reader(cov4File, pathNormalizer, testNormalizer).also {
-                        log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB, component=$component)")
+                    CoveragePerfLog.span("cov4.open", "commit" to commitHash.take(8), "component" to component, "bytes" to cov4File.length()) {
+                        Cov4Reader(cov4File, pathNormalizer, testNormalizer).also {
+                            log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB, component=$component)")
+                        }
                     }
                 } catch (e: Exception) {
                     log.warn("Coverage cache: failed to open COV4 file for commit $commitHash (component=$component)", e)
@@ -139,12 +141,18 @@ class CoverageCacheService(private val project: Project) {
             val cov4File = File(dir, cov4FileName(commitHash, component))
 
             try {
-                Cov4Writer.write(coverage, cov4File)
+                CoveragePerfLog.span(
+                    "cov4.write",
+                    "commit" to commitHash.take(8),
+                    "component" to component,
+                    "files" to coverage.size,
+                ) {
+                    Cov4Writer.write(coverage, cov4File)
+                }
             } catch (e: Exception) {
                 log.warn("Coverage cache: failed to write COV4 for commit $commitHash (component=$component)", e)
                 return
             }
-
             val totalFiles = coverage.size
             val totalLines = coverage.values.sumOf { it.size }
             val coveredLines = coverage.values.sumOf { lineMap -> lineMap.values.count { it.isNotEmpty() } }

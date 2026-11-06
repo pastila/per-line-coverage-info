@@ -37,7 +37,9 @@ class Cov4Reader(
     )
 
     init {
-        val (rawTests, idx) = readHeaderAndIndex()
+        val (rawTests, idx) = CoveragePerfLog.span("cov4.init", "file" to file.name, "bytes" to file.length()) {
+            readHeaderAndIndex()
+        }
         tests = rawTests.map(testNormalizer)
 
         val byPath = LinkedHashMap<String, IndexEntry>(idx.size)
@@ -65,11 +67,13 @@ class Cov4Reader(
     fun getCoverage(filePath: String): Map<Int, List<String>>? {
         val entry = entriesByPath[pathNormalizer(filePath)] ?: return null
 
-        return RandomAccessFile(file, "r").use { raf ->
-            val bytes = ByteArray(entry.dataSize)
-            raf.seek(entry.dataOffset.toLong())
-            raf.readFully(bytes)
-            parseFileSection(bytes)
+        return CoveragePerfLog.counted("cov4.readFile") {
+            RandomAccessFile(file, "r").use { raf ->
+                val bytes = ByteArray(entry.dataSize)
+                raf.seek(entry.dataOffset.toLong())
+                raf.readFully(bytes)
+                parseFileSection(bytes)
+            }
         }
     }
 

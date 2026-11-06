@@ -67,6 +67,10 @@ class CoverageLoadService(private val project: Project) {
      * If no cache is found, falls through to normal GitLab loading.
      */
     fun loadOfflineFirst() {
+        CoveragePerfLog.span("load.offlineFirst") { loadOfflineFirstInner() }
+    }
+
+    private fun loadOfflineFirstInner() {
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
             log.info("Coverage: offline-first load skipped — gutter visibility is off")
             return
@@ -237,6 +241,12 @@ class CoverageLoadService(private val project: Project) {
      * Otherwise starts [startDownloadTask] with progress indicator.
      */
     private fun resolvePhase(showErrors: Boolean, onComplete: (() -> Unit)?, onError: ((String) -> Unit)?) {
+        CoveragePerfLog.span("load.resolvePhase", "showErrors" to showErrors) {
+            resolvePhaseImpl(showErrors, onComplete, onError)
+        }
+    }
+
+    private fun resolvePhaseImpl(showErrors: Boolean, onComplete: (() -> Unit)?, onError: ((String) -> Unit)?) {
         CoverageUserSelectionService.getInstance(project).pinnedCommitHash = null
 
         CoverageCacheService.getInstance(project).cleanup()
@@ -616,23 +626,32 @@ class CoverageLoadService(private val project: Project) {
                 onProgress,
             ).thenApply { covtBytes ->
                 log.info("Coverage: downloaded ${covtBytes.size} bytes from job ${job.name} (id=${job.id})")
-                val parsed = BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
-                val normalized = if (artifactComponent == "raketa") {
-                    CoveragePathNormalizer.normalizeRaketaCoverage(parsed, resolved.gitRoot)
-                } else {
-                    parsed
-                }
-                log.info("Coverage: parsed ${normalized.size} files from job ${job.name}")
+                CoveragePerfLog.span("artifact.process", "job" to job.name, "bytes" to covtBytes.size) {
+                    val parsed = CoveragePerfLog.span(
+                        "covt.parse",
+                        "gz" to (covtBytes.size >= 2 && covtBytes[0] == 0x1F.toByte() && covtBytes[1] == 0x8B.toByte()),
+                    ) {
+                        BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
+                    }
+                    val normalized = if (artifactComponent == "raketa") {
+                        CoveragePerfLog.span("normalize.raketa", *coverageStats(parsed)) {
+                            CoveragePathNormalizer.normalizeRaketaCoverage(parsed, resolved.gitRoot)
+                        }
+                    } else {
+                        parsed
+                    }
+                    log.info("Coverage: parsed ${normalized.size} files from job ${job.name}")
 
-                val done = progressCount.incrementAndGet()
-                val text = "Downloading artifacts... ($done/$totalJobs)"
-                val fraction = fractionStart + span * (0.15 + 0.8 * (done.toDouble() / totalJobs))
-                ApplicationManager.getApplication().invokeLater {
-                    indicator.text = text
-                    indicator.fraction = fraction
-                }
+                    val done = progressCount.incrementAndGet()
+                    val text = "Downloading artifacts... ($done/$totalJobs)"
+                    val fraction = fractionStart + span * (0.15 + 0.8 * (done.toDouble() / totalJobs))
+                    ApplicationManager.getApplication().invokeLater {
+                        indicator.text = text
+                        indicator.fraction = fraction
+                    }
 
-                normalized
+                    normalized
+                }
             }
         }
 
@@ -873,7 +892,9 @@ class CoverageLoadService(private val project: Project) {
                     }
 
                     indicator.text = "Parsing coverage data…"
-                    val coverage = BinaryCoverageParser.parseCovtBytes(bytes)
+                    val coverage = CoveragePerfLog.span("covt.parse", "source" to "localFile", "bytes" to bytes.size) {
+                        BinaryCoverageParser.parseCovtBytes(bytes)
+                    }
                     log.info("Coverage: parsed ${coverage.size} files from local file ${file.name}")
 
                     // Derive a stable key from file content so the same file → same cache entry.
@@ -883,7 +904,9 @@ class CoverageLoadService(private val project: Project) {
                     val gitRoot = findGitRootFromFile(file.parentFile) ?: findGitRoot()
                     val component = if (gitRoot != null) detectComponent(gitRoot) ?: "raketa" else "raketa"
                     val normalizedCoverage = if (component == "raketa") {
-                        CoveragePathNormalizer.normalizeRaketaCoverage(coverage, gitRoot)
+                        CoveragePerfLog.span("normalize.raketa", *coverageStats(coverage)) {
+                            CoveragePathNormalizer.normalizeRaketaCoverage(coverage, gitRoot)
+                        }
                     } else {
                         coverage
                     }
@@ -1043,6 +1066,34 @@ class CoverageLoadService(private val project: Project) {
         }
         log.info("Coverage: no component detected for project at $basePath")
         return null
+    }
+
+    /**
+     * Cheap summary of a parsed coverage map, recorded in the performance log.
+     * Diagnostic only: it walks every line, so it costs time proportional to the report.
+     */
+    private fun coverageStats(coverage: Map<String, Map<Int, List<String>>>): Array<Pair<String, Any?>> {
+        var lines = 0
+        var coveredLines = 0
+        var testRefs = 0L
+        val names = HashSet<String>()
+        for (lineMap in coverage.values) {
+            lines += lineMap.size
+            for (tests in lineMap.values) {
+                if (tests.isNotEmpty()) {
+                    coveredLines++
+                    testRefs += tests.size
+                    names.addAll(tests)
+                }
+            }
+        }
+        return arrayOf(
+            "files" to coverage.size,
+            "lines" to lines,
+            "coveredLines" to coveredLines,
+            "testRefs" to testRefs,
+            "distinctTests" to names.size,
+        )
     }
 
     companion object {
