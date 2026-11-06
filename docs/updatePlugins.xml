@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.7/per-line-coverage-info-2.9.7.zip" version="2.9.7">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252"/>
+        <change-notes><![CDATA[<ul><li>Close GitLab HTTP/retry executors and cancel pending requests when replacing the client or unloading the plugin</li><li>Explicitly release shared coverage archives on clear, eviction and project disposal while allowing active reads to finish</li><li>Coalesce highlighting to one running task and the latest pending request per editor, cancel stale work and discard queued results when documents or coverage change</li><li>Store local coverage runs and source snapshots in disk archives, decode files on demand, and filter superseded tests lazily so repeated runs and stale coverage do not retain full reports in memory</li><li>Bound GitLab metadata, resolution and refresh cooldown caches, and remove expired entries on reads and writes to prevent accumulation across commits and pipelines</li><li>Reduce coverage memory usage: keep immutable COV4 snapshots on disk, share decoded test sets between lines, process CI reports one at a time, and stream gzip decoding and COV4 writes</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.9.6/per-line-coverage-info-2.9.6.zip" version="2.9.6">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>

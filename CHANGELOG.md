@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.9.7] - 2026-11-06
+
 - Close GitLab HTTP/retry executors and cancel pending requests when replacing the client or unloading the plugin
 - Explicitly release shared coverage archives on clear, eviction and project disposal while allowing active reads to finish
 - Coalesce highlighting to one running task and the latest pending request per editor, cancel stale work and discard queued results when documents or coverage change
