@@ -90,66 +90,86 @@ class Cov4Reader(
 
     /**
      * Reads header (28 bytes), global test list, and INDX section.
+     *
+     * Streams from the file instead of loading it whole: a large cache is ~100 MB and
+     * loading it just to read the index cost a full-file allocation per open.
      */
     private fun readHeaderAndIndex(): Pair<List<String>, List<IndexEntry>> {
-        val data = file.readBytes()
-        val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+        RandomAccessFile(file, "r").use { raf ->
+            val header = ByteArray(HEADER_SIZE)
+            raf.readFully(header)
+            val buf = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN)
 
-        // --- HEADER (28 bytes) ---
-        val magic = buf.int
-        if (magic != MAGIC) throw CoverageApiException(
-            "Invalid COV4 magic: 0x${Integer.toHexString(magic).uppercase()}, expected 0x${Integer.toHexString(MAGIC).uppercase()}",
-            kind = CoverageErrorKind.ARTIFACT_PARSE,
-        )
-        val version = buf.int
-        if (version != VERSION) throw CoverageApiException(
-            "Unsupported COV4 version: $version, expected $VERSION",
-            kind = CoverageErrorKind.ARTIFACT_PARSE,
-        )
+            // --- HEADER (28 bytes) ---
+            val magic = buf.int
+            if (magic != MAGIC) throw CoverageApiException(
+                "Invalid COV4 magic: 0x${Integer.toHexString(magic).uppercase()}, expected 0x${Integer.toHexString(MAGIC).uppercase()}",
+                kind = CoverageErrorKind.ARTIFACT_PARSE,
+            )
+            val version = buf.int
+            if (version != VERSION) throw CoverageApiException(
+                "Unsupported COV4 version: $version, expected $VERSION",
+                kind = CoverageErrorKind.ARTIFACT_PARSE,
+            )
 
-        val fileCount = buf.int
-        val testCount = buf.int
-        @Suppress("UNUSED_VARIABLE")
-        val dirCount = buf.int
-        val indexOffset = buf.int
-        @Suppress("UNUSED_VARIABLE")
-        val dirSectionOffset = buf.int
+            @Suppress("UNUSED_VARIABLE")
+            val fileCount = buf.int
+            val testCount = buf.int
+            @Suppress("UNUSED_VARIABLE")
+            val dirCount = buf.int
+            val indexOffset = buf.int
+            @Suppress("UNUSED_VARIABLE")
+            val dirSectionOffset = buf.int
 
-        // --- GLOBAL TEST LIST ---
-        val tests = ArrayList<String>(testCount)
-        for (i in 0 until testCount) {
-            tests.add(readString(buf))
+            // --- GLOBAL TEST LIST (immediately after the header) ---
+            raf.seek(HEADER_SIZE.toLong())
+            val tests = ArrayList<String>(testCount)
+            for (i in 0 until testCount) {
+                tests.add(readString(raf))
+            }
+
+            // --- INDX SECTION ---
+            raf.seek(indexOffset.toLong())
+            val indexMarker = readLeInt(raf)
+            if (indexMarker != MARKER_INDEX) throw CoverageApiException(
+                "Invalid INDX marker at offset $indexOffset: 0x${Integer.toHexString(indexMarker).uppercase()}",
+                kind = CoverageErrorKind.ARTIFACT_PARSE,
+            )
+
+            val entryCount = readLeInt(raf)
+            val entries = ArrayList<IndexEntry>(entryCount)
+
+            for (i in 0 until entryCount) {
+                val pathHash = readLeLong(raf)
+                val pathOffset = readLeInt(raf)
+                val dataOffset = readLeInt(raf)
+                val dataSize = readLeInt(raf)
+                val crc32 = readLeInt(raf)
+                val nextEntryPosition = raf.filePointer
+
+                // The FILE section at dataOffset starts with the marker; its path follows.
+                raf.seek((dataOffset + pathOffset).toLong())
+                val filePath = readString(raf)
+                raf.seek(nextEntryPosition)
+
+                entries.add(IndexEntry(pathHash, pathOffset, dataOffset, dataSize, crc32, filePath))
+            }
+
+            log.info("COV4: opened ${file.name}: ${tests.size} tests, ${entries.size} files")
+            return Pair(tests, entries)
         }
-
-        // --- INDX SECTION ---
-        buf.position(indexOffset)
-        val indexMarker = buf.int
-        if (indexMarker != MARKER_INDEX) throw CoverageApiException(
-            "Invalid INDX marker at offset $indexOffset: 0x${Integer.toHexString(indexMarker).uppercase()}",
-            kind = CoverageErrorKind.ARTIFACT_PARSE,
-        )
-
-        val entryCount = buf.int
-        val entries = ArrayList<IndexEntry>(entryCount)
-
-        for (i in 0 until entryCount) {
-            val pathHash = buf.long
-            val pathOffset = buf.int
-            val dataOffset = buf.int
-            val dataSize = buf.int
-            val crc32 = buf.int
-
-            // Read the file path from the FILE section
-            val pathBuf = ByteBuffer.wrap(data, dataOffset + pathOffset, dataSize - pathOffset)
-                .order(ByteOrder.LITTLE_ENDIAN)
-            val filePath = readString(pathBuf)
-
-            entries.add(IndexEntry(pathHash, pathOffset, dataOffset, dataSize, crc32, filePath))
-        }
-
-        log.info("COV4: opened ${file.name}: ${tests.size} tests, ${entries.size} files")
-        return Pair(tests, entries)
     }
+
+    private fun readString(raf: RandomAccessFile): String {
+        val length = readLeInt(raf)
+        val bytes = ByteArray(length)
+        raf.readFully(bytes)
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    private fun readLeInt(raf: RandomAccessFile): Int = Integer.reverseBytes(raf.readInt())
+
+    private fun readLeLong(raf: RandomAccessFile): Long = java.lang.Long.reverseBytes(raf.readLong())
 
     /**
      * Parses a FILE section's bytes (starting from FILE marker) into coverage data.
@@ -215,6 +235,7 @@ class Cov4Reader(
     }
 
     companion object {
+        private const val HEADER_SIZE = 28
         private const val MAGIC = 0x434F5633       // "COV3"
         private const val VERSION = 4
         private const val MARKER_FILE = 0x46494C45 // "FILE"

@@ -8,6 +8,7 @@
 - Reuse the decoded test set when reading cached COV4 data, so opening a file no longer allocates one test list per covered line
 - Add structured performance logging (heap, per-thread allocations, CPU, GC per phase) with a Find Action to reveal the log folder; disable with `-Dcoverage.perf.log=false`
 - Reuse a cached master (baseline) coverage artifact when the current pipeline has no jobs for the component, instead of re-downloading and rewriting it on every refresh
+- Speed up large coverage loads: merge shards in one pass, write COV4 sets as int arrays, and open the cache index without reading the whole file
 
 ## [2.7.2] - 2026-11-05
 - Fix raketa coverage paths after the `core` → `app/raketa` move: strip the new `app/raketa/web/` CI prefix (legacy `core/web/` still supported)

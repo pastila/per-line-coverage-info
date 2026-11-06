@@ -167,7 +167,16 @@ object BinaryCoverageParser {
     fun parsePossiblyGzippedCovtBytes(bytes: ByteArray): Map<String, Map<Int, List<String>>> {
         val data = if (bytes.size >= 2 && bytes[0] == 0x1F.toByte() && bytes[1] == 0x8B.toByte()) {
             log.info("COVT: input is gzipped, decompressing")
-            GZIPInputStream(bytes.inputStream()).use { it.readBytes() }
+            CoveragePerfLog.span("covt.decompress", "gzBytes" to bytes.size) {
+                GZIPInputStream(bytes.inputStream()).use { it.readBytes() }
+            }.also { decompressed ->
+                CoveragePerfLog.event(
+                    "covt.decompress.size",
+                    "gzBytes" to bytes.size,
+                    "bytes" to decompressed.size,
+                    "ratio" to "%.1f".format(java.util.Locale.ROOT, decompressed.size.toDouble() / bytes.size),
+                )
+            }
         } else {
             bytes
         }
