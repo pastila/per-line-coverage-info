@@ -165,6 +165,9 @@ class Cov4Reader(
         }
 
         // Line mappings
+        // The writer deduplicates test sets per file, so one set is usually shared by
+        // many lines. Expand each set once instead of allocating a list per line.
+        val resolvedTestSets = HashMap<Int, List<String>>()
         val lineCount = buf.int
         val lineMap = LinkedHashMap<Int, List<String>>(lineCount)
         for (l in 0 until lineCount) {
@@ -174,8 +177,10 @@ class Cov4Reader(
             if (setIndex < 0) {
                 lineMap[lineNumber] = emptyList()
             } else if (setIndex < testSets.size) {
-                lineMap[lineNumber] = testSets[setIndex].map { testIdx ->
-                    if (testIdx < tests.size) tests[testIdx] else "unknown-test-$testIdx"
+                lineMap[lineNumber] = resolvedTestSets.getOrPut(setIndex) {
+                    testSets[setIndex].map { testIdx ->
+                        if (testIdx in tests.indices) tests[testIdx] else "unknown-test-$testIdx"
+                    }
                 }
             }
         }

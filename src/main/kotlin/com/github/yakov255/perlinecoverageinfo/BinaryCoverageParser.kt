@@ -99,7 +99,7 @@ object BinaryCoverageParser {
                         // Line mappings
                         // A set is usually referenced by many lines. Decode its names once
                         // rather than expanding the same list for every line in the file.
-                        val resolvedTestSets = arrayOfNulls<List<String>>(testSetsCount)
+                        val resolvedTestSets = HashMap<Int, List<String>>()
                         ensureRemaining(buf, 4, "line count for $filePath")
                         val lineCount = buf.int.toUInt().toInt()
                         val lineMap = LinkedHashMap<Int, List<String>>(lineCount)
@@ -117,15 +117,17 @@ object BinaryCoverageParser {
                                         kind = CoverageErrorKind.ARTIFACT_PARSE,
                                     )
                                 }
-                                val testNames = resolvedTestSets[setIndex] ?: testSets[setIndex].map { testIdx ->
-                                    if (testIdx !in tests.indices) {
-                                        throw CoverageApiException(
-                                            "Invalid test index $testIdx in set $setIndex for line $lineNumber in $filePath (only ${tests.size} tests)",
-                                            kind = CoverageErrorKind.ARTIFACT_PARSE,
-                                        )
+                                val testNames = resolvedTestSets.getOrPut(setIndex) {
+                                    testSets[setIndex].map { testIdx ->
+                                        if (testIdx !in tests.indices) {
+                                            throw CoverageApiException(
+                                                "Invalid test index $testIdx in set $setIndex for line $lineNumber in $filePath (expected 0..${tests.size - 1})",
+                                                kind = CoverageErrorKind.ARTIFACT_PARSE,
+                                            )
+                                        }
+                                        tests[testIdx]
                                     }
-                                    tests[testIdx]
-                                }.also { resolvedTestSets[setIndex] = it }
+                                }
                                 lineMap[lineNumber] = testNames
                             }
                         }

@@ -55,6 +55,28 @@ class Cov4WriterReaderTest {
     }
 
     @Test
+    fun `reuses one expanded test set across lines of a file`() {
+        val shared = listOf("calc/features/a.feature:1", "calc/features/b.feature:2")
+        val coverage = mapOf("src/big.php" to (1..5_000).associateWith { shared })
+
+        val tempFile = Files.createTempFile("test", ".cov4").toFile()
+        try {
+            Cov4Writer.write(coverage, tempFile)
+
+            Cov4Reader(tempFile).use { reader ->
+                val lines = reader.getCoverage("src/big.php")!!
+                assertEquals(5_000, lines.size)
+                for (line in 1..5_000) {
+                    assertEquals(shared, lines.getValue(line))
+                    assertSame(lines.getValue(1), lines.getValue(line))
+                }
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
     fun testSingleFileLookup() {
         // Create coverage with many files
         val coverage = (1..50).associate { i ->

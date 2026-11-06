@@ -10,34 +10,62 @@ import java.util.zip.GZIPOutputStream
 
 class BinaryCoverageParserTest {
 
+    private fun ByteArrayOutputStream.int(value: Int) {
+        write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array())
+    }
+
+    private fun ByteArrayOutputStream.string(value: String) {
+        val encoded = value.toByteArray(Charsets.UTF_8)
+        int(encoded.size)
+        write(encoded)
+    }
+
+    @Test
+    fun `rejects a negative test index with a typed parse error`() {
+        val bytes = ByteArrayOutputStream()
+        bytes.int(0x434F5654) // COVT
+        bytes.int(1)
+        bytes.int(0)
+        bytes.int(1)
+        bytes.string("app/raketa/E2E/one.feature:10")
+        bytes.int(0x46494C45) // FILE
+        bytes.string("core/web/src/File.php")
+        bytes.int(1) // one test set
+        bytes.int(1) // one test in the set
+        bytes.int(-1) // negative test index
+        bytes.int(1) // one line
+        bytes.int(1) // line 1
+        bytes.int(0) // set 0
+        bytes.int(0x454E4446) // ENDF
+
+        val error = assertThrows(CoverageApiException::class.java) {
+            BinaryCoverageParser.parseCovtBytes(bytes.toByteArray())
+        }
+        assertTrue(error.message.orEmpty(), "expected 0..0" in error.message.orEmpty())
+    }
+
     @Test
     fun `decodes repeated test sets once and keeps sets scoped to their file`() {
         val bytes = ByteArrayOutputStream()
-        fun int(value: Int) { bytes.write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(value).array()) }
-        fun string(value: String) {
-            val encoded = value.toByteArray(Charsets.UTF_8)
-            int(encoded.size)
-            bytes.write(encoded)
-        }
-        int(0x434F5654) // COVT
-        int(1)
-        int(0)
-        int(2)
-        string("app/raketa/E2E/one.feature:10")
-        string("app/raketa/E2E/two.feature:20")
+        bytes.int(0x434F5654) // COVT
+        bytes.int(1)
+        bytes.int(0)
+        bytes.int(2)
+        bytes.string("app/raketa/E2E/one.feature:10")
+        bytes.string("app/raketa/E2E/two.feature:20")
         repeat(2) { file ->
-            int(0x46494C45) // FILE
-            string("core/web/src/File$file.php")
-            int(1) // one test set
-            int(1) // one test in the set
-            int(file) // different header test for each file
-            int(10_001)
+            bytes.int(0x46494C45) // FILE
+            bytes.string("core/web/src/File$file.php")
+            bytes.int(1) // one test set
+            bytes.int(1) // one test in the set
+            bytes.int(file) // different header test for each file
+            bytes.int(10_001)
             for (line in 1..10_001) {
-                int(line)
-                int(if (line == 10_001) -1 else 0)
+                bytes.int(line)
+                bytes.int(if (line == 10_001) -1 else 0)
             }
         }
-        int(0x454E4446) // ENDF
+        bytes.int(0x454E4446) // ENDF
 
         val coverage = BinaryCoverageParser.parseCovtBytes(bytes.toByteArray())
         repeat(2) { file ->
