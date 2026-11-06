@@ -753,7 +753,16 @@ class CoverageLoadService(private val project: Project) {
                     indicator.fraction = processFraction
                 }
             }
-            CoverageMerge.merge(reports)
+            CoverageMerge.merge(reports).let { merged ->
+                CoveragePerfLog.event(
+                    "artifact.merge.stats",
+                    "lines" to merged.stats.lines,
+                    "refsIn" to merged.stats.refsIn,
+                    "refsOut" to merged.stats.refsOut,
+                    "unions" to merged.stats.unions,
+                )
+                merged.coverage
+            }
         }
 
         val headBranch = CoverageResolver.runGitCommand(resolved.gitRoot, "rev-parse", "--abbrev-ref", "HEAD")

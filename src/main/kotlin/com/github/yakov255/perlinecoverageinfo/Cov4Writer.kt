@@ -120,6 +120,9 @@ object Cov4Writer {
         )
 
         val fileEntries = mutableListOf<FileEntry>()
+        // Parser and merge share list instances between lines, so map a list to its sorted
+        // global test indices once per write instead of once per line.
+        val listKeys = java.util.IdentityHashMap<List<String>, IntArrayKey>()
 
         CoveragePerfLog.span("cov4.fileSections", "files" to coverage.size) {
             for ((filePath, lineMap) in coverage) {
@@ -141,20 +144,23 @@ object Cov4Writer {
                         lineSetIndices[lineNum] = -1
                         continue
                     }
-                    val indices = IntArray(tests.size)
-                    var count = 0
-                    for (test in tests) {
-                        val globalIndex = testToIndex[test] ?: continue
-                        indices[count++] = globalIndex
+                    val key = listKeys.getOrPut(tests) {
+                        val indices = IntArray(tests.size)
+                        var count = 0
+                        for (test in tests) {
+                            val globalIndex = testToIndex[test] ?: continue
+                            indices[count++] = globalIndex
+                        }
+                        val set = if (count == indices.size) indices else indices.copyOf(count)
+                        set.sort()
+                        IntArrayKey(set)
                     }
-                    if (count == 0) {
+                    if (key.values.isEmpty()) {
                         lineSetIndices[lineNum] = -1
                         continue
                     }
-                    val set = if (count == indices.size) indices else indices.copyOf(count)
-                    set.sort()
-                    val setIdx = setKeyToIndex.getOrPut(IntArrayKey(set)) {
-                        testSets.add(set)
+                    val setIdx = setKeyToIndex.getOrPut(key) {
+                        testSets.add(key.values)
                         testSets.size - 1
                     }
                     lineSetIndices[lineNum] = setIdx
@@ -317,7 +323,7 @@ object Cov4Writer {
     }
 
     /** Content-keyed wrapper so test sets can deduplicate without formatting a string key. */
-    private class IntArrayKey(private val values: IntArray) {
+    private class IntArrayKey(val values: IntArray) {
         private val hash = values.contentHashCode()
 
         override fun hashCode(): Int = hash
