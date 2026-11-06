@@ -148,7 +148,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         val loadedSha = dataService.coverageCommitHash
         val handledSha = dataService.handledPipelineSha
 
-        if (remoteSha == loadedSha || remoteSha == handledSha) {
+        if (PollDecision.remoteMatchesLoaded(remoteSha, loadedSha)) {
             // Quiet steady state (every poll cycle) — log at most once a minute.
             val now = System.currentTimeMillis()
             if (now - lastQuietLogMs > 60_000) {
@@ -185,8 +185,17 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
             return
         }
 
-        // A pipeline exists — decide what to do
-        if (latestPipeline.sha == loadedSha || latestPipeline.sha == handledSha) {
+        // A pipeline exists — decide what to do.
+        // A sha that was already processed must not trigger a reload, but a NEW pipeline
+        // with the same sha (re-run) must.
+        if (!PollDecision.shouldReload(
+                latestPipelineId = latestPipeline.id,
+                latestPipelineSha = latestPipeline.sha,
+                loadedSha = loadedSha,
+                handledPipelineId = dataService.handledPipelineId,
+                handledPipelineSha = handledSha,
+            )
+        ) {
             // Pipeline matches already-loaded coverage (e.g. same SHA from older pipeline)
             scheduleNext()
             return

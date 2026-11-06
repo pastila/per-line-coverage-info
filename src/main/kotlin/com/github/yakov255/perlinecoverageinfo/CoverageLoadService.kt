@@ -370,6 +370,10 @@ class CoverageLoadService(private val project: Project) {
                     if (primaryCached == null) {
                         log.info("Coverage: cache miss — downloading primary artifacts for pipeline ${resolved.pipelineId}")
                         var fellBackToBaseline = false
+                        // A fallback caused by missing component jobs is a complete answer for
+                        // this pipeline; one caused by a failure or cancellation must stay
+                        // retryable, so the poller is not told the pipeline was handled.
+                        var fallbackIsFinal = false
                         // Coalesce identical downloads across project windows of the
                         // same repo: concurrent loads share one download.
                         val result = try {
@@ -378,10 +382,13 @@ class CoverageLoadService(private val project: Project) {
                                     fractionStart = 0.0, fractionEnd = 0.6)
                             }
                         } catch (e: CoverageApiException) {
-                            if (e.kind == CoverageErrorKind.NO_DATA && dual.baseline != null) {
+                            val canFallBack = dual.baseline != null && !indicator.isCanceled && !pendingReload &&
+                                (e.kind == CoverageErrorKind.NO_COMPONENT_JOBS || e.kind == CoverageErrorKind.NO_DATA)
+                            if (canFallBack) {
                                 log.info("Coverage: no ${component} jobs in primary pipeline, falling back to baseline pipeline ${dual.baseline.pipelineId}")
                                 dataService.clearBaseline()
                                 fellBackToBaseline = true
+                                fallbackIsFinal = e.kind == CoverageErrorKind.NO_COMPONENT_JOBS
                                 val cachedBaseline = baselineCached
                                 if (cachedBaseline != null) {
                                     // The baseline artifact is already on disk: reuse it instead of
@@ -435,17 +442,23 @@ class CoverageLoadService(private val project: Project) {
                         if (!fellBackToBaseline) {
                             loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, preloadedReader = baselineCached, baseProgress = 0.6)
                         }
+
+                        // This pipeline is fully processed (possibly through the baseline
+                        // fallback). The poller must not treat its sha as pending work, but a
+                        // cancelled or failed load stays retryable.
+                        val handledFinally = !indicator.isCanceled && !pendingReload &&
+                            (result != null || fallbackIsFinal)
+                        if (handledFinally) {
+                            dataService.markPipelineHandled(resolved.pipelineId, resolved.commitHash)
+                        }
                     } else {
                         cache.updateLastUsed(resolved.commitHash, component)
                         dataService.setCoverageContext(resolved.commitHash, resolved.gitRoot)
                         computeAndStoreWarningContext(resolved.gitRoot)
                         dataService.setCov4Reader(primaryCached)
+                        dataService.markPipelineHandled(resolved.pipelineId, resolved.commitHash)
                         loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, preloadedReader = baselineCached, baseProgress = 0.6)
                     }
-
-                    // This pipeline is now fully processed (possibly through the baseline
-                    // fallback). The poller must not treat its sha as pending work.
-                    dataService.markPipelineHandled(resolved.pipelineId, resolved.commitHash)
 
                     log.info("Coverage: loaded coverage for commit ${resolved.commitHash.take(8)}")
                     ApplicationManager.getApplication().invokeLater {
@@ -558,7 +571,7 @@ class CoverageLoadService(private val project: Project) {
             throw CoverageApiException(
                 "No ${component.serviceDir} behat jobs found in pipeline #${resolved.pipelineId}.",
                 details = mapOf("pipelineId" to resolved.pipelineId.toString()),
-                kind = CoverageErrorKind.NO_DATA,
+                kind = CoverageErrorKind.NO_COMPONENT_JOBS,
             )
         }
 
@@ -666,7 +679,7 @@ class CoverageLoadService(private val project: Project) {
                         BinaryCoverageParser.parsePossiblyGzippedCovtBytes(covtBytes)
                     }
                     val normalized = if (artifactComponent == "raketa") {
-                        CoveragePerfLog.span("normalize.raketa", *coverageStats(parsed)) {
+                        CoveragePerfLog.span("normalize.raketa", *perfStats(parsed)) {
                             CoveragePathNormalizer.normalizeRaketaCoverage(parsed, resolved.gitRoot)
                         }
                     } else {
@@ -930,7 +943,7 @@ class CoverageLoadService(private val project: Project) {
                     val gitRoot = findGitRootFromFile(file.parentFile) ?: findGitRoot()
                     val component = if (gitRoot != null) detectComponent(gitRoot) ?: "raketa" else "raketa"
                     val normalizedCoverage = if (component == "raketa") {
-                        CoveragePerfLog.span("normalize.raketa", *coverageStats(coverage)) {
+                        CoveragePerfLog.span("normalize.raketa", *perfStats(coverage)) {
                             CoveragePathNormalizer.normalizeRaketaCoverage(coverage, gitRoot)
                         }
                     } else {
@@ -1095,6 +1108,13 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
+     * Stats for the performance log, or nothing when logging is off: computing them walks
+     * every line and hashes every test name, which must not happen in a normal load.
+     */
+    private fun perfStats(coverage: Map<String, Map<Int, List<String>>>): Array<Pair<String, Any?>> =
+        if (CoveragePerfLog.isEnabled()) coverageStats(coverage) else EMPTY_STATS
+
+    /**
      * Cheap summary of a parsed coverage map, recorded in the performance log.
      * Diagnostic only: it walks every line, so it costs time proportional to the report.
      */
@@ -1129,6 +1149,8 @@ class CoverageLoadService(private val project: Project) {
         /** TTL for the shared, cross-window pipeline-resolution result. */
         private const val RESOLVE_TTL_MS = 60_000L
 
+        private val EMPTY_STATS = emptyArray<Pair<String, Any?>>()
+
         fun getInstance(project: Project): CoverageLoadService = project.service()
 
         fun errorTitle(kind: CoverageErrorKind): String = when (kind) {
@@ -1138,6 +1160,7 @@ class CoverageLoadService(private val project: Project) {
             CoverageErrorKind.ARTIFACT_PARSE -> "Coverage Artifact Error"
             CoverageErrorKind.GIT -> "Git Error"
             CoverageErrorKind.NO_DATA -> "No Coverage Data"
+            CoverageErrorKind.NO_COMPONENT_JOBS -> "No Coverage Data"
             CoverageErrorKind.PROJECT_SETUP -> "Configuration Error"
         }
 

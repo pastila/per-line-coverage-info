@@ -45,6 +45,7 @@ class CoverageDataService(private val project: Project) {
      */
     var handledPipelineId: Long? = null
         private set
+    @Volatile
     var handledPipelineSha: String? = null
         private set
 
@@ -193,11 +194,21 @@ class CoverageDataService(private val project: Project) {
         log.info("CoverageDataService: pipeline $pipelineId (${sha.take(8)}) marked as handled")
     }
 
+    /**
+     * Forgets the handled pipeline when the loaded data changes, so a "handled" flag
+     * never describes a commit that is no longer loaded.
+     */
+    private fun clearHandledPipeline() {
+        handledPipelineId = null
+        handledPipelineSha = null
+    }
+
     fun setCoverageContext(commitHash: String, gitRoot: java.io.File, stale: Boolean = false) {
         log.info("CoverageDataService: setCoverageContext — commit=${commitHash.take(8)}, stale=$stale, gitRoot=$gitRoot")
         this.coverageCommitHash = commitHash
         this.gitRoot = gitRoot
         this.isStale = stale
+        clearHandledPipeline()
         // Drop old-content cache entries from previous commits so the LRU stays focused on
         // files relevant to the currently active coverage. Keep the baseline commit warm too.
         val keep = setOfNotNull(commitHash, baselineCommitHash)
