@@ -1,6 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import java.io.File
+import java.util.IdentityHashMap
 
 /**
  * Normalizes paths written by the PHP coverage extension into git-root-relative paths.
@@ -74,7 +75,7 @@ object CoveragePathNormalizer {
             normalized
         }
 
-        return withFeatures + suffix
+        return if (withFeatures == path) name else withFeatures + suffix
     }
 
     /** Normalizes a whole coverage map (file paths and test names) for the raketa component. */
@@ -83,9 +84,15 @@ object CoveragePathNormalizer {
         gitRoot: File?,
     ): Map<String, Map<Int, List<String>>> {
         val suites = raketaFeatureSuiteEntries(gitRoot)
+        // Caches belong to one report, so parallel downloads neither share state nor retain old reports.
+        val names = HashMap<String, String>()
+        // Preserve the parser's shared test sets without hashing/comparing their contents per line.
+        val testSets = IdentityHashMap<List<String>, List<String>>()
         return coverage.entries.associate { (path, lineMap) ->
             normalizeRaketaFilePath(path) to lineMap.mapValues { (_, tests) ->
-                tests.map { normalizeRaketaBehatName(it, suites) }
+                testSets.getOrPut(tests) {
+                    tests.map { name -> names.getOrPut(name) { normalizeRaketaBehatName(name, suites) } }
+                }
             }
         }
     }
