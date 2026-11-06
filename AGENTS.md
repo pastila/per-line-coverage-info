@@ -193,6 +193,8 @@ Log tab):
   average, GC deltas, JVM uptime.
 
 Enabled by default; `-Dcoverage.perf.log=false` disables it and Gradle sets it for unit tests.
+Per-report data-shape stats (`files`, `lines`, `testRefs`, `distinctTests`) are opt-in with
+`-Dcoverage.perf.stats=true`, because computing them walks every line of a report.
 Find Action **Open Coverage Performance Log Folder** reveals the directory. Instrumented:
 `load.offlineFirst`, `load.resolvePhase`, `artifact.process` (`covt.parse`, `normalize.raketa`,
 `covt.parseFile`), `artifact.merge`, `cov4.buildTestIndex`/`dirStats`/`fileSections`/`auxSections`/

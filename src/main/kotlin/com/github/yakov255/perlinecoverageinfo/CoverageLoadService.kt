@@ -1117,11 +1117,11 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
-     * Stats for the performance log, or nothing when logging is off: computing them walks
-     * every line and hashes every test name, which must not happen in a normal load.
+     * Stats for the performance log, or nothing when logging is off. Computing them walks
+     * every line of the report, so they are opt-in: `-Dcoverage.perf.stats=true`.
      */
     private fun perfStats(coverage: Map<String, Map<Int, List<String>>>): Array<Pair<String, Any?>> =
-        if (CoveragePerfLog.isEnabled()) {
+        if (CoveragePerfLog.isEnabled() && CoveragePerfLog.isStatsEnabled()) {
             // Logged as its own span so its diagnostic cost is visible in the profile.
             CoveragePerfLog.span("covt.stats", "files" to coverage.size) { coverageStats(coverage) }
         } else {

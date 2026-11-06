@@ -40,10 +40,17 @@ object CoveragePerfLog {
     private val TIME_FORMAT: DateTimeFormatter =
         DateTimeFormatter.ofPattern("HH:mm:ss.SSS").withZone(ZoneId.systemDefault())
 
+    /** True when per-report data-shape stats should be computed (`-Dcoverage.perf.stats=true`). */
+    fun isStatsEnabled(): Boolean = statsEnabled
+
     /** Toggle for tests and local diagnostics; off means every call is a cheap no-op. */
     @Volatile
     internal var enabled: Boolean =
         !"false".equals(System.getProperty("coverage.perf.log"), ignoreCase = true)
+
+    @Volatile
+    internal var statsEnabled: Boolean =
+        "true".equals(System.getProperty("coverage.perf.stats"), ignoreCase = true)
 
     private val logLock = Any()
     private var stream: BufferedOutputStream? = null

@@ -120,13 +120,15 @@ object Cov4Writer {
         )
 
         val fileEntries = mutableListOf<FileEntry>()
-        // Parser and merge share list instances between lines, so map a list to its sorted
-        // global test indices once per write instead of once per line.
-        val listKeys = java.util.IdentityHashMap<List<String>, IntArrayKey>()
 
         CoveragePerfLog.span("cov4.fileSections", "files" to coverage.size) {
             for ((filePath, lineMap) in coverage) {
                 val dataOffset = buf.size()
+
+                // Parser and merge share list instances between lines, so map a list to its
+                // sorted global indices once per file instead of once per line. Kept per
+                // file so the converted arrays of a whole report are not held at once.
+                val listKeys = java.util.IdentityHashMap<List<String>, IntArrayKey>()
 
                 // FILE marker
                 buf.writeInt32(MARKER_FILE)
