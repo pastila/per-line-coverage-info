@@ -146,8 +146,9 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
 
         val dataService = CoverageDataService.getInstance(project)
         val loadedSha = dataService.coverageCommitHash
+        val handledSha = dataService.handledPipelineSha
 
-        if (remoteSha == loadedSha) {
+        if (remoteSha == loadedSha || remoteSha == handledSha) {
             // Quiet steady state (every poll cycle) — log at most once a minute.
             val now = System.currentTimeMillis()
             if (now - lastQuietLogMs > 60_000) {
@@ -185,7 +186,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         }
 
         // A pipeline exists — decide what to do
-        if (latestPipeline.sha == loadedSha) {
+        if (latestPipeline.sha == loadedSha || latestPipeline.sha == handledSha) {
             // Pipeline matches already-loaded coverage (e.g. same SHA from older pipeline)
             scheduleNext()
             return
@@ -194,6 +195,13 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         when (latestPipeline.status) {
             "success" -> {
                 log.info("Coverage: pipeline poll — pipeline ${latestPipeline.id} (${latestPipeline.sha.take(8)}) succeeded, newer than loaded coverage")
+                CoveragePerfLog.event(
+                    "poll.trigger",
+                    "pipeline" to latestPipeline.id,
+                    "sha" to latestPipeline.sha.take(8),
+                    "loadedSha" to (loadedSha?.take(8) ?: "-"),
+                    "handledSha" to (handledSha?.take(8) ?: "-"),
+                )
                 triggerLoad()
             }
             in TERMINAL_FAILURE_STATUSES -> {

@@ -38,6 +38,16 @@ class CoverageDataService(private val project: Project) {
     var coverageCommitHash: String? = null
         private set
 
+    /**
+     * The pipeline whose coverage load was last applied, including a load that fell back
+     * to the baseline artifact. The pipeline poller uses this to avoid reloading the same
+     * pipeline forever when the loaded data commit differs from the pipeline commit.
+     */
+    var handledPipelineId: Long? = null
+        private set
+    var handledPipelineSha: String? = null
+        private set
+
     /** Commit hash of the baseline (master) coverage, when in dual-coverage mode. */
     var baselineCommitHash: String? = null
         private set
@@ -159,6 +169,8 @@ class CoverageDataService(private val project: Project) {
         baselineCommitHash = null
         data.clear()
         coverageCommitHash = null
+        handledPipelineId = null
+        handledPipelineSha = null
         gitRoot = null
         isStale = false
         mergeBaseHash = null
@@ -170,6 +182,16 @@ class CoverageDataService(private val project: Project) {
     }
 
     fun hasData(): Boolean = data.isNotEmpty() || cov4Reader != null
+
+    /**
+     * Records the pipeline whose result was applied, so the poller can tell that this
+     * pipeline was already processed even when the loaded commit is the baseline commit.
+     */
+    fun markPipelineHandled(pipelineId: Long, sha: String) {
+        handledPipelineId = pipelineId
+        handledPipelineSha = sha
+        log.info("CoverageDataService: pipeline $pipelineId (${sha.take(8)}) marked as handled")
+    }
 
     fun setCoverageContext(commitHash: String, gitRoot: java.io.File, stale: Boolean = false) {
         log.info("CoverageDataService: setCoverageContext — commit=${commitHash.take(8)}, stale=$stale, gitRoot=$gitRoot")

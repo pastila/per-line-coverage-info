@@ -142,7 +142,11 @@ class CoverageLoadService(private val project: Project) {
                             // exact commit was just refreshed — avoids redundant resolve
                             // requests during rapid branch switches / HEAD toggles.
                             val headHash = CoverageResolver.runGitCommand(gitRoot, "rev-parse", "HEAD")
-                            val withinCooldown = headHash != null && cachedCommit == headHash &&
+                            // In fallback mode the loaded commit is the baseline commit, so also
+                            // accept a HEAD whose pipeline was already processed (handled sha).
+                            val matchesHead = headHash != null &&
+                                (cachedCommit == headHash || dataService.handledPipelineSha == headHash)
+                            val withinCooldown = headHash != null && matchesHead &&
                                 GitLabCoordinator.getInstance().isWithinRefreshCooldown(gitRoot, headHash, REFRESH_COOLDOWN_MS)
                             if (withinCooldown) {
                                 log.info("Coverage: offline-first hit within refresh cooldown, skipping GitLab refresh")
@@ -259,7 +263,8 @@ class CoverageLoadService(private val project: Project) {
         val gitRoot = findGitRoot()
         val headHash = gitRoot?.let { CoverageResolver.runGitCommand(it, "rev-parse", "HEAD") }
         if (gitRoot != null && headHash != null &&
-            dataService.coverageCommitHash == headHash && dataService.hasData() && !dataService.isStale &&
+            (dataService.coverageCommitHash == headHash || dataService.handledPipelineSha == headHash) &&
+            dataService.hasData() && !dataService.isStale &&
             coordinator.isWithinRefreshCooldown(gitRoot, headHash, REFRESH_COOLDOWN_MS)
         ) {
             log.info("Coverage: coverage for HEAD ${headHash.take(8)} is fresh and within refresh cooldown, skipping GitLab resolve")
@@ -382,10 +387,13 @@ class CoverageLoadService(private val project: Project) {
                                     // The baseline artifact is already on disk: reuse it instead of
                                     // downloading and rewriting the same report on every refresh.
                                     log.info("Coverage: baseline commit ${dual.baseline.commitHash.take(8)} is cached, skipping download")
+                                    val alreadyLoaded = dataService.coverageCommitHash == dual.baseline.commitHash && dataService.hasData()
                                     cache.updateLastUsed(dual.baseline.commitHash, component)
                                     dataService.setCoverageContext(dual.baseline.commitHash, dual.baseline.gitRoot, stale = false)
                                     computeAndStoreWarningContext(dual.baseline.gitRoot)
-                                    dataService.setCov4Reader(cachedBaseline)
+                                    if (!alreadyLoaded) {
+                                        dataService.setCov4Reader(cachedBaseline)
+                                    }
                                     CoveragePerfLog.event(
                                         "load.fallbackCached",
                                         "commit" to dual.baseline.commitHash.take(8),
@@ -434,6 +442,10 @@ class CoverageLoadService(private val project: Project) {
                         dataService.setCov4Reader(primaryCached)
                         loadOrFetchBaseline(indicator, gitLabClient, cache, dual.baseline, preloadedReader = baselineCached, baseProgress = 0.6)
                     }
+
+                    // This pipeline is now fully processed (possibly through the baseline
+                    // fallback). The poller must not treat its sha as pending work.
+                    dataService.markPipelineHandled(resolved.pipelineId, resolved.commitHash)
 
                     log.info("Coverage: loaded coverage for commit ${resolved.commitHash.take(8)}")
                     ApplicationManager.getApplication().invokeLater {
