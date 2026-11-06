@@ -55,6 +55,31 @@ class Cov4WriterReaderTest {
     }
 
     @Test
+    fun `deduplicates identical test sets in the written file`() {
+        val tests = (1..50).map { "t$it" }
+        val coverage = mapOf("src/a.php" to (1..2_000).associateWith { tests })
+
+        val tempFile = Files.createTempFile("test", ".cov4").toFile()
+        try {
+            Cov4Writer.write(coverage, tempFile)
+
+            assertTrue(
+                "one shared set must not be written per line, size=${tempFile.length()}",
+                tempFile.length() < 40_000,
+            )
+            Cov4Reader(tempFile).use { reader ->
+                val lines = reader.getCoverage("src/a.php")!!
+                assertEquals(2_000, lines.size)
+                assertEquals(tests, lines.getValue(1))
+                assertEquals(tests, lines.getValue(2_000))
+                assertSame(lines.getValue(1), lines.getValue(2_000))
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
     fun `reader refuses stale offsets after the cache file is rewritten`() {
         val tempFile = Files.createTempFile("test", ".cov4").toFile()
         try {

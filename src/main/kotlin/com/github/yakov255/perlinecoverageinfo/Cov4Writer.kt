@@ -119,22 +119,32 @@ object Cov4Writer {
                 buf.writeString(filePath)
 
                 // Build deduplicated test sets for this file
-                val setKeyToIndex = LinkedHashMap<String, Int>()
-                val testSets = mutableListOf<List<Int>>()
-                val lineSetIndices = LinkedHashMap<Int, Int>() // lineNum → setIndex
+                val setKeyToIndex = HashMap<IntArrayKey, Int>()
+                val testSets = ArrayList<IntArray>()
+                val lineSetIndices = HashMap<Int, Int>(lineMap.size * 2)
 
                 for ((lineNum, tests) in lineMap.entries.sortedBy { it.key }) {
                     if (tests.isEmpty()) {
                         lineSetIndices[lineNum] = -1
-                    } else {
-                        val globalIndices = tests.mapNotNull { testToIndex[it] }.sorted()
-                        val setKey = globalIndices.joinToString(",")
-                        val setIdx = setKeyToIndex.getOrPut(setKey) {
-                            testSets.add(globalIndices)
-                            testSets.size - 1
-                        }
-                        lineSetIndices[lineNum] = setIdx
+                        continue
                     }
+                    val indices = IntArray(tests.size)
+                    var count = 0
+                    for (test in tests) {
+                        val globalIndex = testToIndex[test] ?: continue
+                        indices[count++] = globalIndex
+                    }
+                    if (count == 0) {
+                        lineSetIndices[lineNum] = -1
+                        continue
+                    }
+                    val set = if (count == indices.size) indices else indices.copyOf(count)
+                    set.sort()
+                    val setIdx = setKeyToIndex.getOrPut(IntArrayKey(set)) {
+                        testSets.add(set)
+                        testSets.size - 1
+                    }
+                    lineSetIndices[lineNum] = setIdx
                 }
 
                 // Test sets count
@@ -146,11 +156,11 @@ object Cov4Writer {
                     }
                 }
 
-                // Line mappings (already sorted by key)
+                // Line mappings, ascending by line number
                 buf.writeInt32(lineSetIndices.size)
-                for ((lineNum, setIdx) in lineSetIndices) {
+                for (lineNum in lineSetIndices.keys.sorted()) {
                     buf.writeInt32(lineNum)
-                    buf.writeSignedInt32(setIdx)
+                    buf.writeSignedInt32(lineSetIndices.getValue(lineNum))
                 }
 
                 val dataSize = buf.size() - dataOffset
@@ -272,9 +282,10 @@ object Cov4Writer {
     }
 
     private fun ByteArrayOutputStream.writeInt32(value: Int) {
-        val buf = ByteArray(4)
-        ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).putInt(value)
-        write(buf)
+        write(value and 0xFF)
+        write(value ushr 8 and 0xFF)
+        write(value ushr 16 and 0xFF)
+        write(value ushr 24 and 0xFF)
     }
 
     private fun ByteArrayOutputStream.writeSignedInt32(value: Int) {
@@ -282,14 +293,23 @@ object Cov4Writer {
     }
 
     private fun ByteArrayOutputStream.writeInt64(value: Long) {
-        val buf = ByteArray(8)
-        ByteBuffer.wrap(buf).order(ByteOrder.LITTLE_ENDIAN).putLong(value)
-        write(buf)
+        writeInt32(value.toInt())
+        writeInt32((value ushr 32).toInt())
     }
 
     private fun ByteArrayOutputStream.writeString(s: String) {
         val bytes = s.toByteArray(Charsets.UTF_8)
         writeInt32(bytes.size)
         write(bytes)
+    }
+
+    /** Content-keyed wrapper so test sets can deduplicate without formatting a string key. */
+    private class IntArrayKey(private val values: IntArray) {
+        private val hash = values.contentHashCode()
+
+        override fun hashCode(): Int = hash
+
+        override fun equals(other: Any?): Boolean =
+            other is IntArrayKey && values.contentEquals(other.values)
     }
 }
