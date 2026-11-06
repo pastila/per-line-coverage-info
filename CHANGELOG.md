@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Fix `Expected FILE marker` errors after coverage cache rewrites: keep each reader's index and binary data in one immutable snapshot and publish cache files atomically
+
 ## [2.9.5] - 2026-11-05
 
 - Reduce CPU and allocation overhead when processing coverage artifacts: decode shared test sets once and normalize each unique test name once per report

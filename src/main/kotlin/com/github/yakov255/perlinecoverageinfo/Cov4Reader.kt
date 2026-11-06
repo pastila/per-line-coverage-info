@@ -1,20 +1,18 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import java.io.File
-import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.zip.CRC32
 
 /**
  * Random-access reader for COV4 binary coverage files.
  *
- * On construction, reads only the header, global test list, and file index (INDX).
- * Individual file coverage is parsed on demand via [getCoverage], seeking directly
- * to the file's data offset using the index.
+ * Holds an immutable snapshot of the binary file, decoding only the header,
+ * global test list, and file index (INDX) on construction. Individual file coverage
+ * is parsed on demand via [getCoverage] using offsets into that same snapshot.
  *
- * This avoids loading the entire coverage dataset into memory — only the requested
- * file's block is parsed when an editor needs it.
+ * Keeping the bytes and index together lets shared readers survive cache rewrites
+ * and cleanup. Only the requested file's block is decoded when an editor needs it.
  */
 class Cov4Reader(
     private val file: File,
@@ -24,6 +22,7 @@ class Cov4Reader(
 
     private val log = CoverageLog.get(Cov4Reader::class.java)
 
+    private val data = file.readBytes()
     private val tests: List<String>
     private val entriesByPath: Map<String, IndexEntry>  // normalized path → entry
 
@@ -65,19 +64,17 @@ class Cov4Reader(
     fun getCoverage(filePath: String): Map<Int, List<String>>? {
         val entry = entriesByPath[pathNormalizer(filePath)] ?: return null
 
-        return RandomAccessFile(file, "r").use { raf ->
-            val bytes = ByteArray(entry.dataSize)
-            raf.seek(entry.dataOffset.toLong())
-            raf.readFully(bytes)
-            parseFileSection(bytes)
-        }
+        // Each lookup gets its own bounded cursor, so concurrent editor requests
+        // never share a mutable ByteBuffer position.
+        val buf = ByteBuffer.wrap(data, entry.dataOffset, entry.dataSize)
+            .slice().order(ByteOrder.LITTLE_ENDIAN)
+        return parseFileSection(buf)
     }
 
     /**
      * Reads header (28 bytes), global test list, and INDX section.
      */
     private fun readHeaderAndIndex(): Pair<List<String>, List<IndexEntry>> {
-        val data = file.readBytes()
         val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
         // --- HEADER (28 bytes) ---
@@ -139,9 +136,7 @@ class Cov4Reader(
     /**
      * Parses a FILE section's bytes (starting from FILE marker) into coverage data.
      */
-    private fun parseFileSection(sectionBytes: ByteArray): Map<Int, List<String>> {
-        val buf = ByteBuffer.wrap(sectionBytes).order(ByteOrder.LITTLE_ENDIAN)
-
+    private fun parseFileSection(buf: ByteBuffer): Map<Int, List<String>> {
         // FILE marker
         val marker = buf.int
         if (marker != MARKER_FILE) throw CoverageApiException(

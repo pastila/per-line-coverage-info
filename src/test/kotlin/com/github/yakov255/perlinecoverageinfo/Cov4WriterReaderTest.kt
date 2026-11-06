@@ -8,6 +8,58 @@ import java.nio.file.Files
 class Cov4WriterReaderTest {
 
     @Test
+    fun testOpenReaderKeepsSnapshotWhenCacheIsRewritten() {
+        val original = mapOf("src/main.php" to mapOf(1 to listOf("original_test")))
+        val replacement = mapOf(
+            "src/main.php" to mapOf(42 to listOf("replacement_test_with_a_different_length")),
+            "src/extra.php" to mapOf(2 to listOf("extra_test")),
+        )
+        val tempFile = Files.createTempFile("test", ".cov4").toFile()
+        try {
+            Cov4Writer.write(original, tempFile)
+            Cov4Reader(tempFile).use { reader ->
+                // Change both the global test table and FILE offsets before the first lookup.
+                // In-place overwrites must not affect the already opened reader either.
+                tempFile.writeBytes(Cov4Writer.toBytes(replacement))
+                assertEquals(original.keys, reader.allFilePaths)
+                assertEquals(original["src/main.php"], reader.getCoverage("src/main.php"))
+                assertNull(reader.getCoverage("src/extra.php"))
+
+                Cov4Reader(tempFile).use { freshReader ->
+                    assertEquals(replacement.keys, freshReader.allFilePaths)
+                    for ((path, lines) in replacement) {
+                        assertEquals(lines, freshReader.getCoverage(path))
+                    }
+                }
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
+    fun testOpenReaderSurvivesCacheReplacementAndDeletion() {
+        val original = mapOf("src/main.php" to mapOf(1 to listOf("original_test")))
+        val replacement = mapOf("src/main.php" to mapOf(10 to listOf("new_test")))
+        val tempFile = Files.createTempFile("test", ".cov4").toFile()
+        try {
+            Cov4Writer.write(original, tempFile)
+            Cov4Reader(tempFile).use { reader ->
+                Cov4Writer.write(replacement, tempFile)
+                assertEquals(original["src/main.php"], reader.getCoverage("src/main.php"))
+                Cov4Reader(tempFile).use { freshReader ->
+                    assertEquals(replacement["src/main.php"], freshReader.getCoverage("src/main.php"))
+                }
+
+                assertTrue(tempFile.delete())
+                assertEquals(original["src/main.php"], reader.getCoverage("src/main.php"))
+            }
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
     fun testRoundTrip() {
         val coverage = mapOf(
             "src/main.php" to mapOf(

@@ -4,6 +4,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption.ATOMIC_MOVE
+import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.util.zip.CRC32
 
 /**
@@ -35,7 +38,17 @@ object Cov4Writer {
      * @param outputFile destination file
      */
     fun write(coverage: Map<String, Map<Int, List<String>>>, outputFile: File) {
-        outputFile.writeBytes(toBytes(coverage))
+        val data = toBytes(coverage)
+        val destination = outputFile.toPath().toAbsolutePath()
+        // Publish only complete snapshots, including to readers in other IDE
+        // processes. A failed write must leave the previous cache file intact.
+        val temporary = Files.createTempFile(destination.parent, ".cov4-", ".tmp")
+        try {
+            Files.write(temporary, data)
+            Files.move(temporary, destination, ATOMIC_MOVE, REPLACE_EXISTING)
+        } finally {
+            Files.deleteIfExists(temporary)
+        }
     }
 
     /**
