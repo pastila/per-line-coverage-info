@@ -4,6 +4,9 @@ import java.io.File
 import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.FileTime
 import java.util.zip.CRC32
 
 /**
@@ -24,15 +27,33 @@ class Cov4Reader(
 
     private val log = CoverageLog.get(Cov4Reader::class.java)
 
-    private val tests: List<String>
-    private val entriesByPath: Map<String, IndexEntry>  // normalized path → entry
+    @Volatile
+    private var tests: List<String> = emptyList()
 
-    /** Size and mtime captured at open time; a rewrite invalidates the index offsets. */
-    private val openedLength = file.length()
-    private val openedModifiedMs = file.lastModified()
+    @Volatile
+    private var entriesByPath: Map<String, IndexEntry> = emptyMap()  // normalized path → entry
 
-    private fun isFileReplaced(): Boolean =
-        file.length() != openedLength || file.lastModified() != openedModifiedMs
+    /**
+     * Identity of the file that [entriesByPath] was indexed from. A rewrite replaces the
+     * file (new inode), so every offset becomes invalid and the index is reloaded lazily
+     * instead of serving stale or wrong data.
+     */
+    @Volatile
+    private var openedStamp: FileStamp? = null
+
+    private val reloadLock = Any()
+
+    private fun currentStamp(): FileStamp = try {
+        val attributes = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+        FileStamp(attributes.size(), attributes.lastModifiedTime(), attributes.fileKey())
+    } catch (_: Exception) {
+        FileStamp(file.length(), FileTime.fromMillis(file.lastModified()), null)
+    }
+
+    private fun isFileReplaced(): Boolean = currentStamp() != openedStamp
+
+    @Volatile
+    private var replacedWarned = false
 
     data class IndexEntry(
         val pathHash: Long,
@@ -44,49 +65,85 @@ class Cov4Reader(
     )
 
     init {
-        val (rawTests, idx) = CoveragePerfLog.span("cov4.init", "file" to file.name, "bytes" to file.length()) {
-            readHeaderAndIndex()
-        }
-        tests = rawTests.map(testNormalizer)
-
-        val byPath = LinkedHashMap<String, IndexEntry>(idx.size)
-        for (entry in idx) {
-            val normalizedPath = pathNormalizer(entry.filePath)
-            val previous = byPath.putIfAbsent(normalizedPath, entry)
-            if (previous != null) {
-                log.warn(
-                    "COV4: duplicate normalized path '$normalizedPath' " +
-                        "(${previous.filePath} and ${entry.filePath}); keeping the first"
-                )
-            }
-        }
-        entriesByPath = byPath
+        reloadIndex()
     }
 
-    val allFilePaths: Set<String> get() = entriesByPath.keys
+    /** Re-reads the header, test table and index from the current file contents. */
+    private fun reloadIndex() {
+        synchronized(reloadLock) {
+            val stamp = currentStamp()
+            if (stamp == openedStamp && openedStamp != null) return
 
-    fun hasData(): Boolean = entriesByPath.isNotEmpty()
+            val (rawTests, idx) = CoveragePerfLog.span("cov4.init", "file" to file.name, "bytes" to stamp.size) {
+                readHeaderAndIndex()
+            }
+
+            val byPath = LinkedHashMap<String, IndexEntry>(idx.size)
+            for (entry in idx) {
+                val normalizedPath = pathNormalizer(entry.filePath)
+                val previous = byPath.putIfAbsent(normalizedPath, entry)
+                if (previous != null) {
+                    log.warn(
+                        "COV4: duplicate normalized path '$normalizedPath' " +
+                            "(${previous.filePath} and ${entry.filePath}); keeping the first"
+                    )
+                }
+            }
+            tests = rawTests.map(testNormalizer)
+            entriesByPath = byPath
+            openedStamp = stamp
+        }
+    }
+
+    val allFilePaths: Set<String>
+        get() {
+            ensureFreshIndex()
+            return entriesByPath.keys
+        }
+
+    fun hasData(): Boolean {
+        ensureFreshIndex()
+        return entriesByPath.isNotEmpty()
+    }
+
+    /** Reloads the index when the file was replaced by a newer write. */
+    private fun ensureFreshIndex() {
+        if (!isFileReplaced()) return
+        if (!replacedWarned) {
+            replacedWarned = true
+            log.info("COV4: ${file.name} was replaced by a newer write, reloading its index")
+        }
+        reloadIndex()
+    }
 
     /**
      * Reads coverage for a single file on demand.
      * Returns lineNum → testNames, or null if file not found in this .cov4.
      */
     fun getCoverage(filePath: String): Map<Int, List<String>>? {
-        if (isFileReplaced()) {
-            log.warn("COV4: ${file.name} was replaced after this reader was opened, refusing to read stale offsets")
-            return null
-        }
-        val entry = entriesByPath[pathNormalizer(filePath)] ?: return null
+        val key = pathNormalizer(filePath)
 
-        return CoveragePerfLog.counted("cov4.readFile") {
-            RandomAccessFile(file, "r").use { raf ->
-                val bytes = ByteArray(entry.dataSize)
-                raf.seek(entry.dataOffset.toLong())
-                raf.readFully(bytes)
-                parseFileSection(bytes)
-            }
-        }
+        ensureFreshIndex()
+        val first = entriesByPath[key] ?: return null
+        val stampBefore = currentStamp()
+        val parsed = CoveragePerfLog.counted("cov4.readFile") { readSection(first) }
+        if (currentStamp() == stampBefore) return parsed
+
+        // The file was replaced while reading: the offsets may belong to older bytes.
+        ensureFreshIndex()
+        val fresh = entriesByPath[key] ?: return null
+        return CoveragePerfLog.counted("cov4.readFile") { readSection(fresh) }
     }
+
+    private data class FileStamp(val size: Long, val modified: FileTime, val key: Any?)
+
+    private fun readSection(entry: IndexEntry): Map<Int, List<String>> =
+        RandomAccessFile(file, "r").use { raf ->
+            val bytes = ByteArray(entry.dataSize)
+            raf.seek(entry.dataOffset.toLong())
+            raf.readFully(bytes)
+            parseFileSection(bytes)
+        }
 
     /**
      * Reads header (28 bytes), global test list, and INDX section.

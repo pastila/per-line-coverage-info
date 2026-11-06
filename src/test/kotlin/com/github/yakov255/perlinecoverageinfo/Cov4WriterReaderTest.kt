@@ -80,22 +80,37 @@ class Cov4WriterReaderTest {
     }
 
     @Test
-    fun `reader refuses stale offsets after the cache file is rewritten`() {
+    fun `reader reloads its index when the cache file is replaced`() {
         val tempFile = Files.createTempFile("test", ".cov4").toFile()
         try {
             Cov4Writer.write(mapOf("src/a.php" to mapOf(1 to listOf("t1"))), tempFile)
-            val stale = Cov4Reader(tempFile)
-            assertEquals(listOf("t1"), stale.getCoverage("src/a.php")!![1])
+            val reader = Cov4Reader(tempFile)
+            assertEquals(listOf("t1"), reader.getCoverage("src/a.php")!![1])
 
             Cov4Writer.write(
                 mapOf("src/a.php" to mapOf(1 to listOf("t1", "t2", "t3", "t4"))),
                 tempFile,
             )
 
-            assertNull("stale reader must not read offsets from the new bytes", stale.getCoverage("src/a.php"))
-            Cov4Reader(tempFile).use { fresh ->
-                assertEquals(listOf("t1", "t2", "t3", "t4"), fresh.getCoverage("src/a.php")!![1])
-            }
+            assertEquals(listOf("t1", "t2", "t3", "t4"), reader.getCoverage("src/a.php")!![1])
+        } finally {
+            tempFile.delete()
+        }
+    }
+
+    @Test
+    fun `reader reloads even when the replaced file has the same size`() {
+        val tempFile = Files.createTempFile("test", ".cov4").toFile()
+        try {
+            Cov4Writer.write(mapOf("src/a.php" to mapOf(1 to listOf("aaa"))), tempFile)
+            val reader = Cov4Reader(tempFile)
+            assertEquals(listOf("aaa"), reader.getCoverage("src/a.php")!![1])
+            val sizeBefore = tempFile.length()
+
+            Cov4Writer.write(mapOf("src/a.php" to mapOf(1 to listOf("bbb"))), tempFile)
+            assertEquals("same-size rewrite must still invalidate the index", sizeBefore, tempFile.length())
+
+            assertEquals(listOf("bbb"), reader.getCoverage("src/a.php")!![1])
         } finally {
             tempFile.delete()
         }
