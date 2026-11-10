@@ -144,6 +144,43 @@ object CovdClient {
         }
     }
 
+    @Serializable
+    data class ImportRequest(
+        val covtPath: String,
+        val projectId: String,
+        val component: String,
+        val pathMode: String = "",
+        val gitRoot: String = "",
+    )
+
+    @Serializable
+    data class ImportResponse(
+        val state: String = "",
+        val commit: String? = null,
+        val cov4Path: String? = null,
+        val stats: Stats? = null,
+        val code: String? = null,
+        val message: String? = null,
+    )
+
+    /**
+     * Imports a local `.covt`/`.covt.gz` file into the daemon cache and returns the COV4
+     * path. Throws [Unavailable] when the daemon cannot be reached.
+     */
+    fun import(request: ImportRequest): ImportResponse {
+        val handshake = handshake(forceRestart = false)
+        val body = json.encodeToString(ImportRequest.serializer(), request)
+        val response = try {
+            request("POST", "/v1/import", handshake, body, ENSURE_TIMEOUT_MS)
+        } catch (e: java.io.IOException) {
+            val restarted = handshake(forceRestart = true)
+            request("POST", "/v1/import", restarted, body, ENSURE_TIMEOUT_MS)
+        }
+        val text = response.second
+        if (text.isBlank()) throw Unavailable("empty import response (HTTP ${response.first})")
+        return json.decodeFromString(ImportResponse.serializer(), text)
+    }
+
     /** Lists cached artifacts, or null when the daemon is unavailable. */
     fun artifacts(projectId: String): List<Artifact>? = try {
         val handshake = handshake(forceRestart = false)
@@ -174,6 +211,9 @@ object CovdClient {
 
     internal fun encodeRequestForTest(request: EnsureRequest): String =
         json.encodeToString(EnsureRequest.serializer(), request)
+
+    internal fun jsonImportForTest(text: String): ImportResponse =
+        json.decodeFromString(ImportResponse.serializer(), text)
 
     // --- daemon lifecycle --------------------------------------------------------
 

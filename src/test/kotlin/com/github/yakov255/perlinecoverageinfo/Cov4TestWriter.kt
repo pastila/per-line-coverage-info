@@ -22,7 +22,7 @@ import java.util.zip.CRC32
  *
  * Follows the Go reference implementation in api/coverage_io.go.
  */
-object Cov4Writer {
+object Cov4TestWriter {
 
     private const val MAGIC = 0x434F5633          // "COV3"
     private const val VERSION = 4

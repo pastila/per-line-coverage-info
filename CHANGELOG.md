@@ -4,7 +4,8 @@
 
 ## [Unreleased]
 
-- Load coverage through the covd daemon: pipeline resolution, artifact download and COV4 building happen outside the IDE process and are shared by all IDE windows, with the in-process pipeline as a fallback
+- Load coverage through the covd daemon: pipeline resolution, artifact download and COV4 building happen outside the IDE process and are shared by all IDE windows; the daemon is required, the plugin no longer downloads or parses artifacts itself
+- Import local `.covt`/`.covt.gz` files through the daemon, so the plugin no longer carries a COVT parser, shard merger or COV4 writer
 - Reduce memory and CPU overhead when processing coverage artifacts: decode shared test sets once and normalize each unique test name once per report
 - Reuse the decoded test set when reading cached COV4 data, so opening a file no longer allocates one test list per covered line
 - Add structured performance logging (heap, per-thread allocations, CPU, GC per phase) with a Find Action to reveal the log folder; disable with `-Dcoverage.perf.log=false`

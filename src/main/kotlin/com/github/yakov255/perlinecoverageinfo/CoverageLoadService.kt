@@ -312,7 +312,6 @@ class CoverageLoadService(private val project: Project) {
 
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
-        cache.markExternalIndexOwner()
 
         val wasStale = dataService.isStale
         val previousCommit = dataService.coverageCommitHash
@@ -418,57 +417,47 @@ class CoverageLoadService(private val project: Project) {
     }
 
     /**
-     * Loads coverage from a local `.covt`/`.covt.gz` file.
-     *
-     * Still processed in-process: the daemon-side import in covd is the next step.
+     * Imports a local `.covt`/`.covt.gz` file through the daemon, which writes it into the
+     * cache like a downloaded artifact, then activates the resulting COV4.
      */
     fun loadFromLocalFile(file: File, onComplete: (() -> Unit)? = null) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Local Coverage File", false) {
             override fun run(indicator: ProgressIndicator) {
                 try {
-                    indicator.text = "Reading ${file.name}…"
-                    val bytes = if (file.name.endsWith(".covt.gz")) {
-                        GZIPInputStream(file.inputStream()).use { it.readBytes() }
-                    } else {
-                        file.readBytes()
-                    }
-
-                    indicator.text = "Parsing coverage data…"
-                    val coverage = CoveragePerfLog.span("covt.parse", "source" to "localFile", "bytes" to bytes.size) {
-                        BinaryCoverageParser.parseCovtBytes(bytes)
-                    }
-                    log.info("Coverage: parsed ${coverage.size} files from local file ${file.name}")
-
-                    val sha1 = MessageDigest.getInstance("SHA-1").digest(bytes)
-                    val hash = sha1.joinToString("") { "%02x".format(it) }
-
+                    indicator.text = "Importing ${file.name}…"
                     val gitRoot = findGitRootFromFile(file.parentFile) ?: findGitRoot()
                     val component = if (gitRoot != null) detectComponent(gitRoot) ?: "raketa" else "raketa"
-                    val normalizedCoverage = if (component == "raketa") {
-                        CoveragePathNormalizer.normalizeRaketaCoverage(coverage, gitRoot)
-                    } else {
-                        coverage
+                    val projectId = CoverageApiSettings.getInstance().gitlabProjectId.toString()
+
+                    val response = CovdClient.import(
+                        CovdClient.ImportRequest(
+                            covtPath = file.absolutePath,
+                            projectId = projectId,
+                            component = component,
+                            pathMode = if (component == "raketa") "raketa" else "",
+                            gitRoot = gitRoot?.absolutePath.orEmpty(),
+                        )
+                    )
+                    val commit = response.commit
+                    val cov4Path = response.cov4Path
+                    if (response.state != "ready" || commit == null || cov4Path == null) {
+                        throw IllegalStateException(
+                            response.message ?: "the coverage daemon rejected the file (${response.code})",
+                        )
                     }
 
                     val cache = CoverageCacheService.getInstance(project)
-                    cache.writeCov4(hash, pipelineId = 0L, normalizedCoverage, component = component)
-
                     val dataService = CoverageDataService.getInstance(project)
-                    val reader = cache.get(hash, component, gitRoot)
-                    if (reader != null) {
-                        if (gitRoot != null) {
-                            dataService.setCoverageContext(hash, gitRoot, stale = false)
-                            computeAndStoreWarningContext(gitRoot)
-                        }
-                        dataService.setCov4Reader(reader)
-                    } else {
-                        log.warn("Coverage: failed to reopen freshly-written .cov4 for local file, falling back to in-memory map")
-                        if (gitRoot != null) {
-                            dataService.setCoverageContext(hash, gitRoot, stale = false)
-                            computeAndStoreWarningContext(gitRoot)
-                        }
-                        dataService.setCoverageAll(normalizedCoverage)
+                                if (gitRoot != null) {
+                        dataService.setCoverageContext(commit, gitRoot, stale = false)
+                        computeAndStoreWarningContext(gitRoot)
                     }
+                    val reader = cache.get(commit, component, gitRoot) ?: Cov4Reader(File(cov4Path))
+                    dataService.setCov4Reader(reader)
+                    log.info(
+                        "Coverage: imported ${file.name} as commit ${commit.take(8)} " +
+                            "(${response.stats?.files} files, component=$component)",
+                    )
 
                     ApplicationManager.getApplication().invokeLater {
                         CoverageHighlighter.applyToOpenEditors(project)
@@ -477,7 +466,7 @@ class CoverageLoadService(private val project: Project) {
                 } catch (ex: Exception) {
                     log.warn("Coverage: failed to load local file ${file.name}", ex)
                     ApplicationManager.getApplication().invokeLater {
-                        Messages.showErrorDialog(project, "Failed to parse coverage file:\n${ex.message}", "Coverage Error")
+                        Messages.showErrorDialog(project, "Failed to load coverage file:\n${ex.message}", "Coverage Error")
                         onComplete?.invoke()
                     }
                 }

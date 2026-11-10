@@ -76,6 +76,20 @@ class CovdClientTest {
     }
 
     @Test
+    fun `import response keeps the cache path and stats`() {
+        val response = CovdClient.jsonImportForTest(
+            """
+            {"state":"ready","commit":"a1b2c3","cov4Path":"/cache/335/a1b2c3-raketa.cov4",
+             "stats":{"files":3,"lines":10,"covered":7}}
+            """.trimIndent(),
+        )
+        assertEquals("ready", response.state)
+        assertEquals("a1b2c3", response.commit)
+        assertEquals("/cache/335/a1b2c3-raketa.cov4", response.cov4Path)
+        assertEquals(7, response.stats?.covered)
+    }
+
+    @Test
     fun `error response carries code and hint`() {
         val response = CovdClient.parseEnsureForTest(
             """
