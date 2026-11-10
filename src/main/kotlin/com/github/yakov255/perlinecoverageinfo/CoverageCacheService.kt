@@ -25,6 +25,17 @@ import java.io.File
 class CoverageCacheService(private val project: Project) {
 
     private val log = CoverageLog.get(CoverageCacheService::class.java)
+
+    /**
+     * When set, the covd daemon owns the cache index and .cov4 files: this service only
+     * reads them. Two writers would corrupt `cache-index.json`.
+     */
+    @Volatile
+    private var externalIndexOwner = false
+
+    fun markExternalIndexOwner() {
+        externalIndexOwner = true
+    }
     private val json = Json { prettyPrint = false }
 
     private fun cacheDir(): File {
@@ -112,6 +123,7 @@ class CoverageCacheService(private val project: Project) {
      * when each artifact was last viewed.
      */
     fun updateLastUsed(commitHash: String, component: String) {
+        if (externalIndexOwner) return // the daemon updates its own index
         synchronized(LOCK) {
             val index = readIndex() ?: return
             if (index.entries.none { it.commitHash == commitHash && it.component == component }) return
@@ -134,6 +146,8 @@ class CoverageCacheService(private val project: Project) {
         component: String,
         branch: String? = null,
     ) {
+        // The in-process pipeline took over: it becomes the index owner again.
+        externalIndexOwner = false
         synchronized(LOCK) {
             cleanup()
             val dir = cacheDir()
@@ -186,6 +200,10 @@ class CoverageCacheService(private val project: Project) {
      * Returns true if the file was deleted (or was already absent), false on I/O error.
      */
     fun deleteArtifact(commitHash: String, component: String): Boolean {
+        if (externalIndexOwner) {
+            val settings = CoverageApiSettings.getInstance()
+            return CovdClient.deleteArtifact(settings.gitlabProjectId.toString(), commitHash, component)
+        }
         synchronized(LOCK) {
             val dir = cacheDir()
             val cov4File = File(dir, cov4FileName(commitHash, component))
@@ -243,6 +261,7 @@ class CoverageCacheService(private val project: Project) {
      * next cleanup can retry.
      */
     fun cleanup(maxAgeDays: Int = 7) {
+        if (externalIndexOwner) return // the daemon prunes its own cache
         synchronized(LOCK) {
             val dir = cacheDir()
             val index = readIndex() ?: CacheIndex(entries = emptyList())

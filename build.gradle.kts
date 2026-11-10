@@ -205,6 +205,52 @@ tasks {
     }
 }
 
+// covd binaries are produced by the coverage-assistant repository:
+//   make build-covd-all   →  dist/covd/covd-<os>-<arch>[.exe]
+// Point the build at that directory with -PcovdDist=/path/to/dist/covd (or COVD_DIST).
+val covdDistDir: File? = run {
+    val configured = providers.gradleProperty("covdDist").orNull ?: System.getenv("COVD_DIST")
+    if (configured != null) {
+        File(configured).takeIf { it.isDirectory }
+    } else {
+        rootProject.projectDir.parentFile
+            .resolve("raketa/yakov_scripts/coverage/coverage-assistant/dist/covd")
+            .takeIf { it.isDirectory }
+    }
+}
+
+val covdResourceDir = layout.buildDirectory.dir("covd-resources")
+
+val covdPlatforms = listOf(
+    Triple("covd-linux-amd64", "linux-x64", "covd"),
+    Triple("covd-linux-arm64", "linux-arm64", "covd"),
+    Triple("covd-darwin-amd64", "mac-x64", "covd"),
+    Triple("covd-darwin-arm64", "mac-arm64", "covd"),
+    Triple("covd-windows-amd64.exe", "win-x64", "covd.exe"),
+)
+
+val copyCovdBinaries by tasks.registering(Sync::class) {
+    group = "build"
+    description = "Bundles covd binaries from -PcovdDist into the plugin resources"
+    into(covdResourceDir.map { it.dir("bin") })
+    if (covdDistDir != null) {
+        for ((sourceName, platform, targetName) in covdPlatforms) {
+            val source = File(covdDistDir, sourceName)
+            if (source.isFile) {
+                from(source) {
+                    into(platform)
+                    rename { targetName }
+                }
+            }
+        }
+    }
+}
+
+tasks.named<ProcessResources>("processResources") {
+    dependsOn(copyCovdBinaries)
+    from(covdResourceDir) { into("") }
+}
+
 tasks.withType(org.gradle.api.tasks.testing.Test::class.java).configureEach {
     // Unit tests run with the performance log off; a real IDE keeps it on by default.
     systemProperty("coverage.perf.log", "false")

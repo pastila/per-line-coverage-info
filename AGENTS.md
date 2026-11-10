@@ -170,6 +170,32 @@ Tool: `get_first_tests_at_lines` — returns the first covering test name for ea
 
 Tool: `list_files` — lists files with coverage data under a directory.
 
+## Coverage daemon (covd)
+
+Artifact processing runs in the `covd` daemon from the coverage-assistant repository:
+it resolves the pipeline in GitLab, downloads the COVT shards, merges them and writes the
+`.cov4` cache, so none of that work touches the IDE JVM.
+
+- Binaries are built there with `make build-covd-all` (`dist/covd/covd-<os>-<arch>[.exe]`) and
+  bundled here by `copyCovdBinaries`: pass `-PcovdDist=/path/to/dist/covd` (or `COVD_DIST`);
+  without it the task copies nothing and the plugin degrades to the in-process pipeline.
+  Resource layout: `/bin/<platform>/covd[.exe]`, platforms `linux-x64`, `linux-arm64`,
+  `mac-x64`, `mac-arm64`, `win-x64`.
+- `CovdClient` extracts the binary to `~/.cache/coverage-plugin/bin-covd-<ver>/`, starts it
+  with `--cache-dir ~/.cache/coverage-plugin`, and reads the single stdout handshake line
+  (`{"covdReady":{port,token,instanceId}}`). It never calls `/v1/shutdown`: the daemon is
+  shared by all IDE instances and exits on its idle timeout.
+- `loadWithCovd` posts `/v1/ensure` with `gitRoot`, `component`, `pathMode`, `jobPrefixes`
+  (from `ComponentConfig`) and the GitLab settings; the token travels in the request body and
+  is never stored. `ready` → attach `Cov4Reader` to the returned `cov4Path`; `not_ready` →
+  retry after `retryAfterMs`; `error` → report `code`/`hint`.
+- The daemon owns `<cache>/<projectId>/cache-index.json` and the `.cov4` files:
+  `CoverageCacheService.markExternalIndexOwner()` makes `updateLastUsed`/`cleanup` no-ops and
+  routes deletions through `DELETE /v1/artifacts`. The in-process pipeline resets that flag
+  when it writes a cache file itself.
+- On any daemon problem (no binary, start failure, connection refused twice) the load falls
+  back to `CoverageResolver` + `downloadArtifacts` + `CoverageMerge` + `Cov4Writer`.
+
 ## Build & Run
 
 ```bash

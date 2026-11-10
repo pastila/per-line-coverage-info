@@ -36,6 +36,9 @@ class CoverageLoadService(private val project: Project) {
     @Volatile
     private var pendingReload = false
 
+    /** Retry timer for `not_ready` answers from the covd daemon. */
+    private val covdRetryAlarm = com.intellij.util.Alarm(com.intellij.util.Alarm.ThreadToUse.POOLED_THREAD, project)
+
     /**
      * True while a GitLab load (resolve + download) is in progress for this project.
      * Used by [CoveragePipelinePoller] to avoid firing API requests during a load.
@@ -222,9 +225,12 @@ class CoverageLoadService(private val project: Project) {
 
         loadingCommitHash = "" // sentinel — refined to actual commit after resolution
 
-        // Phase 1: resolve pipeline and check cache — no progress indicator
+        // Phase 1: let the covd daemon own resolve/download/merge when it is available.
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
+                if (CovdClient.isAvailable() && loadWithCovd(showErrors, onComplete, onError)) {
+                    return@executeOnPooledThread
+                }
                 resolvePhase(showErrors, onComplete, onError)
             } catch (ex: Exception) {
                 log.warn("Coverage: unexpected error during resolve phase: ${ex.message}", ex)
@@ -237,6 +243,131 @@ class CoverageLoadService(private val project: Project) {
                 finishLoad(onComplete)
             }
         }
+    }
+
+    /**
+     * Runs the whole load through the covd daemon.
+     *
+     * @return true when the daemon handled the load (including `not_ready` and `error`
+     *         answers), false when it is unavailable and the in-process pipeline should run.
+     */
+    private fun loadWithCovd(
+        showErrors: Boolean,
+        onComplete: (() -> Unit)?,
+        onError: ((String) -> Unit)?,
+    ): Boolean {
+        val settings = CoverageApiSettings.getInstance()
+        val gitRoot = findGitRoot() ?: return false
+        val componentName = detectComponent(gitRoot) ?: return false
+        val entry = ComponentConfig.allEntries().firstOrNull { it.serviceDir == componentName } ?: return false
+
+        val request = CovdClient.EnsureRequest(
+            gitRoot = gitRoot.absolutePath,
+            component = componentName,
+            pathMode = if (componentName == "raketa") "raketa" else "",
+            jobPrefixes = listOf(entry.coverageJobPrefix, entry.jobPrefix),
+            settings = CovdClient.Settings(
+                baseUrl = settings.gitlabBaseUrl,
+                projectId = settings.gitlabProjectId.toString(),
+                coverageBranch = settings.coverageBranch.trim(),
+                token = settings.bearerToken,
+            ),
+        )
+
+        val response = try {
+            CoveragePerfLog.span("covd.ensure", "component" to componentName) {
+                CovdClient.ensure(request)
+            }
+        } catch (e: CovdClient.Unavailable) {
+            log.info("covd: unavailable (${e.message}), using the in-process pipeline")
+            return false
+        }
+
+        when (response.state) {
+            "ready" -> applyCovdCoverage(response, gitRoot, componentName, showErrors, onComplete, onError)
+            "not_ready" -> {
+                val delay = response.retryAfterMs.coerceIn(1_000, 60_000)
+                log.info("Coverage: covd not ready (${response.reason}), retrying in ${delay} ms")
+                CoveragePerfLog.event("covd.notReady", "reason" to (response.reason ?: "-"), "retryMs" to delay)
+                covdRetryAlarm.cancelAllRequests()
+                covdRetryAlarm.addRequest({ loadFromGitLab(showErrors = false) }, delay)
+                finishLoad(onComplete)
+            }
+            else -> {
+                val message = response.hint ?: response.message ?: "Coverage load failed (${response.code})"
+                log.warn("Coverage: covd error ${response.code}/${response.cause}: $message")
+                CoveragePerfLog.event("covd.error", "code" to (response.code ?: "-"), "cause" to (response.cause ?: "-"))
+                if (showErrors) {
+                    ApplicationManager.getApplication().invokeLater {
+                        Messages.showErrorDialog(project, message, errorTitle(CoverageErrorKind.NO_DATA))
+                    }
+                }
+                onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
+                finishLoad(onComplete)
+            }
+        }
+        return true
+    }
+
+    /** Applies a `ready` covd answer: the daemon already wrote the COV4 cache. */
+    private fun applyCovdCoverage(
+        response: CovdClient.EnsureResponse,
+        gitRoot: File,
+        componentName: String,
+        showErrors: Boolean,
+        onComplete: (() -> Unit)?,
+        onError: ((String) -> Unit)?,
+    ) {
+        val commit = response.commit
+        val cov4Path = response.cov4Path
+        if (commit == null || cov4Path == null) {
+            val message = "covd returned a ready state without a coverage file"
+            log.warn(message)
+            if (showErrors) Messages.showErrorDialog(project, message, "Coverage Error")
+            onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
+            finishLoad(onComplete)
+            return
+        }
+
+        val cache = CoverageCacheService.getInstance(project)
+        val dataService = CoverageDataService.getInstance(project)
+        cache.markExternalIndexOwner()
+
+        dataService.setCoverageContext(commit, gitRoot, stale = response.stale)
+        computeAndStoreWarningContext(gitRoot)
+
+        val cov4File = File(cov4Path)
+        val reader = cache.get(commit, componentName, gitRoot) ?: Cov4Reader(cov4File)
+        dataService.setCov4Reader(reader)
+
+        val baselineCommit = response.baselineCommit
+        val baselinePath = response.baselineCov4Path
+        if (baselineCommit != null && baselinePath != null) {
+            dataService.setBaselineCov4Reader(Cov4Reader(File(baselinePath)), baselineCommit)
+        } else {
+            dataService.clearBaseline()
+        }
+
+        CoveragePerfLog.event(
+            "covd.ready",
+            "commit" to commit.take(8),
+            "cached" to response.cached,
+            "replaced" to response.replaced,
+            "stale" to response.stale,
+            "files" to (response.stats?.files ?: 0),
+            "lines" to (response.stats?.lines ?: 0),
+            "covered" to (response.stats?.covered ?: 0),
+            "baseline" to (baselineCommit?.take(8) ?: "-"),
+        )
+        log.info(
+            "Coverage: covd ready — commit ${commit.take(8)}, component=$componentName, " +
+                "cached=${response.cached}, stale=${response.stale}, files=${response.stats?.files}",
+        )
+
+        ApplicationManager.getApplication().invokeLater {
+            CoverageHighlighter.applyToOpenEditors(project)
+        }
+        finishLoad(onComplete)
     }
 
     /**

@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- Load coverage through the covd daemon: pipeline resolution, artifact download and COV4 building happen outside the IDE process and are shared by all IDE windows, with the in-process pipeline as a fallback
 - Reduce memory and CPU overhead when processing coverage artifacts: decode shared test sets once and normalize each unique test name once per report
 - Reuse the decoded test set when reading cached COV4 data, so opening a file no longer allocates one test list per covered line
 - Add structured performance logging (heap, per-thread allocations, CPU, GC per phase) with a Find Action to reveal the log folder; disable with `-Dcoverage.perf.log=false`
