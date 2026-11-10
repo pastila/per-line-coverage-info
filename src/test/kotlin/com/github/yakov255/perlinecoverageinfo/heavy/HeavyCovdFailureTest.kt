@@ -150,6 +150,26 @@ class HeavyCovdFailureTest : BasePlatformTestCase() {
         )
     }
 
+    fun testTokenBlockSurvivesAHeadChangeAndTheNextCommitCostsNoRequest() {
+        if (!daemonReady) return
+        readyPipeline(id = 100, sha = head)
+        gitlab.unauthorized = true
+        loadAndWait()
+        assertEquals("AUTH", loadService().blockedReason())
+        val calls = gitlab.requests.size
+
+        CovdTestBase.git(repo, "commit", "--allow-empty", "-q", "-m", "next")
+        val newHead = CovdTestBase.git(repo, "rev-parse", "HEAD")
+        readyPipeline(id = 200, sha = newHead)
+        loadService().onHeadChanged(newHead)
+        pollerTick()
+        PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+
+        assertEquals("a new commit gets the same 401: the token block stays", "AUTH", loadService().blockedReason())
+        assertTrue(loadService().isBlocked())
+        assertEquals("neither the HEAD change nor the poller may reach GitLab", calls, gitlab.requests.size)
+    }
+
     // --- deterministic errors ---------------------------------------------------------
 
     fun testNoComponentJobsStopsThePollerUntilHeadChanges() {

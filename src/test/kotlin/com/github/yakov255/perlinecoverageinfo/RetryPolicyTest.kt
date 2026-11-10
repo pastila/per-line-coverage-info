@@ -130,13 +130,23 @@ class RetryPolicyTest {
     // --- retry state (counter and block lifetimes) -----------------------------------
 
     @Test
-    fun `a block belongs to the head and settings it was created for`() {
+    fun `a deterministic block belongs to the head and settings it was created for`() {
         val state = RetryState()
-        state.block("AUTH", head = "aaa", settings = "s1")
+        state.block("NON_RETRYABLE:NO_DATA", head = "aaa", settings = "s1")
 
         assertTrue(state.isBlockedFor("aaa", "s1"))
         assertFalse("another HEAD lifts the block", state.isBlockedFor("bbb", "s1"))
         assertFalse("changed settings lift the block", state.isBlockedFor("aaa", "s2"))
+    }
+
+    @Test
+    fun `a token block survives a HEAD change and falls with the settings`() {
+        val state = RetryState()
+        state.block(RetryPolicy.AUTH_BLOCK, head = "aaa", settings = "s1")
+
+        assertTrue(state.isBlockedFor("aaa", "s1"))
+        assertTrue("a new commit gets the same 401", state.isBlockedFor("bbb", "s1"))
+        assertFalse("a new token lifts the block", state.isBlockedFor("bbb", "s2"))
         assertEquals("AUTH", state.blocked)
     }
 

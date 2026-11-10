@@ -175,11 +175,11 @@ Cache layout is per component (`<cacheRoot>/<projectId>/<hash>-<component>.cov4`
 | Answer | Behaviour |
 |--------|-----------|
 | `error` with `retryable=true` (`CONNECTION`, `GITLAB_API`) or an unreachable daemon | Silent retries, 3 by default, after 5 / 15 / 45 s (`-Dcoverage.retry.delaysMs` replaces them), never sooner than `retryAfterMs`, never later than 60 s. After the last one: balloon *Retry now* / *Show log* |
-| `AUTH_INVALID`, `ACCESS_DENIED` | No retries. `blocked="AUTH"` for the current HEAD and settings; sticky balloon *Update token…*. Applying settings clears the block and loads again |
+| `AUTH_INVALID`, `ACCESS_DENIED` | No retries. `blocked="AUTH"` for the current settings (a HEAD change does **not** lift it: the next commit gets the same 401); sticky balloon *Update token…*. Applying settings clears the block and loads again |
 | `NO_COMPONENT_JOBS`, `NO_DATA`, `PROJECT_SETUP`, `GIT` | No retries, no balloon. `blocked="NON_RETRYABLE:<code>"`; the poller and HEAD tracker stay quiet until HEAD or the settings change |
 | `ready` | Counter and block reset |
 
-- The block is tied to the HEAD and a SHA-256 fingerprint of the settings (token included in the hash, never logged). `CoverageLoadService.isBlocked()` lifts it when either changed.
+- A token block is tied to a SHA-256 fingerprint of the settings (token included in the hash, never logged); a deterministic-error block is also tied to the HEAD. `CoverageLoadService.isBlocked()` lifts it when what it is tied to changed.
 - One balloon per kind: `CoverageNotifier` expires the previous one before showing the new one and keeps the last 20 records for the bridge.
 - A manual load (`LoadCoverageAction`, `showErrors=true`, the balloon's *Retry now*) always bypasses the block and restarts the retry budget.
 - Perf events: `covd.retry attempt delayMs code`, `covd.blocked reason code`, `notify.shown kind`.
@@ -395,7 +395,7 @@ Rules:
 - **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.
 - **Threading**: `ensure` runs on a pooled thread; daemon answers are applied to data services there and UI updates go through `invokeLater`.
 - **Errors**: daemon `code`/`cause`/`hint` drive the user-facing message in `CoverageLoadService`; auto-triggered callers only log. Retry/block decisions live in `RetryPolicy` only — do not branch on codes elsewhere.
-- **Failure state**: `RetryState` is keyed by HEAD and a settings fingerprint; `CoverageHeadTracker.onHeadChanged()` and `CoverageSettingsActions.afterSettingsApplied()` reset it. The poller and auto-loads must call `CoverageLoadService.isBlocked()`; a manual load passes `bypassBlock = true`.
+- **Failure state**: `RetryState` is keyed by a settings fingerprint (and by HEAD for deterministic errors); `CoverageHeadTracker.onHeadChanged()` resets everything except a token block, `CoverageSettingsActions.afterSettingsApplied()` resets all of it. The poller and auto-loads must call `CoverageLoadService.isBlocked()`; a manual load passes `bypassBlock = true`.
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.

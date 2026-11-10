@@ -77,6 +77,11 @@ class CoverageLoadService(private val project: Project) {
 
     /** HEAD moved: the block and the retry budget belong to the old commit. */
     fun onHeadChanged(head: String? = null) {
+        if (retryState.blocked == RetryPolicy.AUTH_BLOCK) {
+            // The token problem outlives the commit: only new settings lift it.
+            log.info("Coverage: HEAD changed${head?.let { " to ${it.take(8)}" } ?: ""}, the token block stays")
+            return
+        }
         val hadState = retryState.blocked != null || retryState.attempt > 0
         resetFailureState()
         covdRetryAlarm.cancelAllRequests()

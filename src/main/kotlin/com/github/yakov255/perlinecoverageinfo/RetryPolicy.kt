@@ -133,7 +133,14 @@ internal class RetryState {
         blockedForSettings = settings
     }
 
-    /** True while [reason] was created for exactly this HEAD and settings fingerprint. */
-    fun isBlockedFor(head: String?, settings: String): Boolean =
-        blocked != null && blockedForHead == head && blockedForSettings == settings
+    /**
+     * True while the block still applies. A token problem belongs to the settings only: a
+     * new commit gets the same 401, so moving HEAD must not ask GitLab again. A deterministic
+     * error belongs to the commit it was produced for and to the settings.
+     */
+    fun isBlockedFor(head: String?, settings: String): Boolean {
+        val reason = blocked ?: return false
+        if (blockedForSettings != settings) return false
+        return reason == RetryPolicy.AUTH_BLOCK || blockedForHead == head
+    }
 }
