@@ -389,8 +389,11 @@ intellijPlatformTesting {
                 useJUnit()
                 filter { includeTestsMatching("com.github.yakov255.perlinecoverageinfo.heavy.*") }
                 systemProperty("coverage.perf.log", "false")
+                // A local copy: a lambda that reads the script property would capture the
+                // script object, which the configuration cache cannot serialize.
+                val ideHome = heavyIdeHomeProvider
                 jvmArgumentProviders += CommandLineArgumentProvider {
-                    listOf("-Didea.home.path=${heavyIdeHomeProvider.get()}")
+                    listOf("-Didea.home.path=${ideHome.get()}")
                 }
                 sandboxExtraJvmArgs.orNull?.let { jvmArgs(it) }
                 maxHeapSize = "2g"
