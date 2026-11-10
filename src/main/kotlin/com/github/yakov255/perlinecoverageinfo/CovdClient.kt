@@ -26,16 +26,52 @@ import java.util.concurrent.atomic.AtomicReference
  */
 object CovdClient {
 
-    private const val CONNECT_TIMEOUT_MS = 3_000
-    private const val PING_TIMEOUT_MS = 3_000
-    private const val ENSURE_TIMEOUT_MS = 11 * 60 * 1_000
-    private const val HANDSHAKE_TIMEOUT_MS = 15_000L
+    private const val DEFAULT_CONNECT_TIMEOUT_MS = 3_000
+    private const val DEFAULT_PING_TIMEOUT_MS = 3_000
+    private const val DEFAULT_ENSURE_TIMEOUT_MS = 11 * 60 * 1_000
+    private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000L
     private const val BINARY_VERSION = 1
 
     private val log = CoverageLog.get(CovdClient::class.java)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val handshakeRef = AtomicReference<Handshake?>(null)
     private val processRef = AtomicReference<Process?>(null)
+
+    // Test seams. Production code never touches them; tests replace the daemon binary, the
+    // cache directory, the extra command-line flags and the timeouts, then call
+    // resetForTest() to drop the connection state.
+    @Volatile internal var binaryOverride: File? = null
+    @Volatile internal var cacheRootOverride: File? = null
+    @Volatile internal var extraDaemonArgs: List<String> = emptyList()
+    @Volatile internal var connectTimeoutMs: Int = DEFAULT_CONNECT_TIMEOUT_MS
+    @Volatile internal var pingTimeoutMs: Int = DEFAULT_PING_TIMEOUT_MS
+    @Volatile internal var ensureTimeoutMs: Int = DEFAULT_ENSURE_TIMEOUT_MS
+    @Volatile internal var handshakeTimeoutMs: Long = DEFAULT_HANDSHAKE_TIMEOUT_MS
+    /** How many times the daemon process was started since the last [resetForTest]. */
+    internal val startCount = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** Forgets the connection, stops the child process and restores every seam to its default. */
+    internal fun resetForTest() {
+        processRef.getAndSet(null)?.let { process ->
+            process.destroy()
+            if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
+        }
+        handshakeRef.set(null)
+        binaryOverride = null
+        cacheRootOverride = null
+        extraDaemonArgs = emptyList()
+        connectTimeoutMs = DEFAULT_CONNECT_TIMEOUT_MS
+        pingTimeoutMs = DEFAULT_PING_TIMEOUT_MS
+        ensureTimeoutMs = DEFAULT_ENSURE_TIMEOUT_MS
+        handshakeTimeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS
+        startCount.set(0)
+    }
+
+    /** The current connection, or null before the first request. */
+    internal fun currentHandshakeForTest(): Handshake? = handshakeRef.get()
+
+    /** The child process started by this client, or null when it reused a running daemon. */
+    internal fun currentProcessForTest(): Process? = processRef.get()
 
     class Unavailable(message: String) : Exception(message)
 
@@ -93,6 +129,44 @@ object CovdClient {
         val detail: String? = null,
         val hint: String? = null,
         val message: String? = null,
+        val trace: Trace? = null,
+    )
+
+    /** The daemon's account of one `ensure`: why this pipeline, where the time went. */
+    @Serializable
+    data class Trace(
+        val requestId: String = "",
+        val joinedFlight: Boolean = false,
+        val leaderRequestId: String? = null,
+        val outcome: TraceOutcome? = null,
+        val timing: TraceTiming? = null,
+        val decisions: List<TraceDecision> = emptyList(),
+    )
+
+    @Serializable
+    data class TraceOutcome(val state: String = "", val httpStatus: Int = 0)
+
+    @Serializable
+    data class TraceTiming(
+        val gitMs: Long = 0,
+        val resolveMs: Long = 0,
+        val downloadMs: Long = 0,
+        val parseMs: Long = 0,
+        val mergeMs: Long = 0,
+        val writeMs: Long = 0,
+        val baselineMs: Long = 0,
+        val totalMs: Long = 0,
+        val resolveAttempts: Int = 0,
+    )
+
+    @Serializable
+    data class TraceDecision(
+        val scope: String = "",
+        val pipelineId: Long = 0,
+        val sha: String = "",
+        val source: String = "",
+        val code: String = "",
+        val reason: String? = null,
     )
 
     @Serializable
@@ -139,7 +213,7 @@ object CovdClient {
         } catch (e: java.io.IOException) {
             // The daemon exited while we were talking to it: start it again and retry once.
             log.info("covd: connection failed (${e.message}), restarting the daemon")
-            val restarted = handshake(forceRestart = true)
+            val restarted = handshake(forceRestart = true, stale = handshake)
             postEnsure(restarted, request)
         }
     }
@@ -171,20 +245,18 @@ object CovdClient {
         val handshake = handshake(forceRestart = false)
         val body = json.encodeToString(ImportRequest.serializer(), request)
         val response = try {
-            request("POST", "/v1/import", handshake, body, ENSURE_TIMEOUT_MS)
+            request("POST", "/v1/import", handshake, body, ensureTimeoutMs)
         } catch (e: java.io.IOException) {
-            val restarted = handshake(forceRestart = true)
-            request("POST", "/v1/import", restarted, body, ENSURE_TIMEOUT_MS)
+            val restarted = handshake(forceRestart = true, stale = handshake)
+            request("POST", "/v1/import", restarted, body, ensureTimeoutMs)
         }
-        val text = response.second
-        if (text.isBlank()) throw Unavailable("empty import response (HTTP ${response.first})")
-        return json.decodeFromString(ImportResponse.serializer(), text)
+        return parseImport(response.first, response.second)
     }
 
     /** Lists cached artifacts, or null when the daemon is unavailable. */
     fun artifacts(projectId: String): List<Artifact>? = try {
         val handshake = handshake(forceRestart = false)
-        val response = request("GET", "/v1/artifacts?projectId=${encode(projectId)}", handshake, null, PING_TIMEOUT_MS)
+        val response = request("GET", "/v1/artifacts?projectId=${encode(projectId)}", handshake, null, pingTimeoutMs)
         if (response.first != 200) null else json.decodeFromString<List<Artifact>>(response.second)
     } catch (e: Throwable) {
         log.info("covd: artifact list unavailable: ${e.message}")
@@ -195,7 +267,7 @@ object CovdClient {
     fun deleteArtifact(projectId: String, commit: String, component: String): Boolean = try {
         val handshake = handshake(forceRestart = false)
         val path = "/v1/artifacts?projectId=${encode(projectId)}&commit=${encode(commit)}&component=${encode(component)}"
-        request("DELETE", path, handshake, null, PING_TIMEOUT_MS).first == 200
+        request("DELETE", path, handshake, null, pingTimeoutMs).first == 200
     } catch (e: Throwable) {
         log.warn("covd: delete failed: ${e.message}")
         false
@@ -217,24 +289,43 @@ object CovdClient {
 
     // --- daemon lifecycle --------------------------------------------------------
 
-    private fun handshake(forceRestart: Boolean): Handshake {
+    /** Serializes daemon starts: concurrent callers on a cold client must share one process. */
+    private val startLock = Any()
+
+    /**
+     * Returns a live connection, starting the daemon when there is none.
+     *
+     * The fast path (known handshake that still answers `ping`) takes no lock. Starting is
+     * serialized: a caller that waited for the lock reuses the connection another thread has
+     * just established instead of spawning a process of its own. [stale] is the connection the
+     * caller saw fail; a different live one means somebody else already restarted the daemon.
+     */
+    private fun handshake(forceRestart: Boolean, stale: Handshake? = null): Handshake {
         if (!forceRestart) {
             handshakeRef.get()?.let { existing ->
                 if (pingMatches(existing)) return existing
-                handshakeRef.set(null)
             }
         }
+        synchronized(startLock) {
+            val current = handshakeRef.get()
+            if (current != null && current != stale && pingMatches(current)) return current
+            handshakeRef.compareAndSet(current, null)
+            return startDaemon()
+        }
+    }
 
+    private fun startDaemon(): Handshake {
         val binary = binary() ?: throw Unavailable("no covd binary for ${platformId()}")
         val cacheDir = cacheRoot().apply { mkdirs() }
         val process = try {
-            ProcessBuilder(binary.absolutePath, "--cache-dir", cacheDir.absolutePath)
+            ProcessBuilder(listOf(binary.absolutePath, "--cache-dir", cacheDir.absolutePath) + extraDaemonArgs)
                 .redirectErrorStream(false)
                 .start()
         } catch (e: Throwable) {
             throw Unavailable("cannot start covd: ${e.message}")
         }
         processRef.set(process)
+        startCount.incrementAndGet()
 
         val line = readHandshakeLine(process)
             ?: throw Unavailable("covd did not print a handshake line")
@@ -261,16 +352,16 @@ object CovdClient {
             process.inputStream.bufferedReader().readLine()
         }
         return try {
-            reader.get(HANDSHAKE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            reader.get(handshakeTimeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: Throwable) {
-            log.warn("covd: no handshake within ${HANDSHAKE_TIMEOUT_MS} ms")
+            log.warn("covd: no handshake within ${handshakeTimeoutMs} ms")
             null
         }
     }
 
     private fun pingMatches(handshake: Handshake): Boolean {
         return try {
-            val response = request("GET", "/v1/ping", handshake, null, PING_TIMEOUT_MS)
+            val response = request("GET", "/v1/ping", handshake, null, pingTimeoutMs)
             if (response.first != 200) return false
             val ping = json.decodeFromString(PingResponse.serializer(), response.second)
             ping.protocol == 1 && ping.instanceId == handshake.instanceId
@@ -281,10 +372,39 @@ object CovdClient {
 
     private fun postEnsure(handshake: Handshake, request: EnsureRequest): EnsureResponse {
         val body = json.encodeToString(EnsureRequest.serializer(), request)
-        val response = request("POST", "/v1/ensure", handshake, body, ENSURE_TIMEOUT_MS)
-        val text = response.second
-        if (text.isBlank()) throw Unavailable("empty ensure response (HTTP ${response.first})")
-        return json.decodeFromString(EnsureResponse.serializer(), text)
+        val response = request("POST", "/v1/ensure", handshake, body, ensureTimeoutMs)
+        return parseEnsure(response.first, response.second)
+    }
+
+    /**
+     * Decodes an `ensure` answer. Daemon-side problems come as JSON with a non-2xx status;
+     * a non-2xx answer without a `state` (for example `401 {"code":"UNAUTHORIZED"}`) is
+     * normalized to an `error` state so callers handle it like every other daemon error.
+     * A body that is not an ensure answer at all (a proxy page, a truncated reply) means the
+     * daemon cannot be talked to.
+     */
+    private fun parseEnsure(status: Int, text: String): EnsureResponse {
+        if (text.isBlank()) throw Unavailable("empty ensure response (HTTP $status)")
+        val parsed = try {
+            json.decodeFromString(EnsureResponse.serializer(), text)
+        } catch (e: kotlinx.serialization.SerializationException) {
+            throw Unavailable("covd answered HTTP $status with a body that is not an ensure response")
+        }
+        if (parsed.state.isNotBlank()) return parsed
+        if (status in 200..299) throw Unavailable("covd answered HTTP $status without a state")
+        return parsed.copy(state = "error", code = parsed.code ?: "HTTP_$status")
+    }
+
+    private fun parseImport(status: Int, text: String): ImportResponse {
+        if (text.isBlank()) throw Unavailable("empty import response (HTTP $status)")
+        val parsed = try {
+            json.decodeFromString(ImportResponse.serializer(), text)
+        } catch (e: kotlinx.serialization.SerializationException) {
+            throw Unavailable("covd answered HTTP $status with a body that is not an import response")
+        }
+        if (parsed.state.isNotBlank()) return parsed
+        if (status in 200..299) throw Unavailable("covd answered HTTP $status without a state")
+        return parsed.copy(state = "error", code = parsed.code ?: "HTTP_$status")
     }
 
     // --- HTTP ---------------------------------------------------------------------
@@ -299,7 +419,7 @@ object CovdClient {
         val connection = URL("http://127.0.0.1:${handshake.port}$path").openConnection() as HttpURLConnection
         try {
             connection.requestMethod = method
-            connection.connectTimeout = CONNECT_TIMEOUT_MS
+            connection.connectTimeout = connectTimeoutMs
             connection.readTimeout = readTimeoutMs
             connection.setRequestProperty("Authorization", "Bearer ${handshake.token}")
             if (body != null) {
@@ -319,6 +439,7 @@ object CovdClient {
     // --- binary distribution -----------------------------------------------------
 
     private fun binary(): File? {
+        binaryOverride?.let { return it.takeIf { file -> file.isFile } }
         val platform = platformId()
         val exeName = if (platform.startsWith("win")) "covd.exe" else "covd"
         val resource = "/bin/$platform/$exeName"
@@ -351,7 +472,7 @@ object CovdClient {
 
     private fun isArm(arch: String) = arch == "aarch64" || arch == "arm64"
 
-    private fun cacheRoot(): File = File(System.getProperty("user.home"), ".cache/coverage-plugin")
+    private fun cacheRoot(): File = cacheRootOverride ?: File(System.getProperty("user.home"), ".cache/coverage-plugin")
 
     private fun encode(value: String): String =
         java.net.URLEncoder.encode(value, Charsets.UTF_8)

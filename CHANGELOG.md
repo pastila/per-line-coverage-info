@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Start the covd daemon once when several coverage requests arrive together (a cold client used to spawn one process per caller), and restart it once, not once per caller, after it exits
+- Handle daemon answers by HTTP status: an error without a `state` (for example an expired daemon token) is reported as an error instead of an empty state, and a non-JSON reply from a proxy is reported as "daemon unavailable" instead of failing with a parser exception
 - Fix the GitLab project list in Settings → Tools → GitLab Coverage: project paths were always empty (snake_case fields were not mapped), so rows were blank and search by path found nothing
 - Retry the project list request on timeouts and `5xx` answers (3 attempts with a pause) and show the real failure reason in the dialog instead of an empty list
 - Load coverage through the covd daemon: pipeline resolution, artifact download and COV4 building happen outside the IDE process and are shared by all IDE windows; the daemon is required, the plugin no longer downloads or parses artifacts itself
