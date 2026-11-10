@@ -108,7 +108,7 @@ fi
 # --- run ---------------------------------------------------------------------------------------
 TEST_ARGS=("${GRADLE_ARGS[@]}" realProjectTest)
 [ -n "$SCENARIO" ] && TEST_ARGS+=("-PrealProject.scenario=$SCENARIO")
-TEST_ARGS+=("-PrealProject.runs=$RUNS")
+TEST_ARGS+=("-PrealProject.runs=$RUNS" "-PrealProject.ide=true")
 [ -n "${REAL_PROJECT_GRADLE_ARGS:-}" ] && TEST_ARGS+=($REAL_PROJECT_GRADLE_ARGS)
 
 echo "real-project-test: ${TEST_ARGS[*]}" >&2
