@@ -27,6 +27,10 @@
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageCacheService"/>
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.AffectedTestsService"/>
+        <!-- Inert unless -Dcoverage.uiTestBridge=true; writes the UI test state snapshot. -->
+        <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageUiTestBridge"
+            preload="true"/>
         <applicationConfigurable
             parentId="tools"
             instance="com.github.yakov255.perlinecoverageinfo.CoverageApiSettingsConfigurable"

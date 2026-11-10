@@ -278,6 +278,25 @@ val sandboxExtraJvmArgs = providers.gradleProperty("ideaSandboxJvmArgs")
 val ideConfigRootPath = File(System.getProperty("user.home"), ".config/JetBrains").absolutePath
 val runIdeSandboxPath = layout.projectDirectory.dir(".intellijPlatform/sandbox/${project.name}").asFile.absolutePath
 
+// ---- UI test settings: one place for everything the IDE process and the test JVM must agree on ----
+// RemoteRobot server port (-PuiTestRobotPort=...), the PHP fixture whose gutter is asserted
+// (-PuiTestPhpFile=..., git-root-relative) and the per-run bridge snapshot file in build/.
+val uiTestRobotPort: String = providers.gradleProperty("uiTestRobotPort").getOrElse("8082")
+val uiTestPhpFile: String = providers.gradleProperty("uiTestPhpFile")
+    .getOrElse("app/raketa/raketa/Layer/Domain/AppServices/NotificationSystem/OrderEmailFilesBuilder.php")
+val uiTestStateFile: String =
+    layout.buildDirectory.file("uiTest-state/ui-test-state.json").get().asFile.absolutePath
+
+/**
+ * Sandbox directory of the platform version that runIdeForUiTests uses (the one holding its
+ * `plugins_runIdeForUiTests`); the newest by name when several exist. Evaluated lazily: the
+ * directory only exists after prepareSandbox.
+ */
+fun uiTestSandboxProductDir(): File? =
+    File(runIdeSandboxPath).listFiles { f -> f.isDirectory }
+        ?.sortedBy { it.name }
+        ?.let { dirs -> dirs.lastOrNull { File(it, "plugins_runIdeForUiTests").isDirectory } ?: dirs.lastOrNull() }
+
 val syncIdeLicense by tasks.registering {
     group = "intellij platform"
     description = "Copies the local IDE license into the runIde sandbox and enables JetBrains Ultimate"
@@ -337,7 +356,7 @@ intellijPlatformTesting {
             task {
                 jvmArgumentProviders += CommandLineArgumentProvider {
                     listOf(
-                        "-Drobot-server.port=8082",
+                        "-Drobot-server.port=$uiTestRobotPort",
                         "-Dide.mac.message.dialogs.as.sheets=false",
                         "-Djb.privacy.policy.text=<!--999.999-->",
                         "-Djb.consents.confirmation.enabled=false",
@@ -389,4 +408,130 @@ tasks.test {
 tasks.named<JavaExec>("runIde") {
     dependsOn(syncIdeLicense)
     sandboxExtraJvmArgs.orNull?.let { jvmArgs(it) }
+}
+
+// ---- Out-of-process UI tests (RemoteRobot) ----
+// The IDE is started separately by runIdeForUiTests (see scripts/ui-test.sh); the uiTest JVM is
+// only a RemoteRobot client. It must be a PLAIN Test task: testIde/testIdeUi would boot an IDE
+// inside the test JVM.
+val uiTestSourceSet: SourceSet = sourceSets.create("uiTest") {
+    compileClasspath += sourceSets.main.get().output
+    runtimeClasspath += sourceSets.main.get().output
+}
+
+val uiTestImplementation: Configuration by configurations.getting {
+    extendsFrom(configurations.testImplementation.get())
+}
+val uiTestRuntimeOnly: Configuration by configurations.getting {
+    extendsFrom(configurations.testRuntimeOnly.get())
+}
+
+dependencies {
+    uiTestImplementation(libs.remote.robot)
+    uiTestImplementation(libs.remote.fixtures)
+    // Not exposed by remote-robot at compile time; IdeTestCase builds the HTTP client with it.
+    uiTestImplementation(libs.okhttp)
+    // JUnit 4 is needed only by the remote-fixtures library itself.
+    uiTestImplementation(libs.junit)
+    uiTestImplementation(libs.junit.jupiter.api)
+    // Literal versions: the catalog only carries the API artifact. Engine and launcher are required
+    // at runtime for useJUnitPlatform() because remote-fixtures pulls no JUnit.
+    uiTestRuntimeOnly(libs.junit.jupiter.engine)
+    uiTestRuntimeOnly(libs.junit.platform.launcher)
+}
+
+val uiTest by tasks.registering(Test::class) {
+    group = "verification"
+    description = "Runs RemoteRobot UI tests against an IDE started by runIdeForUiTests"
+    testClassesDirs = uiTestSourceSet.output.classesDirs
+    classpath = uiTestSourceSet.runtimeClasspath
+    useJUnitPlatform()
+    systemProperty("robot.server.url", providers.systemProperty("robot.server.url").getOrElse("http://127.0.0.1:$uiTestRobotPort"))
+    systemProperty("uiTest.stateFile", uiTestStateFile)
+    // The scenario asserts on this file; an explicit UI_TEST_PHP_FILE in the environment wins.
+    if (System.getenv("UI_TEST_PHP_FILE").isNullOrBlank()) environment("UI_TEST_PHP_FILE", uiTestPhpFile)
+    systemProperty("java.awt.headless", "false")
+    // RemoteRobot's Gson reflects into Throwable when the IDE returns an error; without this the
+    // real failure is replaced by InaccessibleObjectException.
+    jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED", "--add-opens", "java.base/java.util=ALL-UNNAMED")
+    // Where the failure diagnostics go, and where the sandbox IDE keeps its idea.log.
+    systemProperty("uiTest.artifacts", layout.buildDirectory.dir("uiTest-artifacts").get().asFile.absolutePath)
+    // Lazy: the sandbox directory exists only after prepareSandbox has run. The lambda captures
+    // only this local String (no script reference), which keeps the task configuration-cache safe;
+    // the lookup therefore repeats uiTestSandboxProductDir() instead of calling it.
+    val sandboxRootForLog = runIdeSandboxPath
+    doFirst {
+        val productDir = File(sandboxRootForLog).listFiles { f -> f.isDirectory }
+            ?.sortedBy { it.name }
+            ?.let { dirs -> dirs.lastOrNull { File(it, "plugins_runIdeForUiTests").isDirectory } ?: dirs.lastOrNull() }
+        val logFile = productDir?.let { File(it, "log_runIdeForUiTests/idea.log") }
+            ?: File(sandboxRootForLog, "idea.log")
+        systemProperty("uiTest.sandboxLog", logFile.absolutePath)
+    }
+    maxParallelForks = 1
+    forkEvery = 1
+    // UI tests are never up to date: they depend on external IDE state.
+    outputs.upToDateWhen { false }
+    testLogging {
+        events(*org.gradle.api.tasks.testing.logging.TestLogEvent.values())
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+        showStandardStreams = true
+    }
+}
+
+// Option chosen: keep the sandbox the plugin already prepares (it holds the installed plugin, and
+// the SandboxArgumentProvider's -Dplugin.path points at it) and get a clean state by deleting its
+// config/system/log. plugins is kept. Relocating config/system would not make the plugin load
+// because -Dplugin.path would still point at the original sandbox.
+// runIdeForUiTests already has its own suffixed directories (config_runIdeForUiTests, ...), so
+// the plain runIde sandbox is never touched.
+val uiTestSandbox by tasks.registering {
+    group = "intellij platform"
+    description = "Wipes sandbox config/system/log (keeps plugins) so the UI test IDE starts from a clean first run"
+    mustRunAfter(tasks.matching { it.name.startsWith("prepareSandbox") })
+
+    val sandboxRoot = runIdeSandboxPath
+    val stateFile = uiTestStateFile
+    doLast {
+        File(sandboxRoot).listFiles()?.filter { it.isDirectory }?.forEach { productDir ->
+            for (name in listOf("config_runIdeForUiTests", "system_runIdeForUiTests", "log_runIdeForUiTests")) {
+                File(productDir, name).deleteRecursively()
+            }
+        }
+        // A snapshot left by an earlier run must never be mistaken for this run's state.
+        File(stateFile).delete()
+    }
+}
+
+// Order: prepareSandbox -> uiTestSandbox (clean) -> syncIdeLicense (seed license) -> runIdeForUiTests.
+syncIdeLicense.configure { mustRunAfter(uiTestSandbox) }
+
+tasks.named<JavaExec>("runIdeForUiTests") {
+    dependsOn(syncIdeLicense)
+    dependsOn(uiTestSandbox)
+    sandboxExtraJvmArgs.orNull?.let { jvmArgs(it) }
+    // First-run suppression: no trust dialog, tips or consent prompts block the window.
+    // The bridge lets the UI test read real plugin state (commit, files, per-line colours),
+    // which RemoteRobot cannot see through Swing; `coverage.uiTestFiles` limits the dump to the
+    // file the scenario asserts on.
+    jvmArgs(
+        "-Didea.trust.all.projects=true",
+        "-Dide.show.tips.on.startup.default.value=false",
+        "-Djb.consents.confirmation.enabled=false",
+        "-Dcoverage.uiTestBridge=true",
+        // The raketa project (with vendor/) outgrows the default heap while indexing, and a heap
+        // dump written into the unpacked platform makes Gradle reject that immutable directory.
+        "-Xmx4g",
+        "-XX:-HeapDumpOnOutOfMemoryError",
+        "-Dcoverage.uiTestFiles=$uiTestPhpFile",
+        "-Dcoverage.uiTestState=$uiTestStateFile",
+    )
+    // Without an explicit path the IDE logs to ~/.cache/JetBrains/<product>/log, where neither
+    // scripts/ui-test.sh nor the failure diagnostics look for it. Built lazily, after
+    // prepareSandbox has created the directory; it also tags the process for scripts/ui-test.sh.
+    jvmArgumentProviders += CommandLineArgumentProvider {
+        uiTestSandboxProductDir()
+            ?.let { listOf("-Didea.log.path=${File(it, "log_runIdeForUiTests").absolutePath}") }
+            .orEmpty()
+    }
 }

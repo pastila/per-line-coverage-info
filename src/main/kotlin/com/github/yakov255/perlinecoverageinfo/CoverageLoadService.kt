@@ -34,6 +34,11 @@ class CoverageLoadService(private val project: Project) {
     @Volatile
     private var pendingReload = false
 
+    /** Last user-facing load error, or null when the last attempt succeeded. Read by [CoverageUiTestBridge]. */
+    @Volatile
+    var lastError: String? = null
+        private set
+
     /** Retry timer for `not_ready` answers from the covd daemon. */
     private val covdRetryAlarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, project)
 
@@ -179,6 +184,7 @@ class CoverageLoadService(private val project: Project) {
             return
         }
         loading = true
+        lastError = null
 
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
@@ -251,6 +257,7 @@ class CoverageLoadService(private val project: Project) {
         if (response == null) {
             val message = "Coverage daemon (covd) is unavailable. The plugin needs it to load coverage."
             log.warn("Coverage: covd unavailable — $unavailableReason")
+            lastError = message
             if (showErrors) {
                 ApplicationManager.getApplication().invokeLater {
                     Messages.showErrorDialog(project, message, "Coverage Daemon Unavailable")
@@ -266,6 +273,7 @@ class CoverageLoadService(private val project: Project) {
             "not_ready" -> {
                 val delay = response.retryAfterMs.coerceIn(1_000, 60_000)
                 log.info("Coverage: not ready (${response.reason}), retrying in $delay ms")
+                lastError = null
                 CoveragePerfLog.event("covd.notReady", "reason" to (response.reason ?: "-"), "retryMs" to delay)
                 covdRetryAlarm.cancelAllRequests()
                 covdRetryAlarm.addRequest({ loadFromGitLab(showErrors = false) }, delay)
@@ -274,6 +282,7 @@ class CoverageLoadService(private val project: Project) {
             else -> {
                 val message = describeError(response)
                 log.warn("Coverage: covd error ${response.code}/${response.cause}: $message")
+                lastError = message
                 CoveragePerfLog.event("covd.error", "code" to (response.code ?: "-"), "cause" to (response.cause ?: "-"))
                 if (showErrors) {
                     ApplicationManager.getApplication().invokeLater {
@@ -300,6 +309,7 @@ class CoverageLoadService(private val project: Project) {
         if (commit == null || cov4Path == null) {
             val message = "The coverage daemon returned a ready state without a coverage file."
             log.warn(message)
+            lastError = message
             if (showErrors) {
                 ApplicationManager.getApplication().invokeLater {
                     Messages.showErrorDialog(project, message, "Coverage Error")
@@ -334,6 +344,8 @@ class CoverageLoadService(private val project: Project) {
         } else {
             dataService.clearBaseline()
         }
+
+        lastError = null
 
         CoveragePerfLog.event(
             "covd.ready",
@@ -408,6 +420,7 @@ class CoverageLoadService(private val project: Project) {
             }
             dataService.setCov4Reader(reader)
             log.info("Coverage: loaded from cache for commit ${commitHash.take(8)} (component=$component, ${reader.allFilePaths.size} files)")
+            lastError = null
 
             ApplicationManager.getApplication().invokeLater {
                 CoverageHighlighter.applyToOpenEditors(project)
@@ -454,6 +467,7 @@ class CoverageLoadService(private val project: Project) {
                     }
                     val reader = cache.get(commit, component, gitRoot) ?: Cov4Reader(File(cov4Path))
                     dataService.setCov4Reader(reader)
+                    lastError = null
                     log.info(
                         "Coverage: imported ${file.name} as commit ${commit.take(8)} " +
                             "(${response.stats?.files} files, component=$component)",
