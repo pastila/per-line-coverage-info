@@ -6,7 +6,7 @@ PhpStorm plugin that shows per-line PHP coverage inline in the editor. CI collec
 
 - **Plugin ID**: `com.github.yakov255.perlinecoverageinfo`
 - **Platform**: IntelliJ IDEA Ultimate 2025.2+, depends on `com.intellij.modules.platform`, `com.intellij.mcpServer`, `com.jetbrains.php`, `gherkin`, optional `com.jetbrains.php.behat`, optional `Git4Idea`
-- **Language**: Kotlin, JVM 21 · **Build**: Gradle + IntelliJ Platform Gradle Plugin
+- **Language**: Kotlin, JVM target 17 (`jvmToolchain(17)`; the platform itself runs on Java 21+) · **Build**: Gradle + IntelliJ Platform Gradle Plugin
 - **Coverage engine**: bundled `covd` daemon (Go, from `coverage-assistant`); the plugin is a client
 
 ## Project Layout
@@ -26,11 +26,13 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 |------|---------|
 | `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel |
 | `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; triggers `loadOfflineFirst()` for all open projects on Apply/OK if plugin enabled and configured |
+| `GitLabTokenDialog.kt` | First-run dialog that asks for the GitLab domain and token when the token is empty and `tokenPrompted` is false |
+| `CustomRepoProvider.kt` | `updateSettingsProvider` — points the IDE updater at `docs/updatePlugins.xml` instead of JetBrains Marketplace |
 
 ### Component configuration
 | File | Purpose |
 |------|---------|
-| `ComponentConfig.kt` | Hardcoded mapping from repository service directories to CI job prefixes (e.g. `api/avia` → `test:behat:avia`). `detectComponent()` returns the component for the current project root (root → `raketa`, subpath → matching component). Coverage is published by the dedicated `test:behat:coverage:<component>` jobs (derived via `coverageJobPrefix`); `selectCoverageJobNames()` prefers those and falls back to legacy `test:behat:<component>` jobs only if no coverage job exists. |
+| `ComponentConfig.kt` | Hardcoded mapping from repository service directories to CI job prefixes (e.g. `api/avia` → `test:behat:avia`). `detectComponent()` returns the component for the current project root (root → `raketa`, subpath → matching component). Coverage is published by the dedicated `test:behat:coverage:<component>` jobs; `CoverageLoadService` sends both that prefix (`coverageJobPrefix`) and the legacy one to covd, which selects the jobs. `selectCoverageJobNames()` is a pure helper kept for tests and is no longer called at runtime. |
 
 ### MCP server
 | File | Purpose |
@@ -40,7 +42,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### GitLab and git access
 | File | Purpose |
 |------|---------|
-| `GitLabProjectsClient.kt` | Minimal REST client used only by the settings screen to list/search the projects the token can access |
+| `GitLabProjectsClient.kt` | Minimal REST client used only by the settings screen to list/search the projects the token can access. Retries timeouts/`5xx` (3 attempts, growing pause, 2-minute budget) and throws `IOException` on failure; JSON fields are mapped with `@SerialName` (`path_with_namespace`, `web_url`). Blocking: call it from a pooled thread |
 | `GitCommand.kt` | Read-only `git` wrapper: HEAD, recent commits, merge-base, `rev-list --count` for the "behind by N" warnings |
 | `GitLabCoordinator.kt` | App-level (`Service.Level.APP`) LRU of shared `Cov4Reader` instances plus `evictSharedReaders()` after a cache rewrite |
 | `CovdClient.kt` | Client for the coverage daemon: binary extraction, handshake, `ensure`, `import`, artifact listing/deletion |
@@ -66,7 +68,8 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### In-memory model
 | File | Purpose |
 |------|---------|
-| `CoverageDataService.kt` | Holds active coverage: primary `Cov4Reader` + optional baseline `Cov4Reader`; tracks commit hashes, git root, stale flag |
+| `CoverageDataService.kt` | Holds active coverage: primary `Cov4Reader` + optional baseline `Cov4Reader`; tracks commit hashes, git root, stale flag, warning context (`headHash`, `mergeBaseHash`, behind-by counters) and `coverageGeneration` for cache invalidation. `Cov4Reader` only — no in-memory coverage map |
+| `CoverageWarningService.kt` | Per-generation cache of "coverage is from an older commit" warnings: primary vs `HEAD`, baseline vs merge-base, with behind-by counts; formats plain text and HTML for the Affected tab banner |
 | `LineMappingService.kt` | Maps old coverage line numbers to current document lines via `git show` + `ComparisonManager` diff; supports both primary and baseline commits; LRU cache of file contents |
 | `CoverageLineMapper.kt` | Pure functions: diff old/new content, build old→new line map |
 | `CoverageDiff.kt` | Pure helpers: `featureOnly(primary, baseline)` (set-diff by test name) and `union(primary, baseline)` (distinct, primary first) |
@@ -85,11 +88,13 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Tests tool window
 | File | Purpose |
 |------|---------|
-| `CoverageTestsToolWindowFactory.kt` | Registers "Coverage Tests" bottom tool window (Covering Line / Affected by Changes / Artifacts / Log tabs) |
-| `CoverageTestNodeData.kt` | Sealed node-payload hierarchy for test tree: Dir, BehatGroup, BehatScenario, PhpUnitGroup, PhpUnitMethod |
+| `CoverageTestsToolWindowFactory.kt` | Registers "Coverage Tests" bottom tool window with **five** tabs: Covering Line / Affected by Changes / New Coverage / Artifacts / Log |
+| `CoverageTestNodeData.kt` | Sealed node-payload hierarchies: `TestNodeData` for the tests tree (Dir, BehatGroup, BehatScenario, PhpUnitGroup, PhpUnitMethod) and `FileNodeData` for the files trees (Dir, FileEntry) |
 | `TestTreeView.kt` | Shared test-tree widget: tree+model+renderer, double-click navigate, popup (Run / Debug / Go to), flat-vs-tree toggle, Behat/PhpUnit hierarchy builders, Run-All-bundled |
 | `CoveringLinePanel.kt` | "Covering Line" tab: per-line view — tests covering the line clicked in the editor gutter; toolbar: toggleView, Run All, Run All Debug, **Both / Master Only / New on This Branch** filter (visible only in dual-coverage mode) |
-| `AffectedTestsPanel.kt` | "Affected by Changes" tab: `AffectedFilesPane` + `TestTreeView` in splitter; toolbar: Find HEAD, Find Working Tree, Refresh, toggleView, Run All, Run All Debug, Remove Selected; F5 = Refresh |
+| `AffectedTestsPanel.kt` | "Affected by Changes" tab: `AffectedFilesPane` + `TestTreeView` in splitter; warning banner from `CoverageWarningService`; toolbar: Find HEAD, Find Working Tree, Refresh, toggleView, Run All, Run All Debug, Remove Selected; F5 = Refresh |
+| `AffectedFilesPane.kt` | Left pane of the Affected tab: `CheckboxTree` of affected files with per-node test count and `(-N)` delta, toolbar (Refresh, tree/flat toggle, expand/collapse, check/uncheck all); writes the checkbox state back into `AffectedTestsModel` |
+| `NewCoveragePanel.kt` / `NewCoverageModel.kt` | "New Coverage" tab: files and lines covered only on the feature branch (primary has tests, baseline has none). Uses `git diff baseline..primary` to pick the line-mapping path for changed files and raw line comparison for unchanged ones; double-click opens the first feature-only line |
 | `CoverageArtifactsPanel.kt` | Artifacts tab: table of cached COV4 files with Fetch / Load / Delete toolbar |
 | `CoverageLogPanel.kt` | Log tab: `ConsoleView` + `CoverageLogService` subscription |
 
@@ -115,6 +120,8 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageErrorReporter.kt` | IDE "Submit" error reporter |
 | `CoverageLog.kt` | Logger wrapper — writes to `idea.log` **and** `CoverageLogService` |
 | `CoverageLogService.kt` | Ring buffer (2000 entries) with thread-safe subscribe/backfill |
+| `OpenCoveragePerfLogAction.kt` | Find Action: "Open Coverage Performance Log Folder" |
+| `CoverageUiTestBridge.kt` | Test-only project service, inert unless `-Dcoverage.uiTestBridge=true`. Writes a JSON snapshot (state, commit, `stale`, `headHash`, `gutterVisible`, per-line classification of `-Dcoverage.uiTestFiles`, `updatedAt`) atomically to `-Dcoverage.uiTestState=<file>` (default `~/.cache/coverage-plugin/ui-test-state.json`) so an out-of-process UI test can see what RemoteRobot cannot. Line numbers are the coverage commit's, **without** line mapping |
 
 ## Dual-coverage mode
 
@@ -141,11 +148,16 @@ When the current branch has its own pipeline **and** the coverage branch (master
 
 `CoverageDiff` provides the set-diff / union helpers used by both the highlighter and the panel.
 
+The **New Coverage** tab needs a baseline: without one it shows "Dual-coverage mode is not active" and lists nothing. It compares by line, not by test name: a line is "new coverage" when primary has covering tests and baseline has none. Files changed between the two commits are compared after line mapping, unchanged files by raw line numbers.
+
 ## Flow
 
 On startup, HEAD change, settings save, or the 30-second poll: `loadOfflineFirst()` shows any cached artifact immediately (stale), then `loadFromGitLab()` sends one `ensure` to covd. The daemon resolves the pipeline (current branch → coverage branch → merge-base tiers), waits for coverage jobs, downloads the COVT shards, merges them, writes the `.cov4` files and updates the index; the plugin attaches readers to the returned paths. `not_ready` answers are retried after `retryAfterMs`; `error` answers map to user-facing messages by code.
 
 The daemon is shared by every IDE instance and keyed by `--cache-dir`; identical concurrent `ensure` calls are coalesced inside it. The plugin never writes the cache index and never downloads artifacts itself. All auto-loading is skipped when gutter visibility is off.
+
+- `CovdClient` treats `connection refused` as "daemon exited after idle timeout": it starts a new process and retries the request once. The daemon is never shut down by the plugin.
+- `ensure` and `import` use an 11-minute read timeout; `ping`/artifact calls use 3 seconds.
 
 Cache layout is per component (`~/.cache/coverage-plugin/<projectId>/<hash>-<component>.cov4`). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
 
@@ -162,6 +174,8 @@ Tool: `get_tests_at_line` — returns paginated test names for a specific line. 
 Tool: `get_first_tests_at_lines` — returns the first covering test name for each of the given comma-separated line numbers. Useful for quickly checking which tests exercise which lines.
 
 Tool: `list_files` — lists files with coverage data under a directory.
+
+MCP calls need **two** project arguments when several projects are open: `project` (our tool resolves the IDE project from it) and `projectPath` (the IDE MCP framework routes the call with it). Without `projectPath` the framework answers "Unable to determine the target project". Endpoint in the licensed IDE is `http://127.0.0.1:64343` (`/sse` + `/message`).
 
 ## Coverage daemon (covd)
 
@@ -194,11 +208,91 @@ it resolves the pipeline in GitLab, downloads the COVT shards, merges them and w
 
 ```bash
 ./gradlew compileKotlin            # compile
-./gradlew test                     # unit tests
+./gradlew test                     # unit tests (excludes the heavy package)
+./gradlew heavyTest                # heavy integration tests inside a full IDE process
+GITLAB_TOKEN_FROM_IDE=1 ./scripts/ui-test.sh   # real-IDE UI scenario (see "UI tests" below)
 ./gradlew buildPlugin              # distributable zip
 ./gradlew runIde                   # sandbox IDE
 ./gradlew generateUpdatePluginsXml # regenerate docs/updatePlugins.xml
 ```
+
+- `heavyTest` is an `intellijPlatformTesting.testIde` task: it launches the real IDE
+  ($platformVersion) with the plugin installed and runs
+  `com.github.yakov255.perlinecoverageinfo.heavy.*` (`BasePlatformTestCase`).
+  `test` filters that package out, so the default suite stays fast.
+- `testIde` has its own platform configuration: it does not inherit the project-level
+  `platformBundledPlugins`. `heavyTest` therefore declares them again, plus the plugins and
+  modules PHP/Gherkin depend on (`org.intellij.intelliLang`, `com.intellij.modules.json`,
+  `com.intellij.modules.ultimate`). Without `com.intellij.modules.ultimate` the plugin is
+  rejected with "requires plugin com.jetbrains.php to be enabled".
+- `heavyTest` sets `-Didea.home.path` to the resolved platform, otherwise the platform treats
+  itself as Community. The path is resolved at configuration time because the platform-path
+  provider cannot be serialized into a `CommandLineArgumentProvider` (configuration cache).
+- Do not assert `ToolWindowManager.getToolWindow(...)` in these tests: a light fixture project
+  has no registered tool windows. Assert the plugin is loaded and the `ToolWindowEP` is
+  registered instead.
+- A manual `runIde` uses `.intellijPlatform/sandbox/per-line-coverage-info/<version>/`. If
+  `config/disabled_plugins.txt` lists `com.intellij.modules.ultimate`, PHP and this plugin are
+  rejected ("requires plugin com.jetbrains.php to be enabled"); `syncIdeLicense` removes that
+  line.
+- `runIde` keeps the IDE window open until it is closed, so a scripted check must stop the
+  process itself. `scripts/smoke-ide.sh` does that: it runs `./gradlew runIde`, waits for
+  `Loaded custom plugins: ... per-line-coverage-info`, then kills the sandbox IDE JVM and
+  returns 0/1.
+- The sandbox IDE has no license, and without one JetBrains Ultimate (and therefore PHP) is
+  disabled. `syncIdeLicense` copies `idea.key`/`phpstorm.key`/`plugin_PCWMP.license` from the
+  newest local `~/.config/JetBrains/IntelliJIdea*` into the sandbox config before `runIde` and
+  `runIdeForUiTests`. The license is never committed; without a local key the task only logs
+  and the IDE starts unlicensed.
+- Machine-local extra JVM arguments for the sandbox IDE (a javaagent, `--add-opens`) live in
+  `~/.gradle/gradle.properties` as `ideaSandboxJvmArgs=...` (space-separated) or in the
+  `IDEA_SANDBOX_JVM_ARGS` environment variable — never in the repository. `runIde`,
+  `runIdeForUiTests` and `heavyTest` append them to the forked IDE JVM. An agent that hides
+  itself from `RuntimeMXBean.getInputArguments()` (e.g. ja-netfilter) never shows up in the
+  `JVM options:` line of `idea.log`; verify it in the IDE process command line
+  (`/proc/<pid>/cmdline`) or by its banner in the Gradle output instead. Full guide:
+  `docs/local-java-agent.md`.
+- **UI tests** (`src/uiTest`, RemoteRobot 0.11.23, JUnit 5): the scenario drives a real sandbox IDE
+  (`runIdeForUiTests`) against real GitLab: first-run token dialog → Settings → Tools → GitLab
+  Coverage → project search → Apply → coverage loaded (checked through `CoverageUiTestBridge`:
+  fresh, not stale) → "Coverage Tests" window with five tabs → Artifacts table → open the PHP
+  fixture → click the gutter → "Covering Line". `scripts/ui-test.sh` starts the IDE, waits for the
+  plugin log line **and** the robot port, runs `./gradlew uiTest`, and stops only its own IDE.
+  - Token: `GITLAB_TOKEN_FILE`, `GITLAB_TOKEN` (copied to a mode-600 temp file) or the explicit
+    opt-in `GITLAB_TOKEN_FROM_IDE=1`. The test reads it from the file, so it is not in the
+    environment. The token is typed into plain text fields: the saved hierarchy is masked, but a
+    failure screenshot (`build/uiTest-artifacts/*.png`) may show it, so do not publish artifacts.
+  - Knobs: `-PuiTestRobotPort` (`ROBOT_PORT`, default 8082), `-PuiTestPhpFile` (`UI_TEST_PHP_FILE`),
+    `UI_TEST_PROJECT` (default `$HOME/projects/raketa`). The IDE runs with `-Xmx4g` and
+    `-XX:-HeapDumpOnOutOfMemoryError` (a heap dump written into the unpacked platform makes Gradle
+    reject that immutable directory) and `-Didea.log.path` pointing at the sandbox
+    `log_runIdeForUiTests`, which is also how the script finds and stops that IDE.
+  - The scenario requires a **fresh** (non-stale) load. If HEAD of the opened project has no pipeline
+    yet, covd answers `not_ready (no_pipeline_yet)` and only the cached artifact is shown (`stale`):
+    the test then fails with an explanation. `UI_TEST_ALLOW_STALE=1` accepts the cache knowingly (the
+    GitLab download itself is then not exercised).
+  - `uiTestSandbox` wipes the sandbox config/system/log and the snapshot file before each run.
+  - The fixture must be unchanged between the coverage commit and the working tree (the bridge
+    does no line mapping); the scenario checks that with `git diff`.
+  - Failures save `build/uiTest-artifacts/` (screenshot, masked Swing hierarchy, idea.log, state),
+    including failures in the `@BeforeAll` setup. Look locators up in that hierarchy dump
+    (`accessiblename` carries labels; dialogs are `MyDialog`; the new UI tool window stripe has
+    icons only, so open windows by action id).
+  - Not covered: Affected / New Coverage tabs beyond their presence, dual-coverage filters.
+  - `uiTest` is a plain `Test` task and uses `--add-opens java.base/java.lang` so RemoteRobot's
+    Gson can report the IDE-side error instead of `InaccessibleObjectException`.
+- `covd` binaries are **not committed** (`src/main/resources/bin/` does not exist in the repo).
+  `processResources` bundles them only from `-PcovdDist=/path/to/dist/covd` or `COVD_DIST`;
+  without it the zip carries no binary and the plugin reports "coverage daemon unavailable".
+  The sibling checkout `../raketa/yakov_scripts/coverage/coverage-assistant/dist/covd` is picked
+  up automatically when present.
+- Real end-to-end check against `gitlab.raketa.in` (project 335): install `buildPlugin`'s zip
+  into a licensed IDE's user plugins directory (`~/.local/share/JetBrains/PhpStorm2026.2/per-line-coverage-info`),
+  open `~/projects/raketa` and query MCP on `http://127.0.0.1:64343`. Alternatively run
+  `build/covd-resources/bin/linux-x64/covd --cache-dir /tmp/covd` and `POST /v1/ensure` with
+  `baseUrl=https://gitlab.raketa.in`, `projectId=335`, `component=raketa`, `pathMode=raketa`,
+  `jobPrefixes` from `ComponentConfig`: the branch pipeline (primary) and master (baseline)
+  resolve in about 72 s, ~21.7k files / 428k lines.
 
 ## Performance diagnostics
 
