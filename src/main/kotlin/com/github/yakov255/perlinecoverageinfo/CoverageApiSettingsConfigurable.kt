@@ -133,7 +133,7 @@ class CoverageApiSettingsConfigurable : Configurable {
 
             ApplicationManager.getApplication().executeOnPooledThread {
                 try {
-                    val client = GitLabApiClient("https://$domain", token)
+                    val client = GitLabProjectsClient("https://$domain", token)
                     val projects = client.listMemberProjects()
                     log.debug("listMemberProjects returned ${projects.size} results")
 

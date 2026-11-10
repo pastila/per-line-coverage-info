@@ -131,7 +131,7 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
 
         // ── Phase 1: find files changed between baseline and primary commits ──
         indicator.text = "Resolving changed files…"
-        val changedFiles = CoverageResolver.runGitCommand(
+        val changedFiles = GitCommand.run(
             gitRoot, "diff", "--name-only", baselineCommit, primaryCommit,
         )?.lines()?.map { it.replace('\\', '/') }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
 
