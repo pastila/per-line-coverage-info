@@ -57,6 +57,13 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
             scheduleNext()
             return
         }
+        if (loadService.isBlocked()) {
+            // The token is invalid or the error is deterministic for this HEAD: waiting is
+            // cheaper and quieter than asking GitLab again every 30 seconds.
+            log.info("Coverage: poll skipped — load is blocked (${loadService.blockedReason()})")
+            scheduleNext()
+            return
+        }
 
         CoveragePerfLog.event("poll.tick")
         loadService.loadFromGitLab(showErrors = false)

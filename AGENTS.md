@@ -25,7 +25,8 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | File | Purpose |
 |------|---------|
 | `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel |
-| `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; triggers `loadOfflineFirst()` for all open projects on Apply/OK if plugin enabled and configured |
+| `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; Apply/OK save the settings and run `CoverageSettingsActions.afterSettingsApplied()` (clears every project's failure block and retry counter, then loads) |
+| `CoverageSettingsActions.kt` | Shared "settings applied" path used by the settings page and the bridge command `settings.apply`: reloads every open project and lifts a token or deterministic-error block |
 | `GitLabTokenDialog.kt` | First-run dialog that asks for the GitLab domain and token when the token is empty and `tokenPrompted` is false |
 | `CustomRepoProvider.kt` | `updateSettingsProvider` — points the IDE updater at `docs/updatePlugins.xml` instead of JetBrains Marketplace |
 
@@ -50,10 +51,10 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Loading pipeline
 | File | Purpose |
 |------|---------|
-| `CoverageLoadService.kt` | Orchestrator: `loadOfflineFirst()` (cache walk → stale display → daemon refresh), `loadFromGitLab()` (one `ensure` against covd; `ready`/`not_ready`/`error` handling, retry by `retryAfterMs`), `loadFromLocalFile()` (daemon `import`), `loadFromCache()` (pinned artifact). Applies readers to `CoverageDataService` and computes the "behind by" warning context |
-| `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden |
+| `CoverageLoadService.kt` | Orchestrator: `loadOfflineFirst(manual)` (cache walk → stale display → daemon refresh), `loadFromGitLab(showErrors, onComplete, onError, bypassBlock)` (one `ensure` against covd; `ready`/`not_ready`/`error` handling), `loadFromLocalFile()` (daemon `import`), `loadFromCache()` (pinned artifact). Applies the failure contract through `RetryPolicy`/`RetryState`: retry counter and block (`retryAttempt`, `retryMax`, `blockedReason()`), delayed retries on the shared `covdRetryAlarm`, reset on success/HEAD change/settings change, manual load bypasses both. Applies readers to `CoverageDataService` and computes the "behind by" warning context |
+| `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden. Calls `CoverageLoadService.onHeadChanged()` so a block never outlives its commit |
 | `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; logged JVM arguments for the perf log |
-| `CoveragePipelinePoller.kt` | 30-second tick that asks the daemon again; no GitLab logic. Skipped while a load is in progress, disabled when the gutter is hidden |
+| `CoveragePipelinePoller.kt` | 30-second tick that asks the daemon again; no GitLab logic. Skipped while a load is in progress or while `CoverageLoadService.isBlocked()` holds, and disabled when the gutter is hidden |
 | `LoadCoverageAction.kt` | Find Action: "Load Coverage from GitLab" |
 | `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz), imported through the daemon |
 | `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" |
@@ -121,7 +122,10 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageLog.kt` | Logger wrapper — writes to `idea.log` **and** `CoverageLogService` |
 | `CoverageLogService.kt` | Ring buffer (2000 entries) with thread-safe subscribe/backfill |
 | `OpenCoveragePerfLogAction.kt` | Find Action: "Open Coverage Performance Log Folder" |
-| `CoverageUiTestBridge.kt` | Test-only project service, inert unless `-Dcoverage.uiTestBridge=true`. Writes a JSON snapshot (state, commit, `baselineCommit`, `loading`, `stale`, `headHash`, `coverageGeneration`, `dumb` (indexing), `covdInstanceId`, `covdPid`, `gutterVisible`, per-line classification of `-Dcoverage.uiTestFiles`, `updatedAt`) atomically to `-Dcoverage.uiTestState=<file>` (default `~/.cache/coverage-plugin/ui-test-state.json`) so an out-of-process UI test can see what RemoteRobot cannot. Line numbers are the coverage commit's, **without** line mapping |
+| `CoverageUiTestBridge.kt` | Test-only project service, inert unless `-Dcoverage.uiTestBridge=true`. Writes a JSON snapshot (state, commit, `baselineCommit`, `loading`, `stale`, `headHash`, `coverageGeneration`, `dumb` (indexing), `covdInstanceId`, `covdPid`, `gutterVisible`, `retryAttempt`, `retryMax`, `blocked`, `notifications`, `lastCommand`, per-line classification of `-Dcoverage.uiTestFiles`, `updatedAt`) atomically to `-Dcoverage.uiTestState=<file>` (default `~/.cache/coverage-plugin/ui-test-state.json`) so an out-of-process UI test can see what RemoteRobot cannot. Polls `-Dcoverage.uiTestCommands` every 250 ms and runs each new line once (`reload`, `settings.token=<value>` stored but never logged, `settings.apply`). Line numbers are the coverage commit's, **without** line mapping |
+| `RetryPolicy.kt` | Pure failure contract (`RetryPolicy`, `RetryState`): default 5/15/45 s ladder overridable by `-Dcoverage.retry.delaysMs`, a single wait capped at 60 s, `retryAfterMs` as a floor, and the decision per daemon code (`RETRY` / `BLOCK_AUTH` / `STOP_UNTIL_CHANGE` / `NONE`). No IDE types, unit-tested directly |
+| `CoverageNotifier.kt` | Project notifications in the `Coverage Notifications` group: one balloon per kind (`retry`, `auth`), actions *Retry now* / *Show log* / *Update token…*; keeps the last 20 records (title, content, type, action labels, time) for the bridge and tests |
+| `CoverageUiTestCommands.kt` | Parser and offset reader for the UI-test command file: complete lines only, each run once, token values masked in `lastCommand` and the log |
 | `CoveragePaths.kt` | Resolves `-Dcoverage.cacheRoot` (default `~/.cache/coverage-plugin`), `-Dcoverage.perf.dir` (default `<cacheRoot>/perf`) and `-Dcoverage.covdResponses` (off by default); the test seams of `CovdClient`/`CoverageCacheService` still win |
 | `CovdResponseRecorder.kt` | Saves every `ensure`/`import` answer to `-Dcoverage.covdResponses=<dir>` as `<seq:04d>-<yyyyMMdd-HHmmss-SSS>-<kind>-<state>.json`: request fields (never the GitLab token, which is also scrubbed), HTTP status, elapsed ms and the daemon's body unmodified. Off by default; write errors only go to the log |
 | `CovdProcessSampler.kt` | 1 Hz `ev=covdsample` samples (pid, RSS, CPU %, threads, VSZ) of the covd process. The daemon may belong to another IDE, so the PID comes from the handshake port via `/proc/net/tcp(6)` → socket inode → `/proc/*/fd`; Linux only, daemon thread, stopped by `CovdClient.resetForTest()` |
@@ -155,7 +159,7 @@ The **New Coverage** tab needs a baseline: without one it shows "Dual-coverage m
 
 ## Flow
 
-On startup, HEAD change, settings save, or the 30-second poll: `loadOfflineFirst()` shows any cached artifact immediately (stale), then `loadFromGitLab()` sends one `ensure` to covd. The daemon resolves the primary pipeline from the branch / HEAD SHA and, when a coverage branch is set, the baseline from that branch (merge-base first, then its ancestors; a baseline never replaces a missing primary), waits for coverage jobs, downloads the COVT shards, merges them, writes the `.cov4` files and updates the index; the plugin attaches readers to the returned paths. `not_ready` answers are retried after `retryAfterMs`; `error` answers map to user-facing messages by code.
+On startup, HEAD change, settings save, or the 30-second poll: `loadOfflineFirst()` shows any cached artifact immediately (stale), then `loadFromGitLab()` sends one `ensure` to covd. The daemon resolves the primary pipeline from the branch / HEAD SHA and, when a coverage branch is set, the baseline from that branch (merge-base first, then its ancestors; a baseline never replaces a missing primary), waits for coverage jobs, downloads the COVT shards, merges them, writes the `.cov4` files and updates the index; the plugin attaches readers to the returned paths. `not_ready` answers are retried after `retryAfterMs`; `error` answers go through `RetryPolicy`: retryable errors (including an unreachable daemon) three times, auth errors block until the settings change, deterministic errors block until HEAD or the settings change (see "Failure handling").
 
 The daemon is shared by every IDE instance and keyed by `--cache-dir`; identical concurrent `ensure` calls are coalesced inside it. The plugin never writes the cache index and never downloads artifacts itself. All auto-loading is skipped when gutter visibility is off.
 
@@ -163,6 +167,22 @@ The daemon is shared by every IDE instance and keyed by `--cache-dir`; identical
 - `ensure` and `import` use an 11-minute read timeout; `ping`/artifact calls use 3 seconds.
 
 Cache layout is per component (`<cacheRoot>/<projectId>/<hash>-<component>.cov4`, cache root `~/.cache/coverage-plugin` or `-Dcoverage.cacheRoot`). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
+
+## Failure handling (F1, F2 contract)
+
+`RetryPolicy` classifies one daemon answer; `RetryState` holds the per-project counter and block. The contract is fixed in `docs/real-project-testing.md`.
+
+| Answer | Behaviour |
+|--------|-----------|
+| `error` with `retryable=true` (`CONNECTION`, `GITLAB_API`) or an unreachable daemon | Silent retries, 3 by default, after 5 / 15 / 45 s (`-Dcoverage.retry.delaysMs` replaces them), never sooner than `retryAfterMs`, never later than 60 s. After the last one: balloon *Retry now* / *Show log* |
+| `AUTH_INVALID`, `ACCESS_DENIED` | No retries. `blocked="AUTH"` for the current HEAD and settings; sticky balloon *Update token…*. Applying settings clears the block and loads again |
+| `NO_COMPONENT_JOBS`, `NO_DATA`, `PROJECT_SETUP`, `GIT` | No retries, no balloon. `blocked="NON_RETRYABLE:<code>"`; the poller and HEAD tracker stay quiet until HEAD or the settings change |
+| `ready` | Counter and block reset |
+
+- The block is tied to the HEAD and a SHA-256 fingerprint of the settings (token included in the hash, never logged). `CoverageLoadService.isBlocked()` lifts it when either changed.
+- One balloon per kind: `CoverageNotifier` expires the previous one before showing the new one and keeps the last 20 records for the bridge.
+- A manual load (`LoadCoverageAction`, `showErrors=true`, the balloon's *Retry now*) always bypasses the block and restarts the retry budget.
+- Perf events: `covd.retry attempt delayMs code`, `covd.blocked reason code`, `notify.shown kind`.
 
 ## MCP
 
@@ -233,6 +253,12 @@ GITLAB_TOKEN_FROM_IDE=1 ./scripts/ui-test.sh   # real-IDE UI scenario (see "UI t
   through the same pieces inside the IDE (the heavyTest classpath has no test resources, so its
   COVT fixtures are embedded as base64). `CoverageApiSettings.gitlabDomain` accepts an explicit
   `http://host:port` for such tests.
+- `heavy.HeavyCovdFailureTest` covers the failure contract inside the IDE: `AUTH_INVALID` blocks
+  without retries and a new token loads through the shared Apply path; `NO_COMPONENT_JOBS` stops the
+  poller until HEAD moves; a retryable error runs the 1+3 ladder (short delays from
+  `-Dcoverage.retry.delaysMs`), shows the balloon and succeeds after *Retry now*. Token and
+  deterministic codes use the real daemon + `FakeGitLab`; the retry ladder uses a fake daemon behind
+  a shell wrapper.
 - `testIde` has its own platform configuration: it does not inherit the project-level
   `platformBundledPlugins`. `heavyTest` therefore declares them again, plus the plugins and
   modules PHP/Gherkin depend on (`org.intellij.intelliLang`, `com.intellij.modules.json`,
@@ -328,14 +354,15 @@ Log tab):
 
 Enabled by default; `-Dcoverage.perf.log=false` disables it and Gradle sets it for unit tests.
 Find Action **Open Coverage Performance Log Folder** reveals the directory. Instrumented:
-`load.offlineFirst`, `covd.ensure`/`covd.ready`/`covd.notReady`/`covd.error`, `poll.tick`,
-`cov4.open`, `highlight.*`, `linemap.gitShow`, and `plugin.start` (JVM args, `-Xmx`).
+`load.offlineFirst`, `covd.ensure`/`covd.ready`/`covd.notReady`/`covd.error`, `covd.retry` (attempt, delayMs, code), `covd.blocked` (reason), `notify.shown` (kind), `poll.tick`, `cov4.open`, `highlight.*`, `linemap.gitShow`, and `plugin.start` (JVM args, `-Xmx`).
 Artifact parsing, merging and writing are measured by covd's own trace, not here.
 
 Diagnostics properties (contract: `docs/real-project-testing.md`): `-Dcoverage.cacheRoot=<dir>`
 moves the covd cache and the extracted binary (the daemon is shared per cache root),
 `-Dcoverage.perf.dir=<dir>` moves the perf log, `-Dcoverage.covdResponses=<dir>` saves the raw
-daemon answers. All are off by default; a normal run never sets them.
+daemon answers, `-Dcoverage.retry.delaysMs=500,1500,4500` replaces the retry ladder (test hook)
+and `-Dcoverage.uiTestCommands=<file>` feeds `reload` / `settings.token=` / `settings.apply` to the
+bridge (test hook). All are off by default; a normal run never sets them.
 
 ## Release
 
@@ -367,7 +394,8 @@ Rules:
 - **Waiting and fallback** live in covd: it waits for running coverage jobs, serves the newest older ready pipeline as `stale` while the latest is unfinished, and reports `not_ready` with `reason`/`retryAfterMs` (the plugin retries).
 - **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.
 - **Threading**: `ensure` runs on a pooled thread; daemon answers are applied to data services there and UI updates go through `invokeLater`.
-- **Errors**: daemon `code`/`cause`/`hint` drive the user-facing message in `CoverageLoadService`; auto-triggered callers only log.
+- **Errors**: daemon `code`/`cause`/`hint` drive the user-facing message in `CoverageLoadService`; auto-triggered callers only log. Retry/block decisions live in `RetryPolicy` only — do not branch on codes elsewhere.
+- **Failure state**: `RetryState` is keyed by HEAD and a settings fingerprint; `CoverageHeadTracker.onHeadChanged()` and `CoverageSettingsActions.afterSettingsApplied()` reset it. The poller and auto-loads must call `CoverageLoadService.isBlocked()`; a manual load passes `bypassBlock = true`.
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.

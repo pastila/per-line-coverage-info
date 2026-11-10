@@ -44,6 +44,9 @@ class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeLis
 
         log.info("Coverage: HEAD changed ${previous.take(8)} → ${currentRevision.take(8)}, scheduling reload")
 
+        // A block or a retry budget belongs to the old commit.
+        CoverageLoadService.getInstance(project).onHeadChanged(currentRevision)
+
         CoveragePipelinePoller.getInstance(project).stop()
 
         alarm.cancelAllRequests()

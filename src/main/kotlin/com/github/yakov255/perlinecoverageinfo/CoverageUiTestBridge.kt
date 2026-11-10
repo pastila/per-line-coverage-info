@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
@@ -41,6 +42,15 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
     /** Refresh tick; null while the bridge is disabled. */
     private val alarm = if (enabled) Alarm(Alarm.ThreadToUse.POOLED_THREAD, this) else null
 
+    /** Command file watched for `reload` / `settings.token=` / `settings.apply`; null when unset. */
+    private val commandFile = if (enabled) commandsFile() else null
+    private val commandAlarm = if (commandFile != null) Alarm(Alarm.ThreadToUse.POOLED_THREAD, this) else null
+    private var commandOffset = 0L
+
+    /** Last command line the bridge executed, with any token value masked. */
+    @Volatile
+    private var lastCommand: String? = null
+
     init {
         if (enabled) {
             project.messageBus.connect(this).subscribe(
@@ -48,6 +58,7 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
                 CoverageChangeListener { refreshAsync() },
             )
             alarm?.addRequest({ tick() }, TICK_MS)
+            commandAlarm?.addRequest({ commandTick() }, COMMAND_TICK_MS)
             refreshAsync()
             log.info("UI test bridge enabled — snapshot: ${stateFile().absolutePath}")
         }
@@ -55,6 +66,7 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
 
     override fun dispose() {
         alarm?.cancelAllRequests()
+        commandAlarm?.cancelAllRequests()
     }
 
     private fun tick() {
@@ -62,6 +74,42 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
         refresh()
         if (project.isDisposed) return
         alarm?.addRequest({ tick() }, TICK_MS)
+    }
+
+    private fun commandTick() {
+        if (!enabled || project.isDisposed) return
+        val file = commandFile
+        if (file != null) {
+            try {
+                val (lines, offset) = CoverageUiTestCommands.readNew(file, commandOffset)
+                commandOffset = offset
+                for (line in lines) executeCommand(line)
+            } catch (t: Throwable) {
+                log.warn("UI test bridge: cannot read commands: ${t.message}", t)
+            }
+        }
+        if (project.isDisposed) return
+        commandAlarm?.addRequest({ commandTick() }, COMMAND_TICK_MS)
+    }
+
+    private fun executeCommand(line: String) {
+        val command = CoverageUiTestCommands.parse(line)
+        if (command == null) {
+            log.info("UI test bridge: unknown command '${CoverageUiTestCommands.displayName(line)}'")
+            return
+        }
+        val display = CoverageUiTestCommands.displayName(line)
+        lastCommand = display
+        // A settings.token= value is never logged, written to the snapshot or recorded anywhere.
+        log.info("UI test bridge: command $display")
+        when (command.kind) {
+            CoverageUiTestCommands.Kind.RELOAD ->
+                CoverageLoadService.getInstance(project).loadOfflineFirst()
+            CoverageUiTestCommands.Kind.SETTINGS_TOKEN ->
+                CoverageApiSettings.getInstance().bearerToken = command.value.orEmpty()
+            CoverageUiTestCommands.Kind.SETTINGS_APPLY ->
+                CoverageSettingsActions.afterSettingsApplied()
+        }
     }
 
     /** Writes the snapshot on a pooled thread: the caller may be on the EDT. */
@@ -119,6 +167,11 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
             put("error", lastError.toJson())
             put("lastError", lastError.toJson())
             put("loading", loadService.isLoadInProgress())
+            put("retryAttempt", loadService.retryAttempt)
+            put("retryMax", loadService.retryMax)
+            put("blocked", loadService.blockedReason().toJson())
+            put("notifications", notificationsJson())
+            put("lastCommand", lastCommand.toJson())
             put("coverageGeneration", dataService.coverageGeneration)
             put("dumb", isDumb())
             put("covdInstanceId", CovdClient.currentConnection()?.instanceId.toJson())
@@ -146,6 +199,11 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
         put("error", t.message ?: t.javaClass.name)
         put("lastError", t.message ?: t.javaClass.name)
         put("loading", false)
+        put("retryAttempt", 0)
+        put("retryMax", 0)
+        put("blocked", JsonNull)
+        put("notifications", buildJsonArray {})
+        put("lastCommand", JsonNull)
         put("coverageGeneration", 0)
         put("dumb", false)
         put("covdInstanceId", JsonNull)
@@ -191,6 +249,21 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
         }
     }
 
+    /** Last 20 notifications, oldest first: the balloon contract the UI test checks. */
+    private fun notificationsJson() = buildJsonArray {
+        for (record in CoverageNotifier.getInstance(project).notifications()) {
+            add(
+                buildJsonObject {
+                    put("title", record.title)
+                    put("content", record.content)
+                    put("type", record.type)
+                    put("actions", buildJsonArray { record.actions.forEach { add(JsonPrimitive(it)) } })
+                    put("atMs", record.atMs)
+                },
+            )
+        }
+    }
+
     private fun writeSnapshot(snapshot: JsonObject) {
         val file = stateFile()
         val dir = file.parentFile
@@ -227,13 +300,19 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
             .map { it.trim() }
             .filter { it.isNotEmpty() }
 
+    /** Command file from `-Dcoverage.uiTestCommands`, or null. */
+    private fun commandsFile(): File? =
+        System.getProperty(COMMANDS_PROPERTY)?.takeIf { it.isNotBlank() }?.let { File(it) }
+
     private fun String?.toJson(): JsonElement = if (this == null) JsonNull else JsonPrimitive(this)
 
     companion object {
         private const val TICK_MS = 1_000L
+        private const val COMMAND_TICK_MS = 250L
         private const val ENABLE_PROPERTY = "coverage.uiTestBridge"
         private const val FILES_PROPERTY = "coverage.uiTestFiles"
         private const val STATE_PROPERTY = "coverage.uiTestState"
+        private const val COMMANDS_PROPERTY = "coverage.uiTestCommands"
 
         fun getInstance(project: Project): CoverageUiTestBridge = project.service()
 

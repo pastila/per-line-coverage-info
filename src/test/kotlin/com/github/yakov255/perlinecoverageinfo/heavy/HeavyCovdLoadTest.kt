@@ -63,6 +63,7 @@ class HeavyCovdLoadTest : BasePlatformTestCase() {
         settings.enabled = true
         CoverageGutterVisibilityService.getInstance(project).visible = true
         CoverageDataService.getInstance(project).clear()
+        CoverageLoadService.getInstance(project).onSettingsApplied()
     }
 
     override fun tearDown() {
@@ -156,6 +157,8 @@ class HeavyCovdLoadTest : BasePlatformTestCase() {
 
         gitlab.reset()
         readyPipeline(id = 100, sha = head, jobName = "test:behat:coverage:somethingelse")
+        // The previous 404 blocked automatic loads; new settings lift the block.
+        loadService().onSettingsApplied()
         val noJobs = loadAndWait()
         assertTrue(noJobs.error!!, noJobs.error!!.contains("no coverage jobs"))
     }

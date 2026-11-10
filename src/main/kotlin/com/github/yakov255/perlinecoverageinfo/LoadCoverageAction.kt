@@ -29,7 +29,7 @@ class LoadCoverageAction : AnAction(), DumbAware {
             return
         }
         ApplicationManager.getApplication().executeOnPooledThread {
-            loadService.loadOfflineFirst()
+            loadService.loadOfflineFirst(manual = true)
         }
     }
 }

@@ -2,9 +2,7 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.options.Configurable
-import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.HyperlinkLabel
 import com.intellij.ui.components.JBList
@@ -193,26 +191,7 @@ class CoverageApiSettingsConfigurable : Configurable {
     }
 
     private fun triggerCoverageLoad() {
-        val settings = CoverageApiSettings.getInstance()
-        if (!settings.enabled) {
-            log.info("CoverageApiSettingsConfigurable: plugin not enabled, skipping auto-load")
-            return
-        }
-        if (settings.gitlabDomain.isBlank() || settings.bearerToken.isBlank() || settings.gitlabProjectId <= 0) {
-            log.info("CoverageApiSettingsConfigurable: settings not configured, skipping auto-load")
-            return
-        }
-
-        invokeLater {
-            for (project in ProjectManager.getInstance().openProjects) {
-                if (!project.isDisposed) {
-                    log.info("CoverageApiSettingsConfigurable: triggering load for project ${project.name}")
-                    ApplicationManager.getApplication().executeOnPooledThread {
-                        CoverageLoadService.getInstance(project).loadOfflineFirst()
-                    }
-                }
-            }
-        }
+        CoverageSettingsActions.afterSettingsApplied()
     }
 
     override fun reset() {

@@ -24,6 +24,8 @@
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageLoadService"/>
         <projectService
+            serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageNotifier"/>
+        <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.CoverageCacheService"/>
         <projectService
             serviceImplementation="com.github.yakov255.perlinecoverageinfo.AffectedTestsService"/>

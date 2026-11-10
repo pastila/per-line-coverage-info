@@ -39,10 +39,69 @@ class CoverageLoadService(private val project: Project) {
     var lastError: String? = null
         private set
 
-    /** Retry timer for `not_ready` answers from the covd daemon. */
+    /** Retry timer for `not_ready` answers and for retryable daemon errors. */
     private val covdRetryAlarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, project)
 
+    private val retryPolicy = RetryPolicy()
+    private val retryState = RetryState()
+
+    /** A balloon is shown once per retry cycle; the next poll stays silent. */
+    @Volatile
+    private var exhaustedNotified = false
+
+    /** Automatic retries scheduled for the current HEAD and settings. */
+    val retryAttempt: Int get() = retryState.attempt
+
+    /** Automatic retries allowed before the balloon. */
+    val retryMax: Int get() = retryPolicy.maxAttempts
+
     fun isLoadInProgress(): Boolean = loading
+
+    /**
+     * The active block (`AUTH` or `NON_RETRYABLE:<code>`), or null. A block is tied to the
+     * HEAD and settings it was created for: a change lifts it here.
+     */
+    fun blockedReason(): String? = if (isBlocked()) retryState.blocked else null
+
+    /**
+     * True while an automatic load must not reach the daemon: an auth block or a
+     * deterministic error for this HEAD and these settings is still active.
+     */
+    fun isBlocked(): Boolean {
+        if (retryState.blocked == null) return false
+        if (retryState.isBlockedFor(currentHead(), settingsFingerprint())) return true
+        log.info("Coverage: block ${retryState.blocked} cleared — HEAD or settings changed")
+        resetFailureState()
+        return false
+    }
+
+    /** HEAD moved: the block and the retry budget belong to the old commit. */
+    fun onHeadChanged(head: String? = null) {
+        val hadState = retryState.blocked != null || retryState.attempt > 0
+        resetFailureState()
+        covdRetryAlarm.cancelAllRequests()
+        if (hadState) {
+            log.info("Coverage: failure state reset after HEAD change${head?.let { " to ${it.take(8)}" } ?: ""}")
+        }
+    }
+
+    /** Settings were applied: clear the block and the counter, then the caller loads again. */
+    fun onSettingsApplied() {
+        resetFailureState()
+        covdRetryAlarm.cancelAllRequests()
+        log.info("Coverage: failure state reset after settings change")
+    }
+
+    /** Counter, block and the "already notified" mark fall together. */
+    private fun resetFailureState() {
+        retryState.reset()
+        exhaustedNotified = false
+    }
+
+    /** Test seam: cancels a scheduled retry so it cannot fire into a later test. */
+    internal fun cancelRetriesForTest() {
+        covdRetryAlarm.cancelAllRequests()
+    }
 
     /** Validates that the plugin is enabled and GitLab settings are configured. */
     fun validateSettings(): String? {
@@ -59,12 +118,15 @@ class CoverageLoadService(private val project: Project) {
     /**
      * Offline-first: show whatever the daemon already cached, then ask it for fresh coverage.
      * Repeated on every HEAD change and at startup.
+     *
+     * @param manual the user asked explicitly (Find Action): bypass an active block and
+     *   restart the retry budget.
      */
-    fun loadOfflineFirst() {
-        CoveragePerfLog.span("load.offlineFirst") { loadOfflineFirstInner() }
+    fun loadOfflineFirst(manual: Boolean = false) {
+        CoveragePerfLog.span("load.offlineFirst") { loadOfflineFirstInner(manual) }
     }
 
-    private fun loadOfflineFirstInner() {
+    private fun loadOfflineFirstInner(manual: Boolean) {
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
             log.info("Coverage: offline-first load skipped — gutter visibility is off")
             return
@@ -117,7 +179,7 @@ class CoverageLoadService(private val project: Project) {
                         if (!alreadyLoaded) {
                             showCached(cachedCommit, gitRoot, reader)
                         }
-                        loadFromGitLab(showErrors = false)
+                        loadFromGitLab(showErrors = false, bypassBlock = manual)
                         return
                     }
                 }
@@ -131,7 +193,7 @@ class CoverageLoadService(private val project: Project) {
                         if (!alreadyLoaded) {
                             showCached(latestArtifact.commitHash, gitRoot, reader)
                         }
-                        loadFromGitLab(showErrors = false)
+                        loadFromGitLab(showErrors = false, bypassBlock = manual)
                         return
                     }
                 }
@@ -139,7 +201,7 @@ class CoverageLoadService(private val project: Project) {
         }
 
         log.info("Coverage: no cached artifacts found, asking the daemon")
-        loadFromGitLab(showErrors = false)
+        loadFromGitLab(showErrors = false, bypassBlock = manual)
     }
 
     /** Shows a cached reader immediately, marked stale until the daemon confirms it. */
@@ -158,8 +220,15 @@ class CoverageLoadService(private val project: Project) {
      *
      * @param showErrors show a dialog for daemon-side errors; silent callers only log.
      * @param onComplete called on the EDT when the load finishes, successfully or not.
+     * @param bypassBlock the user asked explicitly: ignore an active block and restart the
+     *   retry budget.
      */
-    fun loadFromGitLab(showErrors: Boolean = true, onComplete: (() -> Unit)? = null, onError: ((String) -> Unit)? = null) {
+    fun loadFromGitLab(
+        showErrors: Boolean = true,
+        onComplete: (() -> Unit)? = null,
+        onError: ((String) -> Unit)? = null,
+        bypassBlock: Boolean = false,
+    ) {
         val validationError = validateSettings()
         if (validationError != null) {
             if (showErrors) {
@@ -173,6 +242,17 @@ class CoverageLoadService(private val project: Project) {
 
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
             log.info("Coverage: load skipped — gutter visibility is off")
+            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            return
+        }
+
+        if (bypassBlock || showErrors) {
+            // A manual load is the user's explicit request: no block, fresh retry budget.
+            resetFailureState()
+            covdRetryAlarm.cancelAllRequests()
+            log.info("Coverage: manual load bypasses the failure block")
+        } else if (isBlocked()) {
+            log.info("Coverage: load skipped — blocked by ${retryState.blocked}")
             onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
             return
         }
@@ -257,14 +337,16 @@ class CoverageLoadService(private val project: Project) {
         if (response == null) {
             val message = "Coverage daemon (covd) is unavailable. The plugin needs it to load coverage."
             log.warn("Coverage: covd unavailable — $unavailableReason")
-            lastError = message
-            if (showErrors) {
-                ApplicationManager.getApplication().invokeLater {
-                    Messages.showErrorDialog(project, message, "Coverage Daemon Unavailable")
-                }
-            }
-            onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
-            finishLoad(onComplete)
+            handleDaemonError(
+                showErrors = showErrors,
+                onComplete = onComplete,
+                onError = onError,
+                code = "CONNECTION",
+                retryable = true,
+                retryAfterMs = 0,
+                message = message,
+                title = "Coverage Daemon Unavailable",
+            )
             return
         }
 
@@ -282,17 +364,91 @@ class CoverageLoadService(private val project: Project) {
             else -> {
                 val message = describeError(response)
                 log.warn("Coverage: covd error ${response.code}/${response.cause}: $message")
-                lastError = message
                 CoveragePerfLog.event("covd.error", "code" to (response.code ?: "-"), "cause" to (response.cause ?: "-"))
-                if (showErrors) {
-                    ApplicationManager.getApplication().invokeLater {
-                        Messages.showErrorDialog(project, message, errorTitle(response.code))
-                    }
-                }
-                onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
-                finishLoad(onComplete)
+                handleDaemonError(
+                    showErrors = showErrors,
+                    onComplete = onComplete,
+                    onError = onError,
+                    code = response.code,
+                    retryable = response.retryable,
+                    retryAfterMs = response.retryAfterMs,
+                    message = message,
+                    title = errorTitle(response.code),
+                )
             }
         }
+    }
+
+    /**
+     * Applies the failure contract to one daemon error: retry, block or stop, always recording
+     * `lastError` and calling the caller's callbacks. The retry itself is silent; only the
+     * exhausted budget or a token problem reaches the user.
+     */
+    private fun handleDaemonError(
+        showErrors: Boolean,
+        onComplete: (() -> Unit)?,
+        onError: ((String) -> Unit)?,
+        code: String?,
+        retryable: Boolean,
+        retryAfterMs: Long,
+        message: String,
+        title: String,
+    ) {
+        lastError = message
+        if (showErrors) {
+            ApplicationManager.getApplication().invokeLater {
+                Messages.showErrorDialog(project, message, title)
+            }
+        }
+        onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
+
+        val decision = retryPolicy.decide("error", code, retryable, retryAfterMs, retryState.attempt)
+        when (decision.verdict) {
+            RetryPolicy.Verdict.RETRY -> {
+                retryState.onRetryScheduled()
+                log.info(
+                    "Coverage: ${code ?: "error"} is retryable — retry " +
+                        "${retryState.attempt}/${retryPolicy.maxAttempts} in ${decision.delayMs} ms",
+                )
+                CoveragePerfLog.event(
+                    "covd.retry",
+                    "attempt" to retryState.attempt,
+                    "max" to retryPolicy.maxAttempts,
+                    "delayMs" to decision.delayMs,
+                    "code" to (code ?: "-"),
+                )
+                covdRetryAlarm.cancelAllRequests()
+                covdRetryAlarm.addRequest({ loadFromGitLab(showErrors = false) }, decision.delayMs)
+            }
+            RetryPolicy.Verdict.BLOCK_AUTH -> {
+                val reason = decision.blocked ?: RetryPolicy.AUTH_BLOCK
+                retryState.block(reason, currentHead(), settingsFingerprint())
+                CoveragePerfLog.event("covd.blocked", "reason" to reason, "code" to (code ?: "-"))
+                log.warn("Coverage: blocked ($reason) — no retries until the settings change")
+                CoverageNotifier.getInstance(project).notifyAuthInvalid()
+            }
+            RetryPolicy.Verdict.STOP_UNTIL_CHANGE -> {
+                val reason = decision.blocked ?: (RetryPolicy.NON_RETRYABLE_PREFIX + code)
+                retryState.block(reason, currentHead(), settingsFingerprint())
+                CoveragePerfLog.event("covd.blocked", "reason" to reason, "code" to (code ?: "-"))
+                log.warn("Coverage: blocked ($reason) — the poller waits for a HEAD or settings change")
+            }
+            RetryPolicy.Verdict.NONE -> {
+                if (retryable) {
+                    if (!exhaustedNotified) {
+                        exhaustedNotified = true
+                        log.warn(
+                            "Coverage: retries exhausted (${retryState.attempt}/${retryPolicy.maxAttempts}) " +
+                                "— showing the notification",
+                        )
+                        CoverageNotifier.getInstance(project).notifyRetryExhausted(message)
+                    } else {
+                        log.info("Coverage: retries still exhausted — notification already shown")
+                    }
+                }
+            }
+        }
+        finishLoad(onComplete)
     }
 
     /** Applies a `ready` answer: the daemon already wrote the COV4 files. */
@@ -346,6 +502,7 @@ class CoverageLoadService(private val project: Project) {
         }
 
         lastError = null
+        resetFailureState()
 
         CoveragePerfLog.event(
             "covd.ready",
@@ -421,6 +578,7 @@ class CoverageLoadService(private val project: Project) {
             dataService.setCov4Reader(reader)
             log.info("Coverage: loaded from cache for commit ${commitHash.take(8)} (component=$component, ${reader.allFilePaths.size} files)")
             lastError = null
+            resetFailureState()
 
             ApplicationManager.getApplication().invokeLater {
                 CoverageHighlighter.applyToOpenEditors(project)
@@ -468,6 +626,7 @@ class CoverageLoadService(private val project: Project) {
                     val reader = cache.get(commit, component, gitRoot) ?: Cov4Reader(File(cov4Path))
                     dataService.setCov4Reader(reader)
                     lastError = null
+                    resetFailureState()
                     log.info(
                         "Coverage: imported ${file.name} as commit ${commit.take(8)} " +
                             "(${response.stats?.files} files, component=$component)",
@@ -504,6 +663,31 @@ class CoverageLoadService(private val project: Project) {
     }
 
     // --- local git helpers --------------------------------------------------------
+
+    /** HEAD of the repository the current failure state belongs to. */
+    private fun currentHead(): String? {
+        val root = CoverageDataService.getInstance(project).gitRoot ?: findGitRoot() ?: return null
+        return GitCommand.run(root, "rev-parse", "HEAD")
+    }
+
+    /**
+     * Fingerprint of the settings that affect a load: a change means an old block is stale.
+     * The token contributes to the hash but is never logged or stored anywhere else.
+     */
+    private fun settingsFingerprint(): String {
+        val settings = CoverageApiSettings.getInstance()
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.update(
+            listOf(
+                settings.enabled,
+                settings.gitlabDomain,
+                settings.gitlabProjectId,
+                settings.coverageBranch,
+                settings.bearerToken,
+            ).joinToString("\u0000").toByteArray(Charsets.UTF_8),
+        )
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     private fun computeAndStoreWarningContext(gitRoot: File) {
         val dataService = CoverageDataService.getInstance(project)

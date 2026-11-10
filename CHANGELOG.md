@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- Retry a coverage load that fails on a transient daemon or GitLab error three times (5 s / 15 s / 45 s, never sooner than the daemon asks) and then show a "Coverage Notifications" balloon with *Retry now* and *Show log*; a new balloon replaces the old one
+- Stop retrying an expired or invalid GitLab token: a sticky balloon offers *Update token…*, the 30 s poller and the HEAD tracker stay quiet until the token, the domain or the HEAD changes, and applying the settings loads again without an IDE restart
+- Stop asking GitLab every 30 seconds for a deterministic failure (`NO_COMPONENT_JOBS`, `NO_DATA`, `PROJECT_SETUP`, `GIT`): the poller waits for a new HEAD or changed settings, and a manual *Load Coverage from GitLab* always bypasses the block
+- Add test/diagnostics knobs `-Dcoverage.retry.delaysMs=500,1500,4500` and `-Dcoverage.uiTestCommands=<file>`; the UI-test snapshot reports `retryAttempt`, `retryMax`, `blocked`, `notifications` and `lastCommand`
 - Add real-project diagnostics: `-Dcoverage.cacheRoot` and `-Dcoverage.perf.dir` relocate the covd cache and the perf log, `-Dcoverage.covdResponses=<dir>` saves every `ensure`/`import` answer (never the token), the daemon trace now keeps its GitLab calls and errors, the perf log gains `covd.response`/`covd.spawn`/`ev=covdsample` (pid, RSS, CPU, threads, VSZ of the daemon), and the UI-test snapshot reports `loading`, `coverageGeneration`, `dumb`, `covdInstanceId` and `covdPid`
 - Start the covd daemon once when several coverage requests arrive together (a cold client used to spawn one process per caller), and restart it once, not once per caller, after it exits
 - Handle daemon answers by HTTP status: an error without a `state` (for example an expired daemon token) is reported as an error instead of an empty state, and a non-JSON reply from a proxy is reported as "daemon unavailable" instead of failing with a parser exception
