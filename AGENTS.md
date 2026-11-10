@@ -45,7 +45,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `GitLabProjectsClient.kt` | Minimal REST client used only by the settings screen to list/search the projects the token can access. Retries timeouts/`5xx` (3 attempts, growing pause, 2-minute budget) and throws `IOException` on failure; JSON fields are mapped with `@SerialName` (`path_with_namespace`, `web_url`). Blocking: call it from a pooled thread |
 | `GitCommand.kt` | Read-only `git` wrapper: HEAD, recent commits, merge-base, `rev-list --count` for the "behind by N" warnings |
 | `GitLabCoordinator.kt` | App-level (`Service.Level.APP`) LRU of shared `Cov4Reader` instances plus `evictSharedReaders()` after a cache rewrite |
-| `CovdClient.kt` | Client for the coverage daemon: binary extraction, handshake, `ensure`, `import`, artifact listing/deletion |
+| `CovdClient.kt` | Client for the coverage daemon: binary extraction, handshake (daemon starts are serialized, so concurrent callers share one process and one restart), `ensure`, `import`, artifact listing/deletion. Non-2xx answers without a `state` become `error`; a non-JSON body becomes `Unavailable`. Typed `trace` in `EnsureResponse`. `internal` test seams: `binaryOverride`, `cacheRootOverride`, `extraDaemonArgs`, timeouts, `startCount`, `resetForTest()` |
 
 ### Loading pipeline
 | File | Purpose |
@@ -152,7 +152,7 @@ The **New Coverage** tab needs a baseline: without one it shows "Dual-coverage m
 
 ## Flow
 
-On startup, HEAD change, settings save, or the 30-second poll: `loadOfflineFirst()` shows any cached artifact immediately (stale), then `loadFromGitLab()` sends one `ensure` to covd. The daemon resolves the pipeline (current branch → coverage branch → merge-base tiers), waits for coverage jobs, downloads the COVT shards, merges them, writes the `.cov4` files and updates the index; the plugin attaches readers to the returned paths. `not_ready` answers are retried after `retryAfterMs`; `error` answers map to user-facing messages by code.
+On startup, HEAD change, settings save, or the 30-second poll: `loadOfflineFirst()` shows any cached artifact immediately (stale), then `loadFromGitLab()` sends one `ensure` to covd. The daemon resolves the primary pipeline from the branch / HEAD SHA and, when a coverage branch is set, the baseline from that branch (merge-base first, then its ancestors; a baseline never replaces a missing primary), waits for coverage jobs, downloads the COVT shards, merges them, writes the `.cov4` files and updates the index; the plugin attaches readers to the returned paths. `not_ready` answers are retried after `retryAfterMs`; `error` answers map to user-facing messages by code.
 
 The daemon is shared by every IDE instance and keyed by `--cache-dir`; identical concurrent `ensure` calls are coalesced inside it. The plugin never writes the cache index and never downloads artifacts itself. All auto-loading is skipped when gutter visibility is off.
 
@@ -220,6 +220,16 @@ GITLAB_TOKEN_FROM_IDE=1 ./scripts/ui-test.sh   # real-IDE UI scenario (see "UI t
   ($platformVersion) with the plugin installed and runs
   `com.github.yakov255.perlinecoverageinfo.heavy.*` (`BasePlatformTestCase`).
   `test` filters that package out, so the default suite stays fast.
+- **covd integration tests** (`src/test/kotlin/.../covd/`, run by plain `./gradlew test`): the real
+  `covd` binary against `FakeGitLab` (a JDK `HttpServer` serving pipelines, jobs, the artifact and
+  `merge_base`) with a temporary git repository and `--cache-dir`. `CovdTestBase` finds the binary
+  in `-Dcovd.dist` / `COVD_DIST` / the sibling `coverage-assistant/dist/covd` and skips the tests
+  when none exists. `CovdFakeDaemonContractTest` needs no binary: a fake daemon behind a shell
+  wrapper checks handshake, auth header, restart and status handling. Fixtures:
+  `src/test/resources/covd/`. `heavy.HeavyCovdLoadTest` drives `CoverageLoadService` end to end
+  through the same pieces inside the IDE (the heavyTest classpath has no test resources, so its
+  COVT fixtures are embedded as base64). `CoverageApiSettings.gitlabDomain` accepts an explicit
+  `http://host:port` for such tests.
 - `testIde` has its own platform configuration: it does not inherit the project-level
   `platformBundledPlugins`. `heavyTest` therefore declares them again, plus the plugins and
   modules PHP/Gherkin depend on (`org.intellij.intelliLang`, `com.intellij.modules.json`,
@@ -339,7 +349,7 @@ Rules:
 - **Daemon-only pipeline**: the plugin never talks to GitLab pipelines or artifacts; every load goes through `CovdClient.ensure()`. `ComponentConfig.detectComponent()` supplies `component` and `jobPrefixes` for that request.
 - **Coverage CI job prefixes**: coverage archives are published by `test:behat:coverage:<component>` jobs; the daemon gets both prefixes and prefers the dedicated one. `ComponentEntry.jobName` is the component token.
 - **Raketa coverage paths**: the daemon normalizes them (`pathMode: "raketa"`); the plugin still normalizes while reading pre-upgrade caches. If `SERVICE_DIR` changes in the raketa CI, update both `coverage-assistant/internal/linecov/normalize.go` and `CoveragePathNormalizer`.
-- **Waiting and fallback** live in covd: it waits for running coverage jobs, falls back to the baseline pipeline, and reports `not_ready` with `reason`/`retryAfterMs` (the plugin retries).
+- **Waiting and fallback** live in covd: it waits for running coverage jobs, serves the newest older ready pipeline as `stale` while the latest is unfinished, and reports `not_ready` with `reason`/`retryAfterMs` (the plugin retries).
 - **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.
 - **Threading**: `ensure` runs on a pooled thread; daemon answers are applied to data services there and UI updates go through `invokeLater`.
 - **Errors**: daemon `code`/`cause`/`hint` drive the user-facing message in `CoverageLoadService`; auto-triggered callers only log.
