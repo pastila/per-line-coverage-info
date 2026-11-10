@@ -416,8 +416,11 @@ internal class Analysis(val data: RunData) {
             .eachCount()
         val pids = spawns.mapNotNull { it.long("pid") }.distinct().sorted()
             .ifEmpty { data.covdSamples.mapNotNull { it.long("pid") }.distinct().sorted() }
+        // The perf log carries the first 8 characters of the instance id, the bridge the full
+        // id: compare by the 8-character prefix or one daemon shows up as two instances.
         val instances = (spawns.mapNotNull { it.str("instance") } +
             data.snapshots.mapNotNull { it.covdInstanceId })
+            .map { it.take(8) }
             .distinct()
             .sorted()
         return DaemonStats(

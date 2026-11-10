@@ -568,7 +568,7 @@ val realProjectTest by tasks.registering(Test::class) {
     for (name in listOf(
         "realProject.scenario", "realProject.runs", "realProject.worktree", "realProject.plan",
         "realProject.repo", "realProject.gitlab", "realProject.projectId", "realProject.pipelines",
-        "realProject.pauseMs", "realProject.ide",
+        "realProject.pauseMs", "realProject.ide", "realProject.tour", "realProject.r8.branches",
     )) {
         providers.gradleProperty(name).orNull?.let { systemProperty(name, it) }
     }
