@@ -8,12 +8,9 @@ import com.intellij.util.messages.Topic
 /**
  * Project-level service holding per-line coverage data.
  *
- * Supports two modes:
- * - **In-memory**: coverage loaded from .covt download or local file (setCoverageAll)
- * - **Reader-backed**: coverage read on demand from a .cov4 cache file (setCov4Reader)
- *
- * The reader-backed mode avoids loading all coverage into memory — individual files
- * are parsed from the .cov4 binary only when an editor requests them.
+ * Coverage is read on demand from a `.cov4` cache file ([setCov4Reader]): individual files
+ * are parsed from the binary only when an editor requests them, so a large dataset is never
+ * loaded into memory at once. Dual-coverage mode adds a second baseline reader.
  */
 @Service(Service.Level.PROJECT)
 class CoverageDataService(private val project: Project) {
@@ -25,9 +22,6 @@ class CoverageDataService(private val project: Project) {
     var coverageGeneration: Long = 0
         private set
 
-    /** In-memory coverage: file-path → (line-number → list-of-test-names) */
-    private val data = mutableMapOf<String, Map<Int, List<String>>>()
-
     /** COV4 reader for disk-cached coverage (lazy per-file parsing) */
     private var cov4Reader: Cov4Reader? = null
 
@@ -36,17 +30,6 @@ class CoverageDataService(private val project: Project) {
 
     /** The commit hash that coverage data was loaded from. */
     var coverageCommitHash: String? = null
-        private set
-
-    /**
-     * The pipeline whose coverage load was last applied, including a load that fell back
-     * to the baseline artifact. The pipeline poller uses this to avoid reloading the same
-     * pipeline forever when the loaded data commit differs from the pipeline commit.
-     */
-    var handledPipelineId: Long? = null
-        private set
-    @Volatile
-    var handledPipelineSha: String? = null
         private set
 
     /** Commit hash of the baseline (master) coverage, when in dual-coverage mode. */
@@ -77,29 +60,11 @@ class CoverageDataService(private val project: Project) {
     var baselineBehindBy: Int? = null
         private set
 
-    fun setCoverage(filePath: String, lines: Map<Int, List<String>>) {
-        data[filePath] = lines
-    }
-
-    /**
-     * Sets in-memory coverage data (from .covt download or local file).
-     * Closes any existing COV4 reader.
-     */
-    fun setCoverageAll(allData: Map<String, Map<Int, List<String>>>) {
-        log.info("CoverageDataService: setCoverageAll — ${allData.size} files")
-        closeCov4Reader()
-        data.clear()
-        data.putAll(allData)
-        notifyChanged()
-    }
-
     /**
      * Sets a COV4 reader for on-demand file coverage (from disk cache).
-     * Clears any in-memory data.
      */
     fun setCov4Reader(reader: Cov4Reader) {
         closeCov4Reader()
-        data.clear()
         cov4Reader = reader
         log.info("Coverage: using COV4 reader with ${reader.allFilePaths.size} files")
         notifyChanged()
@@ -147,31 +112,22 @@ class CoverageDataService(private val project: Project) {
     }
 
     /**
-     * Gets coverage for a file. Checks in-memory data first, then COV4 reader.
+     * Gets coverage for a file from the COV4 reader.
      */
-    fun getCoverage(filePath: String): Map<Int, List<String>>? {
-        data[filePath]?.let { return it }
-        return cov4Reader?.getCoverage(filePath)
-    }
+    fun getCoverage(filePath: String): Map<Int, List<String>>? = cov4Reader?.getCoverage(filePath)
 
     /**
      * Returns all file paths with coverage data.
      */
-    fun allFiles(): Set<String> {
-        if (data.isNotEmpty()) return data.keys
-        return cov4Reader?.allFilePaths ?: emptySet()
-    }
+    fun allFiles(): Set<String> = cov4Reader?.allFilePaths ?: emptySet()
 
     fun clear() {
-        log.info("CoverageDataService: clearing — commit=${coverageCommitHash?.take(8)}, files=${if (data.isNotEmpty()) data.size else cov4Reader?.allFilePaths?.size}")
+        log.info("CoverageDataService: clearing — commit=${coverageCommitHash?.take(8)}, files=${cov4Reader?.allFilePaths?.size}")
         closeCov4Reader()
         closeBaselineReader()
         baselineReader = null
         baselineCommitHash = null
-        data.clear()
         coverageCommitHash = null
-        handledPipelineId = null
-        handledPipelineSha = null
         gitRoot = null
         isStale = false
         mergeBaseHash = null
@@ -182,33 +138,13 @@ class CoverageDataService(private val project: Project) {
         notifyChanged()
     }
 
-    fun hasData(): Boolean = data.isNotEmpty() || cov4Reader != null
-
-    /**
-     * Records the pipeline whose result was applied, so the poller can tell that this
-     * pipeline was already processed even when the loaded commit is the baseline commit.
-     */
-    fun markPipelineHandled(pipelineId: Long, sha: String) {
-        handledPipelineId = pipelineId
-        handledPipelineSha = sha
-        log.info("CoverageDataService: pipeline $pipelineId (${sha.take(8)}) marked as handled")
-    }
-
-    /**
-     * Forgets the handled pipeline when the loaded data changes, so a "handled" flag
-     * never describes a commit that is no longer loaded.
-     */
-    private fun clearHandledPipeline() {
-        handledPipelineId = null
-        handledPipelineSha = null
-    }
+    fun hasData(): Boolean = cov4Reader != null
 
     fun setCoverageContext(commitHash: String, gitRoot: java.io.File, stale: Boolean = false) {
         log.info("CoverageDataService: setCoverageContext — commit=${commitHash.take(8)}, stale=$stale, gitRoot=$gitRoot")
         this.coverageCommitHash = commitHash
         this.gitRoot = gitRoot
         this.isStale = stale
-        clearHandledPipeline()
         // Drop old-content cache entries from previous commits so the LRU stays focused on
         // files relevant to the currently active coverage. Keep the baseline commit warm too.
         val keep = setOfNotNull(commitHash, baselineCommitHash)
