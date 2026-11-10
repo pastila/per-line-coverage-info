@@ -17,7 +17,9 @@ import git4idea.repo.GitRepositoryChangeListener
 class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeListener, Disposable {
 
     private val log = CoverageLog.get(CoverageHeadTracker::class.java)
-    private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
+    // This listener is not a registered Disposable owner, so the project is the Alarm's parent;
+    // dispose() below still cancels pending requests when the tracker is released explicitly.
+    private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, project)
 
     @Volatile
     private var lastKnownRevision: String? = null
