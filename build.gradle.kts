@@ -538,3 +538,39 @@ tasks.named<JavaExec>("runIdeForUiTests") {
             .orEmpty()
     }
 }
+
+// ---- Real-project testing ("тестирование на реальном проекте") ----
+// Load/failure scenarios that drive a sandbox IDE and the covd daemon against the real raketa
+// repository through a reflecting proxy (see docs/real-project-testing.md). A plain JVM Test
+// task: it starts and stops IDE processes itself, so it is never part of `test`.
+val realProjectSourceSet: SourceSet = sourceSets.create("realProject")
+
+val realProjectImplementation: Configuration by configurations.getting
+val realProjectRuntimeOnly: Configuration by configurations.getting
+
+dependencies {
+    realProjectImplementation(libs.junit)
+    realProjectImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1")
+}
+
+val realProjectTest by tasks.registering(Test::class) {
+    group = "verification"
+    description = "Runs real-project load and failure scenarios (long; needs a licensed sandbox IDE and network)"
+    testClassesDirs = realProjectSourceSet.output.classesDirs
+    classpath = realProjectSourceSet.runtimeClasspath
+    useJUnit()
+    // Scenarios share network, CPU and memory: never run them in parallel.
+    maxParallelForks = 1
+    outputs.upToDateWhen { false }
+    systemProperty("realProject.outputDir", layout.buildDirectory.dir("real-project").get().asFile.absolutePath)
+    systemProperty("realProject.projectDir", layout.projectDirectory.asFile.absolutePath)
+    // Optional knobs forwarded from -P / the environment (never the GitLab token).
+    for (name in listOf(
+        "realProject.scenario", "realProject.runs", "realProject.worktree", "realProject.plan",
+        "realProject.repo", "realProject.gitlab", "realProject.projectId", "realProject.pipelines",
+        "realProject.pauseMs", "realProject.ide",
+    )) {
+        providers.gradleProperty(name).orNull?.let { systemProperty(name, it) }
+    }
+    testLogging { events("passed", "failed", "skipped"); showStandardStreams = true }
+}
