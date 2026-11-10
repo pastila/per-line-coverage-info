@@ -107,3 +107,30 @@ Content (the token is never present; `settings.token` is not written):
 | R8 | Cache growth and `--max-cache-bytes` | Size and eviction recorded |
 | F1 | Network cut during download (once; permanent) | Retries (5/15/45 s), then a balloon with Retry / Show log |
 | F2 | Token expired (401 from request N, also mid-download) | No retry loop; balloon "token expired" opens settings; new token loads without restart |
+
+## Failure handling contract (F1, F2)
+
+Agreed behaviour (implemented in the plugin, verified by the F scenarios):
+
+* **Retryable daemon errors** (`retryable=true`, codes `CONNECTION` / `GITLAB_API`) and a daemon that
+  cannot be reached: automatic silent retries, 3 of them, after 5 s / 15 s / 45 s (never sooner than the
+  daemon's `retryAfterMs`). After the last one a **balloon** in the `Coverage Notifications` group with
+  the actions *Retry now* and *Show log*. The counter resets on success, on HEAD change and on a settings change.
+* **Token problems** (`AUTH_INVALID`; also `ACCESS_DENIED`): no retries. A sticky balloon
+  "GitLab token expired or invalid" with the action *Update token…* (opens Settings → Tools → GitLab
+  Coverage). While blocked, the 30 s poller and the HEAD tracker do not call the daemon; applying the
+  settings (a new token or domain) clears the block and loads again without an IDE restart.
+* **Deterministic errors** (`NO_COMPONENT_JOBS`, `NO_DATA`, `PROJECT_SETUP`, `GIT`): the poller stops
+  asking for the same HEAD until HEAD or the settings change (today it asks GitLab every 30 s forever).
+  No balloon; `lastError` stays visible in the bridge.
+* One balloon per kind at a time (a new one replaces the old one).
+
+Test hooks (inert unless the properties are set):
+
+| Property | Meaning |
+|---|---|
+| `-Dcoverage.retry.delaysMs=500,1500,4500` | Replaces the 5/15/45 s retry delays |
+| `-Dcoverage.uiTestCommands=<file>` | The bridge polls the file (every 250 ms), runs new lines once: `reload` (loadOfflineFirst), `settings.token=<value>` (store a token in the app settings), `settings.apply` (the Apply path of the settings page: load again, clear the auth block) |
+
+Bridge snapshot additions: `retryAttempt`, `retryMax`, `blocked` (`null` | `AUTH` | `NON_RETRYABLE:<code>`),
+`notifications` (array of `{title, content, type, actions:[label], atMs}`, last 20), `lastCommand`.
