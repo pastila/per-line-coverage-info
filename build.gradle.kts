@@ -256,6 +256,81 @@ tasks.withType(org.gradle.api.tasks.testing.Test::class.java).configureEach {
     systemProperty("coverage.perf.log", "false")
 }
 
+// Heavy tests run against the real IDE home: without it the platform treats itself as
+// Community, so bundled modules (com.intellij.modules.ultimate) and plugins stay unloaded.
+// Resolved lazily (when the heavyTest JVM arguments are built), so that `./gradlew tasks` and
+// every other task work without a downloaded platform or network.
+val heavyIdeHomeProvider: Provider<String> =
+    providers.provider { intellijPlatform.platformPath.toFile().absolutePath }
+
+// Extra JVM arguments for IDE-launching tasks (javaagent, --add-opens). They are machine-local
+// and never live in this file or in the repository: set ideaSandboxJvmArgs in
+// ~/.gradle/gradle.properties (space-separated), e.g.
+//   ideaSandboxJvmArgs=-javaagent:/absolute/path/agent.jar=options --add-opens=java.base/x.y=ALL-UNNAMED
+// or pass the same value in the IDEA_SANDBOX_JVM_ARGS environment variable.
+val sandboxExtraJvmArgs = providers.gradleProperty("ideaSandboxJvmArgs")
+    .orElse(providers.environmentVariable("IDEA_SANDBOX_JVM_ARGS"))
+    .map { raw -> raw.trim().split(Regex("\\s+")).filter { it.isNotEmpty() } }
+
+// runIde uses its own sandbox config, which has no license: without one the platform disables
+// JetBrains Ultimate, PHP and therefore this plugin. Copy the local IDE license (never commit
+// it) into the sandbox before the IDE starts.
+val ideConfigRootPath = File(System.getProperty("user.home"), ".config/JetBrains").absolutePath
+val runIdeSandboxPath = layout.projectDirectory.dir(".intellijPlatform/sandbox/${project.name}").asFile.absolutePath
+
+val syncIdeLicense by tasks.registering {
+    group = "intellij platform"
+    description = "Copies the local IDE license into the runIde sandbox and enables JetBrains Ultimate"
+    mustRunAfter(tasks.named("prepareSandbox"))
+    notCompatibleWithConfigurationCache("walks the local IDE config and sandbox directories")
+
+    // Local copies: referencing script-level properties from a task action breaks the
+    // configuration cache (the script object is not serializable).
+    val licenseSourceRoot = ideConfigRootPath
+    val sandboxRoot = runIdeSandboxPath
+
+    doLast {
+        val licenseNames = listOf("idea.key", "phpstorm.key", "plugin_PCWMP.license")
+        val candidates = File(licenseSourceRoot)
+            .listFiles()
+            ?.filter { it.isDirectory && (it.name.startsWith("IntelliJIdea") || it.name.startsWith("PhpStorm")) }
+            ?.filter { dir -> licenseNames.any { File(dir, it).isFile } }
+            ?.sortedByDescending { it.name }
+            .orEmpty()
+
+        // Each license file comes from the newest local config that has it: the sandbox IDE is
+        // IntelliJ IDEA Ultimate and needs idea.key, which a PhpStorm config does not carry.
+        val licenseFiles = licenseNames.mapNotNull { name ->
+            candidates.map { File(it, name) }.firstOrNull { it.isFile }
+        }
+
+        if (licenseFiles.isEmpty()) {
+            return@doLast
+        }
+
+        val targets = File(sandboxRoot)
+            .listFiles()
+            ?.filter { it.isDirectory }
+            // config: runIde; config_runIdeForUiTests: the isolated sandbox of the UI test IDE.
+            ?.flatMap { product -> listOf(File(product, "config"), File(product, "config_runIdeForUiTests")) }
+            ?.filter { it.isDirectory || it.mkdirs() }
+            .orEmpty()
+
+        for (configDir in targets) {
+            for (license in licenseFiles) {
+                license.copyTo(File(configDir, license.name), overwrite = true)
+            }
+            val disabled = File(configDir, "disabled_plugins.txt")
+            if (disabled.isFile) {
+                val remaining = disabled.readLines().filterNot { it.trim() == "com.intellij.modules.ultimate" }
+                disabled.writeText(remaining.joinToString("\n"))
+            }
+        }
+        // No logger call here: Gradle script references are not serializable by the
+        // configuration cache.
+    }
+}
+
 intellijPlatformTesting {
     runIde {
         register("runIdeForUiTests") {
@@ -275,4 +350,43 @@ intellijPlatformTesting {
             }
         }
     }
+
+    // Heavy integration tests run inside a full IDE process with the plugin installed.
+    testIde {
+        register("heavyTest") {
+            plugins {
+                // testIde gets its own platform configuration, so bundled plugins declared
+                // for the regular test task must be declared again here.
+                bundledPlugins(providers.gradleProperty("platformBundledPlugins").map { it.split(',') })
+                // Dependencies of the PHP/Gherkin plugins: the test IDE loads only the
+                // plugins listed here, not the whole product bundle.
+                bundledPlugins("org.intellij.intelliLang", "com.intellij.modules.json")
+                bundledModules("com.intellij.modules.ultimate")
+            }
+
+            task {
+                group = "verification"
+                description = "Runs heavy integration tests in a full IDE process"
+                useJUnit()
+                filter { includeTestsMatching("com.github.yakov255.perlinecoverageinfo.heavy.*") }
+                systemProperty("coverage.perf.log", "false")
+                jvmArgumentProviders += CommandLineArgumentProvider {
+                    listOf("-Didea.home.path=${heavyIdeHomeProvider.get()}")
+                }
+                sandboxExtraJvmArgs.orNull?.let { jvmArgs(it) }
+                maxHeapSize = "2g"
+            }
+        }
+    }
+}
+
+// The default unit-test task stays fast: heavy tests need the IDE process.
+tasks.test {
+    filter { excludeTestsMatching("com.github.yakov255.perlinecoverageinfo.heavy.*") }
+}
+
+// Registered after intellijPlatformTesting { ... }, which creates the runIde* tasks.
+tasks.named<JavaExec>("runIde") {
+    dependsOn(syncIdeLicense)
+    sandboxExtraJvmArgs.orNull?.let { jvmArgs(it) }
 }
