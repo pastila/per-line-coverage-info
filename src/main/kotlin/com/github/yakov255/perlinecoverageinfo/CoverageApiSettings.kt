@@ -58,8 +58,14 @@ class CoverageApiSettings : PersistentStateComponent<CoverageApiSettings.State> 
         get() = state.tokenPrompted
         set(value) { state.tokenPrompted = value }
 
+    /** `https://<domain>`, unless the domain already names a scheme (`http://host:8080` for a plain-HTTP GitLab). */
     val gitlabBaseUrl: String
-        get() = "https://${state.gitlabDomain.trimEnd('/')}"
+        get() {
+            val domain = state.gitlabDomain.trim().trimEnd('/')
+            val hasScheme = domain.startsWith("http://", ignoreCase = true) ||
+                domain.startsWith("https://", ignoreCase = true)
+            return if (hasScheme) domain else "https://$domain"
+        }
 
     companion object {
         fun getInstance(): CoverageApiSettings = service()

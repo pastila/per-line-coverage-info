@@ -27,8 +27,8 @@ class CoverageCacheService(private val project: Project) {
 
     private fun cacheDir(): File {
         val settings = CoverageApiSettings.getInstance()
-        val home = System.getProperty("user.home")
-        return File(home, ".cache/coverage-plugin/${settings.gitlabProjectId}")
+        val root = cacheRootOverride ?: File(System.getProperty("user.home"), ".cache/coverage-plugin")
+        return File(root, settings.gitlabProjectId.toString())
     }
 
     private fun cov4FileName(commitHash: String, component: String): String =
@@ -138,6 +138,10 @@ class CoverageCacheService(private val project: Project) {
     }
 
     companion object {
+        /** Test seam: replaces `~/.cache/coverage-plugin`. Production code never sets it. */
+        @Volatile
+        internal var cacheRootOverride: File? = null
+
         fun getInstance(project: Project): CoverageCacheService = project.service()
     }
 }
