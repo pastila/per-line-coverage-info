@@ -2,6 +2,11 @@ package com.github.yakov255.perlinecoverageinfo
 
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -33,7 +38,7 @@ object CovdClient {
     private const val BINARY_VERSION = 1
 
     private val log = CoverageLog.get(CovdClient::class.java)
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; coerceInputValues = true }
     private val handshakeRef = AtomicReference<Handshake?>(null)
     private val processRef = AtomicReference<Process?>(null)
 
@@ -57,6 +62,8 @@ object CovdClient {
             if (!process.waitFor(3, TimeUnit.SECONDS)) process.destroyForcibly()
         }
         handshakeRef.set(null)
+        CovdProcessSampler.stop()
+        CovdResponseRecorder.resetForTest()
         binaryOverride = null
         cacheRootOverride = null
         extraDaemonArgs = emptyList()
@@ -69,6 +76,15 @@ object CovdClient {
 
     /** The current connection, or null before the first request. */
     internal fun currentHandshakeForTest(): Handshake? = handshakeRef.get()
+
+    /** The current connection, or null before the first request. */
+    fun currentConnection(): Handshake? = handshakeRef.get()
+
+    /**
+     * PID of the daemon this IDE talks to: our own child process, or the process that owns the
+     * handshake port when the daemon belongs to another IDE. Null when it cannot be resolved.
+     */
+    fun daemonPid(): Long? = processRef.get()?.takeIf { it.isAlive }?.pid() ?: CovdProcessSampler.knownPid()
 
     /** The child process started by this client, or null when it reused a running daemon. */
     internal fun currentProcessForTest(): Process? = processRef.get()
@@ -138,9 +154,25 @@ object CovdClient {
         val requestId: String = "",
         val joinedFlight: Boolean = false,
         val leaderRequestId: String? = null,
+        val request: TraceRequest? = null,
         val outcome: TraceOutcome? = null,
         val timing: TraceTiming? = null,
+        val gitlab: List<TraceGitlabCall> = emptyList(),
         val decisions: List<TraceDecision> = emptyList(),
+        val errors: List<TraceError> = emptyList(),
+    )
+
+    /** The request as the daemon saw it. `hasToken` is a flag: the token itself is never echoed. */
+    @Serializable
+    data class TraceRequest(
+        val projectId: String = "",
+        val component: String = "",
+        val gitRoot: String = "",
+        val head: String = "",
+        val coverageBranch: String = "",
+        val jobPrefixes: List<String> = emptyList(),
+        val hasToken: Boolean = false,
+        val proxy: String = "",
     )
 
     @Serializable
@@ -154,9 +186,32 @@ object CovdClient {
         val parseMs: Long = 0,
         val mergeMs: Long = 0,
         val writeMs: Long = 0,
+        val saveMs: Long = 0,
         val baselineMs: Long = 0,
         val totalMs: Long = 0,
         val resolveAttempts: Int = 0,
+    )
+
+    /** One GitLab API call: no `status` means no answer came back; the reason is in [errors]. */
+    @Serializable
+    data class TraceGitlabCall(
+        val atMs: Long = 0,
+        val method: String = "",
+        val path: String = "",
+        val status: Int? = null,
+        val ms: Long = 0,
+        val bytes: Long = 0,
+        val attempt: Int = 0,
+        val error: String? = null,
+    )
+
+    @Serializable
+    data class TraceError(
+        val scope: String = "",
+        val code: String = "",
+        val message: String = "",
+        val detail: String? = null,
+        val retryable: Boolean = false,
     )
 
     @Serializable
@@ -244,13 +299,14 @@ object CovdClient {
     fun import(request: ImportRequest): ImportResponse {
         val handshake = handshake(forceRestart = false)
         val body = json.encodeToString(ImportRequest.serializer(), request)
+        val startedNs = System.nanoTime()
         val response = try {
             request("POST", "/v1/import", handshake, body, ensureTimeoutMs)
         } catch (e: java.io.IOException) {
             val restarted = handshake(forceRestart = true, stale = handshake)
             request("POST", "/v1/import", restarted, body, ensureTimeoutMs)
         }
-        return parseImport(response.first, response.second)
+        return completeImport(request, response.first, response.second, elapsedMs(startedNs))
     }
 
     /** Lists cached artifacts, or null when the daemon is unavailable. */
@@ -306,15 +362,21 @@ object CovdClient {
                 if (pingMatches(existing)) return existing
             }
         }
+        val startedNs = System.nanoTime()
         synchronized(startLock) {
             val current = handshakeRef.get()
-            if (current != null && current != stale && pingMatches(current)) return current
+            if (current != null && current != stale && pingMatches(current)) {
+                // Another caller (this IDE or none) already has a live connection: adopt it.
+                logSpawn("reuse", current, elapsedMs(startedNs))
+                CovdProcessSampler.start(current.port)
+                return current
+            }
             handshakeRef.compareAndSet(current, null)
-            return startDaemon()
+            return startDaemon(if (forceRestart || stale != null) "restart" else "spawn", startedNs)
         }
     }
 
-    private fun startDaemon(): Handshake {
+    private fun startDaemon(how: String, startedNs: Long): Handshake {
         val binary = binary() ?: throw Unavailable("no covd binary for ${platformId()}")
         val cacheDir = cacheRoot().apply { mkdirs() }
         val process = try {
@@ -343,6 +405,10 @@ object CovdClient {
         if (!pingMatches(handshake)) {
             throw Unavailable("covd handshake points at a process that does not answer")
         }
+        // A losing start prints the live daemon's line and exits: that start was a reuse, not a spawn.
+        val effectiveHow = if (how == "spawn" && !process.isAlive) "reuse" else how
+        logSpawn(effectiveHow, handshake, elapsedMs(startedNs))
+        CovdProcessSampler.start(handshake.port)
         log.info("covd: connected on port ${handshake.port} (instance ${handshake.instanceId.take(8)})")
         return handshake
     }
@@ -372,9 +438,134 @@ object CovdClient {
 
     private fun postEnsure(handshake: Handshake, request: EnsureRequest): EnsureResponse {
         val body = json.encodeToString(EnsureRequest.serializer(), request)
+        val startedNs = System.nanoTime()
         val response = request("POST", "/v1/ensure", handshake, body, ensureTimeoutMs)
-        return parseEnsure(response.first, response.second)
+        return completeEnsure(request, response.first, response.second, elapsedMs(startedNs))
     }
+
+    /** Saves the raw answer, then decodes it and records the answer in the perf log. */
+    private fun completeEnsure(request: EnsureRequest, status: Int, text: String, elapsedMs: Long): EnsureResponse {
+        val seq = CovdResponseRecorder.record(
+            "ensure",
+            elapsedMs,
+            status,
+            ensureRequestSnapshot(request),
+            text,
+            request.settings.token,
+        )
+        val parsed = try {
+            parseEnsure(status, text)
+        } catch (e: Unavailable) {
+            logCovdResponse("ensure", seq, null, null, status, elapsedMs)
+            throw e
+        }
+        logCovdResponse("ensure", seq, parsed, parsed.trace, status, elapsedMs)
+        return parsed
+    }
+
+    private fun completeImport(request: ImportRequest, status: Int, text: String, elapsedMs: Long): ImportResponse {
+        val seq = CovdResponseRecorder.record(
+            "import",
+            elapsedMs,
+            status,
+            importRequestSnapshot(request),
+            text,
+            null,
+        )
+        val parsed = try {
+            parseImport(status, text)
+        } catch (e: Unavailable) {
+            logCovdResponse("import", seq, null, null, status, elapsedMs)
+            throw e
+        }
+        logCovdResponse("import", seq, parsed, null, status, elapsedMs)
+        return parsed
+    }
+
+    /** The request as it is saved next to the answer: enough to reproduce it, never the token. */
+    private fun ensureRequestSnapshot(request: EnsureRequest): JsonObject = buildJsonObject {
+        put("component", request.component)
+        put("projectId", request.settings.projectId)
+        put("gitRoot", request.gitRoot)
+        put("coverageBranch", request.settings.coverageBranch)
+        put("pathMode", request.pathMode)
+        put("jobPrefixes", buildJsonArray { request.jobPrefixes.forEach { add(JsonPrimitive(it)) } })
+        put("baseUrl", request.settings.baseUrl)
+        put("force", request.force)
+    }
+
+    private fun importRequestSnapshot(request: ImportRequest): JsonObject = buildJsonObject {
+        put("covtPath", request.covtPath)
+        put("projectId", request.projectId)
+        put("component", request.component)
+        put("pathMode", request.pathMode)
+        put("gitRoot", request.gitRoot)
+    }
+
+    /**
+     * `covd.response`: one line per answer with the state, the flags and the phase timings the
+     * daemon reported. [parsed] is null when the body could not be decoded at all.
+     */
+    private fun logCovdResponse(
+        kind: String,
+        seq: Int,
+        parsed: Any?,
+        trace: Trace?,
+        httpStatus: Int,
+        elapsedMs: Long,
+    ) {
+        if (!CoveragePerfLog.isEnabled()) return
+        val ensure = parsed as? EnsureResponse
+        val import = parsed as? ImportResponse
+        val timing = trace?.timing
+        val gitlab = trace?.gitlab.orEmpty()
+        CoveragePerfLog.event(
+            "covd.response",
+            "kind" to kind,
+            "seq" to seq,
+            "state" to (ensure?.state ?: import?.state ?: "-"),
+            "code" to (ensure?.code ?: import?.code ?: "-"),
+            "commit" to ((ensure?.commit ?: import?.commit)?.take(8) ?: "-"),
+            "cached" to (ensure?.cached == true),
+            "replaced" to (ensure?.replaced == true),
+            "stale" to (ensure?.stale == true),
+            "joinedFlight" to (trace?.joinedFlight == true),
+            "requestId" to (trace?.requestId?.takeIf { it.isNotBlank() } ?: "-"),
+            "httpStatus" to httpStatus,
+            "elapsedMs" to elapsedMs,
+            "totalMs" to (timing?.totalMs ?: -1L),
+            "resolveMs" to (timing?.resolveMs ?: -1L),
+            "downloadMs" to (timing?.downloadMs ?: -1L),
+            "parseMs" to (timing?.parseMs ?: -1L),
+            "mergeMs" to (timing?.mergeMs ?: -1L),
+            "writeMs" to (timing?.writeMs ?: -1L),
+            "baselineMs" to (timing?.baselineMs ?: -1L),
+            "gitlabCalls" to gitlab.size,
+            "gitlabBytes" to gitlab.sumOf { it.bytes },
+            "gitlabErrors" to (trace?.errors?.size ?: 0),
+        )
+    }
+
+    /** `covd.spawn`: how this client obtained its connection, and to which process. */
+    private fun logSpawn(how: String, handshake: Handshake, startMs: Long) {
+        if (!CoveragePerfLog.isEnabled()) return
+        // Another IDE's daemon is not our child: resolve its PID from the handshake port once.
+        val pid = daemonPid() ?: try {
+            CovdProc.findPidForPort(handshake.port)
+        } catch (_: Throwable) {
+            null
+        }
+        CoveragePerfLog.event(
+            "covd.spawn",
+            "how" to how,
+            "pid" to (pid ?: "-"),
+            "port" to handshake.port,
+            "instance" to handshake.instanceId.take(8),
+            "startMs" to startMs,
+        )
+    }
+
+    private fun elapsedMs(startedNs: Long): Long = (System.nanoTime() - startedNs) / 1_000_000
 
     /**
      * Decodes an `ensure` answer. Daemon-side problems come as JSON with a non-2xx status;
@@ -472,7 +663,7 @@ object CovdClient {
 
     private fun isArm(arch: String) = arch == "aarch64" || arch == "arm64"
 
-    private fun cacheRoot(): File = cacheRootOverride ?: File(System.getProperty("user.home"), ".cache/coverage-plugin")
+    private fun cacheRoot(): File = CoveragePaths.cacheRoot(cacheRootOverride)
 
     private fun encode(value: String): String =
         java.net.URLEncoder.encode(value, Charsets.UTF_8)

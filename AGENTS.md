@@ -45,7 +45,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `GitLabProjectsClient.kt` | Minimal REST client used only by the settings screen to list/search the projects the token can access. Retries timeouts/`5xx` (3 attempts, growing pause, 2-minute budget) and throws `IOException` on failure; JSON fields are mapped with `@SerialName` (`path_with_namespace`, `web_url`). Blocking: call it from a pooled thread |
 | `GitCommand.kt` | Read-only `git` wrapper: HEAD, recent commits, merge-base, `rev-list --count` for the "behind by N" warnings |
 | `GitLabCoordinator.kt` | App-level (`Service.Level.APP`) LRU of shared `Cov4Reader` instances plus `evictSharedReaders()` after a cache rewrite |
-| `CovdClient.kt` | Client for the coverage daemon: binary extraction, handshake (daemon starts are serialized, so concurrent callers share one process and one restart), `ensure`, `import`, artifact listing/deletion. Non-2xx answers without a `state` become `error`; a non-JSON body becomes `Unavailable`. Typed `trace` in `EnsureResponse`. `internal` test seams: `binaryOverride`, `cacheRootOverride`, `extraDaemonArgs`, timeouts, `startCount`, `resetForTest()` |
+| `CovdClient.kt` | Client for the coverage daemon: binary extraction, handshake (daemon starts are serialized, so concurrent callers share one process and one restart), `ensure`, `import`, artifact listing/deletion. Non-2xx answers without a `state` become `error`; a non-JSON body becomes `Unavailable`. Typed `trace` (`request`, `timing`, `gitlab` calls, `decisions`, `errors`) in `EnsureResponse`; every `ensure`/`import` answer is handed to `CovdResponseRecorder` and logged as `covd.response`, each new connection as `covd.spawn`. `cacheRoot` honours `-Dcoverage.cacheRoot`; `currentConnection()`/`daemonPid()` are read by `CoverageUiTestBridge`. `internal` test seams: `binaryOverride`, `cacheRootOverride`, `extraDaemonArgs`, timeouts, `startCount`, `resetForTest()` |
 
 ### Loading pipeline
 | File | Purpose |
@@ -63,7 +63,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 |------|---------|
 | `Cov4Reader.kt` | Reads COV4 on demand (lazy per-file decoding, streams the index instead of loading the file); implements `Closeable`. Reloads its index when the file was replaced. Accepts optional path/test normalizers, so old raketa `.cov4` caches are normalized while reading |
 | `CoveragePathNormalizer.kt` | Normalizes raketa `.covt` keys/tests to git-root-relative paths; used when reading pre-upgrade caches (the daemon normalizes new ones) |
-| `CoverageCacheService.kt` | Read-only view of `~/.cache/coverage-plugin/<projectId>/`: `cache-index.json` + `<hash>-<component>.cov4`, reader sharing, artifact listing. Writes and deletions go through the daemon |
+| `CoverageCacheService.kt` | Read-only view of `<cacheRoot>/<projectId>/` (`-Dcoverage.cacheRoot`, default `~/.cache/coverage-plugin`): `cache-index.json` + `<hash>-<component>.cov4`, reader sharing, artifact listing. Writes and deletions go through the daemon |
 
 ### In-memory model
 | File | Purpose |
@@ -121,7 +121,10 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageLog.kt` | Logger wrapper — writes to `idea.log` **and** `CoverageLogService` |
 | `CoverageLogService.kt` | Ring buffer (2000 entries) with thread-safe subscribe/backfill |
 | `OpenCoveragePerfLogAction.kt` | Find Action: "Open Coverage Performance Log Folder" |
-| `CoverageUiTestBridge.kt` | Test-only project service, inert unless `-Dcoverage.uiTestBridge=true`. Writes a JSON snapshot (state, commit, `stale`, `headHash`, `gutterVisible`, per-line classification of `-Dcoverage.uiTestFiles`, `updatedAt`) atomically to `-Dcoverage.uiTestState=<file>` (default `~/.cache/coverage-plugin/ui-test-state.json`) so an out-of-process UI test can see what RemoteRobot cannot. Line numbers are the coverage commit's, **without** line mapping |
+| `CoverageUiTestBridge.kt` | Test-only project service, inert unless `-Dcoverage.uiTestBridge=true`. Writes a JSON snapshot (state, commit, `baselineCommit`, `loading`, `stale`, `headHash`, `coverageGeneration`, `dumb` (indexing), `covdInstanceId`, `covdPid`, `gutterVisible`, per-line classification of `-Dcoverage.uiTestFiles`, `updatedAt`) atomically to `-Dcoverage.uiTestState=<file>` (default `~/.cache/coverage-plugin/ui-test-state.json`) so an out-of-process UI test can see what RemoteRobot cannot. Line numbers are the coverage commit's, **without** line mapping |
+| `CoveragePaths.kt` | Resolves `-Dcoverage.cacheRoot` (default `~/.cache/coverage-plugin`), `-Dcoverage.perf.dir` (default `<cacheRoot>/perf`) and `-Dcoverage.covdResponses` (off by default); the test seams of `CovdClient`/`CoverageCacheService` still win |
+| `CovdResponseRecorder.kt` | Saves every `ensure`/`import` answer to `-Dcoverage.covdResponses=<dir>` as `<seq:04d>-<yyyyMMdd-HHmmss-SSS>-<kind>-<state>.json`: request fields (never the GitLab token, which is also scrubbed), HTTP status, elapsed ms and the daemon's body unmodified. Off by default; write errors only go to the log |
+| `CovdProcessSampler.kt` | 1 Hz `ev=covdsample` samples (pid, RSS, CPU %, threads, VSZ) of the covd process. The daemon may belong to another IDE, so the PID comes from the handshake port via `/proc/net/tcp(6)` → socket inode → `/proc/*/fd`; Linux only, daemon thread, stopped by `CovdClient.resetForTest()` |
 
 ## Dual-coverage mode
 
@@ -159,7 +162,7 @@ The daemon is shared by every IDE instance and keyed by `--cache-dir`; identical
 - `CovdClient` treats `connection refused` as "daemon exited after idle timeout": it starts a new process and retries the request once. The daemon is never shut down by the plugin.
 - `ensure` and `import` use an 11-minute read timeout; `ping`/artifact calls use 3 seconds.
 
-Cache layout is per component (`~/.cache/coverage-plugin/<projectId>/<hash>-<component>.cov4`). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
+Cache layout is per component (`<cacheRoot>/<projectId>/<hash>-<component>.cov4`, cache root `~/.cache/coverage-plugin` or `-Dcoverage.cacheRoot`). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
 
 ## MCP
 
@@ -189,7 +192,7 @@ it resolves the pipeline in GitLab, downloads the COVT shards, merges them and w
   Resource layout: `/bin/<platform>/covd[.exe]`, platforms `linux-x64`, `linux-arm64`,
   `mac-x64`, `mac-arm64`, `win-x64`.
 - `CovdClient` extracts the binary to `~/.cache/coverage-plugin/bin-covd-<ver>/`, starts it
-  with `--cache-dir ~/.cache/coverage-plugin`, and reads the single stdout handshake line
+  with `--cache-dir ~/.cache/coverage-plugin` (`-Dcoverage.cacheRoot` replaces both paths), and reads the single stdout handshake line
   (`{"covdReady":{port,token,instanceId}}`). It never calls `/v1/shutdown`: the daemon is
   shared by all IDE instances and exits on its idle timeout.
 - `loadWithCovd` posts `/v1/ensure` with `gitRoot`, `component`, `pathMode`, `jobPrefixes`
@@ -315,12 +318,24 @@ Log tab):
 - `ev=counter` — aggregated count/avg/max/total for high-frequency work, flushed once per second.
 - `ev=sample` — 1 Hz samples: heap used/committed/max, non-heap, threads, process CPU %, load
   average, GC deltas, JVM uptime.
+- `ev=covdsample` — 1 Hz while a daemon is known: `pid rssMb cpuPct threads vszMb` of the covd
+  process (another IDE's child included; resolved through `/proc` by the handshake port).
+- `covd.response` events — per `ensure`/`import` answer: `kind seq state code commit cached
+  replaced stale joinedFlight requestId httpStatus elapsedMs` plus the daemon's `totalMs
+  resolveMs downloadMs parseMs mergeMs writeMs baselineMs gitlabCalls gitlabBytes gitlabErrors`.
+- `covd.spawn` events — how the connection was obtained (`how=spawn|reuse|restart`), `pid port
+  instance startMs`.
 
 Enabled by default; `-Dcoverage.perf.log=false` disables it and Gradle sets it for unit tests.
 Find Action **Open Coverage Performance Log Folder** reveals the directory. Instrumented:
 `load.offlineFirst`, `covd.ensure`/`covd.ready`/`covd.notReady`/`covd.error`, `poll.tick`,
 `cov4.open`, `highlight.*`, `linemap.gitShow`, and `plugin.start` (JVM args, `-Xmx`).
 Artifact parsing, merging and writing are measured by covd's own trace, not here.
+
+Diagnostics properties (contract: `docs/real-project-testing.md`): `-Dcoverage.cacheRoot=<dir>`
+moves the covd cache and the extracted binary (the daemon is shared per cache root),
+`-Dcoverage.perf.dir=<dir>` moves the perf log, `-Dcoverage.covdResponses=<dir>` saves the raw
+daemon answers. All are off by default; a normal run never sets them.
 
 ## Release
 
@@ -345,7 +360,7 @@ Rules:
 - **Logging**: `private val log = CoverageLog.get(Foo::class.java)` — never `Logger.getInstance` directly.
 - **Paths**: canonical key is git-root-relative (e.g. `api/hotels/src/Foo.php`). `LineMappingService.toGitRelativePath` converts project-relative → git-relative. Feature paths in test names are also git-root-relative; strip with `CoverageTestNavigator.toProjectRelativeFeaturePath`.
 - **Line numbers**: 1-based throughout.
-- **Cache key**: commit hash + component (not pipeline ID). Files: `<hash>-<component>.cov4` under `~/.cache/coverage-plugin/<projectId>/`.
+- **Cache key**: commit hash + component (not pipeline ID). Files: `<hash>-<component>.cov4` under `<cacheRoot>/<projectId>/` (`~/.cache/coverage-plugin` unless `-Dcoverage.cacheRoot`).
 - **Daemon-only pipeline**: the plugin never talks to GitLab pipelines or artifacts; every load goes through `CovdClient.ensure()`. `ComponentConfig.detectComponent()` supplies `component` and `jobPrefixes` for that request.
 - **Coverage CI job prefixes**: coverage archives are published by `test:behat:coverage:<component>` jobs; the daemon gets both prefixes and prefers the dedicated one. `ComponentEntry.jobName` is the component token.
 - **Raketa coverage paths**: the daemon normalizes them (`pathMode: "raketa"`); the plugin still normalizes while reading pre-upgrade caches. If `SERVICE_DIR` changes in the raketa CI, update both `coverage-assistant/internal/linecov/normalize.go` and `CoveragePathNormalizer`.

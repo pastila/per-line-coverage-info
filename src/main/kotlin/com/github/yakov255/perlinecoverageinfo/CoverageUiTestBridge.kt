@@ -4,6 +4,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
+import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.util.Alarm
 import kotlinx.serialization.json.JsonElement
@@ -116,9 +117,23 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
             put("files", dataService.allFiles().size)
             put("artifacts", artifacts)
             put("error", lastError.toJson())
+            put("lastError", lastError.toJson())
+            put("loading", loadService.isLoadInProgress())
+            put("coverageGeneration", dataService.coverageGeneration)
+            put("dumb", isDumb())
+            put("covdInstanceId", CovdClient.currentConnection()?.instanceId.toJson())
+            put("covdPid", CovdClient.daemonPid()?.let { JsonPrimitive(it) } ?: JsonNull)
             put("lines", classifyLines(dataService, requestedFiles()))
             put("updatedAt", System.currentTimeMillis())
         }
+    }
+
+    /** Indexing state: a scenario that measures memory must wait until it is over. */
+    private fun isDumb(): Boolean = try {
+        DumbService.getInstance(project).isDumb
+    } catch (e: Exception) {
+        log.info("UI test bridge: DumbService unavailable: ${e.message}")
+        false
     }
 
     /** Only the fallback shape, so a bridge bug can never break the IDE. */
@@ -129,6 +144,12 @@ class CoverageUiTestBridge(private val project: Project) : Disposable {
         put("files", 0)
         put("artifacts", 0)
         put("error", t.message ?: t.javaClass.name)
+        put("lastError", t.message ?: t.javaClass.name)
+        put("loading", false)
+        put("coverageGeneration", 0)
+        put("dumb", false)
+        put("covdInstanceId", JsonNull)
+        put("covdPid", JsonNull)
         put("lines", buildJsonObject {})
         put("updatedAt", System.currentTimeMillis())
     }

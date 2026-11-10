@@ -67,6 +67,26 @@ object CoveragePerfLog {
     /** File currently being written, or `null` when disabled/not yet started. */
     fun currentFile(): File? = logFile
 
+    /**
+     * Test seam: closes the current log and starts the next write in a fresh file. Production
+     * never calls it; the perf log lives as long as the IDE process.
+     */
+    internal fun resetForTest() {
+        synchronized(logLock) {
+            try {
+                stream?.flush()
+                stream?.close()
+            } catch (_: Throwable) {
+                // Nothing to flush when the file was never opened.
+            }
+            stream = null
+            logFile = null
+            writtenBytes = 0
+            truncated = false
+        }
+        enabled = false
+    }
+
     /** Directory that holds the per-run performance logs. */
     fun directory(): File = perfDir()
 
@@ -200,6 +220,29 @@ object CoveragePerfLog {
         }
     }
 
+    /**
+     * `ev=covdsample`: point-in-time numbers of the covd process (not of this JVM), written once
+     * per second while a daemon is known. CPU is the delta between two samples.
+     */
+    fun covdSample(pid: Long, rssMb: Double, cpuPct: Double, threads: Int, vszMb: Double) {
+        if (!enabled) return
+        try {
+            writeLine(
+                listOf(
+                    "ev=covdsample",
+                    "pid=$pid",
+                    "rssMb=${fmt(rssMb)}",
+                    "cpuPct=${fmt(cpuPct)}",
+                    "threads=$threads",
+                    "vszMb=${fmt(vszMb)}",
+                )
+            )
+            touch()
+        } catch (_: Throwable) {
+            // Never break the caller because of diagnostics.
+        }
+    }
+
     /** Forces the current process to a heap snapshot line, useful at phase boundaries. */
     fun heapSnapshot(name: String) {
         if (!enabled) return
@@ -300,11 +343,7 @@ object CoveragePerfLog {
         }
     }
 
-    private fun perfDir(): File {
-        val override = System.getProperty("coverage.perf.dir")
-        if (!override.isNullOrBlank()) return File(override)
-        return File(System.getProperty("user.home"), ".cache/coverage-plugin/perf")
-    }
+    private fun perfDir(): File = CoveragePaths.perfDir()
 
     /** Keeps the newest logs only; the directory otherwise grows by a file per IDE run. */
     private fun pruneOldLogs(dir: File) {

@@ -27,7 +27,7 @@ class CoverageCacheService(private val project: Project) {
 
     private fun cacheDir(): File {
         val settings = CoverageApiSettings.getInstance()
-        val root = cacheRootOverride ?: File(System.getProperty("user.home"), ".cache/coverage-plugin")
+        val root = CoveragePaths.cacheRoot(cacheRootOverride)
         return File(root, settings.gitlabProjectId.toString())
     }
 

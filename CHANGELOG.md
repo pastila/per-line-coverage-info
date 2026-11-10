@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- Add real-project diagnostics: `-Dcoverage.cacheRoot` and `-Dcoverage.perf.dir` relocate the covd cache and the perf log, `-Dcoverage.covdResponses=<dir>` saves every `ensure`/`import` answer (never the token), the daemon trace now keeps its GitLab calls and errors, the perf log gains `covd.response`/`covd.spawn`/`ev=covdsample` (pid, RSS, CPU, threads, VSZ of the daemon), and the UI-test snapshot reports `loading`, `coverageGeneration`, `dumb`, `covdInstanceId` and `covdPid`
 - Start the covd daemon once when several coverage requests arrive together (a cold client used to spawn one process per caller), and restart it once, not once per caller, after it exits
 - Handle daemon answers by HTTP status: an error without a `state` (for example an expired daemon token) is reported as an error instead of an empty state, and a non-JSON reply from a proxy is reported as "daemon unavailable" instead of failing with a parser exception
 - Accept an explicit scheme in the GitLab domain setting (`http://host:8080`) for GitLab instances without TLS; a bare domain still means `https://`
