@@ -15,6 +15,7 @@ PhpStorm plugin that shows per-line PHP coverage inline in the editor. CI collec
 src/main/kotlin/com/github/yakov255/perlinecoverageinfo/   # plugin source
 src/test/kotlin/com/github/yakov255/perlinecoverageinfo/   # unit tests
 src/main/resources/META-INF/plugin.xml                     # manifest (+ behat-integration.xml, git-integration.xml)
+src/main/resources/bin/<platform>/covd[.exe]               # committed covd binaries (+ covd-manifest.properties)
 php-behat-coverage-extension/                              # PHP ext that emits .covt
 coverage_storage_format_v4.md                              # COV4 binary spec
 ```
@@ -207,11 +208,19 @@ it resolves the pipeline in GitLab, downloads the COVT shards, merges them and w
 `.cov4` cache, so none of that work touches the IDE JVM.
 
 - Binaries are built there with `make build-covd-all` (`dist/covd/covd-<os>-<arch>[.exe]`) and
-  bundled here by `copyCovdBinaries`: pass `-PcovdDist=/path/to/dist/covd` (or `COVD_DIST`);
-  without it the task copies nothing and the plugin degrades to the in-process pipeline.
-  Resource layout: `/bin/<platform>/covd[.exe]`, platforms `linux-x64`, `linux-arm64`,
-  `mac-x64`, `mac-arm64`, `win-x64`.
-- `CovdClient` extracts the binary to `~/.cache/coverage-plugin/bin-covd-<ver>/`, starts it
+  **committed here** under `src/main/resources/bin/<platform>/covd[.exe]` (platforms `linux-x64`,
+  `linux-arm64`, `mac-x64`, `mac-arm64`, `win-x64`, ~37 MB together), so every build, CI included,
+  ships a daemon. Refresh them with `scripts/update-covd.sh [dist-dir]` (it checks the dist
+  `SHA256SUMS`, renames the files and rewrites `covd-manifest.properties` with the covd version and the
+  SHA-256 of each binary) and commit the result alone as `Update covd to <version>`: every update adds
+  ~37 MB to the history. The `verifyCovdBinaries` task (a dependency of `buildPlugin`, `prepareSandbox`
+  and `check`) fails the build when a binary is missing, too small, not an executable of its platform or
+  does not match the manifest; `BundledCovdTest` checks the same on the classpath.
+  `-PcovdDist=/path/to/dist/covd` (or `COVD_DIST`) overrides the committed binaries for a local
+  experiment with an unreleased covd (the manifest check is skipped then).
+- `CovdClient` extracts the binary to `~/.cache/coverage-plugin/bin-covd-<sha256 prefix>/` (named after the
+  content, so an updated plugin never reuses an older covd; written through a temp file and an atomic move,
+  a file of the wrong size is replaced), starts it
   with `--cache-dir ~/.cache/coverage-plugin` (`-Dcoverage.cacheRoot` replaces both paths), and reads the single stdout handshake line
   (`{"covdReady":{port,token,instanceId}}`). It never calls `/v1/shutdown`: the daemon is
   shared by all IDE instances and exits on its idle timeout.
@@ -246,8 +255,8 @@ GITLAB_TOKEN_FROM_IDE=1 ./scripts/ui-test.sh   # real-IDE UI scenario (see "UI t
 - **covd integration tests** (`src/test/kotlin/.../covd/`, run by plain `./gradlew test`): the real
   `covd` binary against `FakeGitLab` (a JDK `HttpServer` serving pipelines, jobs, the artifact and
   `merge_base`) with a temporary git repository and `--cache-dir`. `CovdTestBase` finds the binary
-  in `-Dcovd.dist` / `COVD_DIST` / the sibling `coverage-assistant/dist/covd` and skips the tests
-  when none exists. `CovdFakeDaemonContractTest` needs no binary: a fake daemon behind a shell
+  in `-Dcovd.dist` / `COVD_DIST` / the sibling `coverage-assistant/dist/covd`, then falls back to the
+  committed `src/main/resources/bin/<platform>/covd`, so these tests do not skip. `CovdFakeDaemonContractTest` needs no binary: a fake daemon behind a shell
   wrapper checks handshake, auth header, restart and status handling. Fixtures:
   `src/test/resources/covd/`. `heavy.HeavyCovdLoadTest` drives `CoverageLoadService` end to end
   through the same pieces inside the IDE (the heavyTest classpath has no test resources, so its
@@ -320,11 +329,8 @@ GITLAB_TOKEN_FROM_IDE=1 ./scripts/ui-test.sh   # real-IDE UI scenario (see "UI t
   - Not covered: Affected / New Coverage tabs beyond their presence, dual-coverage filters.
   - `uiTest` is a plain `Test` task and uses `--add-opens java.base/java.lang` so RemoteRobot's
     Gson can report the IDE-side error instead of `InaccessibleObjectException`.
-- `covd` binaries are **not committed** (`src/main/resources/bin/` does not exist in the repo).
-  `processResources` bundles them only from `-PcovdDist=/path/to/dist/covd` or `COVD_DIST`;
-  without it the zip carries no binary and the plugin reports "coverage daemon unavailable".
-  The sibling checkout `../raketa/yakov_scripts/coverage/coverage-assistant/dist/covd` is picked
-  up automatically when present.
+- `covd` binaries are committed (see "Coverage daemon (covd)"); the plugin zip carries all five.
+  Release zips up to 2.7.1 were built without them (611 KB) and could load nothing.
 - Real end-to-end check against `gitlab.raketa.in` (project 335): install `buildPlugin`'s zip
   into a licensed IDE's user plugins directory (`~/.local/share/JetBrains/PhpStorm2026.2/per-line-coverage-info`),
   open `~/projects/raketa` and query MCP on `http://127.0.0.1:64343`. Alternatively run

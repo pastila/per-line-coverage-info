@@ -364,7 +364,7 @@ internal class Analysis(val data: RunData) {
             var bytes = 0L
             var files = 0
             cacheDir.walkTopDown()
-                .onEnter { it.name != "bin-covd" }
+                .onEnter { !it.name.startsWith("bin-covd") }
                 .filter { it.isFile }
                 .forEach { file ->
                     bytes += file.length()

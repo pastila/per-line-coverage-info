@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Bundle the covd daemon for all five platforms in the plugin zip: earlier release builds shipped without it and could not load any coverage ("daemon unavailable"); the build now fails when a binary is missing
+- Keep an updated plugin from running the daemon binary that an older version extracted: the binary is extracted to a directory named after its content, through an atomic move, so a half-written file is never used
 - Retry a coverage load that fails on a transient daemon or GitLab error three times (5 s / 15 s / 45 s, never sooner than the daemon asks) and then show a "Coverage Notifications" balloon with *Retry now* and *Show log*; a new balloon replaces the old one
 - Stop retrying an expired or invalid GitLab token: a sticky balloon offers *Update token…*, the 30 s poller and the HEAD tracker stay quiet until the token, the domain or the HEAD changes, and applying the settings loads again without an IDE restart
 - Stop asking GitLab every 30 seconds for a deterministic failure (`NO_COMPONENT_JOBS`, `NO_DATA`, `PROJECT_SETUP`, `GIT`): the poller waits for a new HEAD or changed settings, and a manual *Load Coverage from GitLab* always bypasses the block

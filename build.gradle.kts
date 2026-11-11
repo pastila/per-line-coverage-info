@@ -2,6 +2,8 @@ import org.jetbrains.changelog.Changelog
 import org.jetbrains.changelog.markdownToHTML
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask
+import java.security.MessageDigest
+import java.util.Properties
 
 plugins {
     id("java") // Java support
@@ -205,18 +207,13 @@ tasks {
     }
 }
 
-// covd binaries are produced by the coverage-assistant repository:
-//   make build-covd-all   →  dist/covd/covd-<os>-<arch>[.exe]
-// Point the build at that directory with -PcovdDist=/path/to/dist/covd (or COVD_DIST).
+// The covd binaries are committed under src/main/resources/bin/<platform>/ (refresh them with
+// scripts/update-covd.sh after `make build-covd-all` in coverage-assistant), so every build,
+// including CI, ships a daemon. -PcovdDist=/path/to/dist/covd (or COVD_DIST) replaces them for a
+// local experiment with an unreleased covd; the manifest check is skipped then.
 val covdDistDir: File? = run {
     val configured = providers.gradleProperty("covdDist").orNull ?: System.getenv("COVD_DIST")
-    if (configured != null) {
-        File(configured).takeIf { it.isDirectory }
-    } else {
-        rootProject.projectDir.parentFile
-            .resolve("raketa/yakov_scripts/coverage/coverage-assistant/dist/covd")
-            .takeIf { it.isDirectory }
-    }
+    configured?.let { File(it) }?.takeIf { it.isDirectory }
 }
 
 val covdResourceDir = layout.buildDirectory.dir("covd-resources")
@@ -247,9 +244,61 @@ val copyCovdBinaries by tasks.registering(Sync::class) {
 }
 
 tasks.named<ProcessResources>("processResources") {
-    dependsOn(copyCovdBinaries)
-    from(covdResourceDir) { into("") }
+    if (covdDistDir != null) {
+        dependsOn(copyCovdBinaries)
+        // The dist binaries are added last and win over the committed ones.
+        duplicatesStrategy = DuplicatesStrategy.INCLUDE
+        from(covdResourceDir) { into("") }
+    }
 }
+
+// Fails the build when the committed daemons are missing, damaged or out of step with the
+// manifest, so a plugin zip without a working covd can never be produced silently.
+val covdBinaryDir = layout.projectDirectory.dir("src/main/resources/bin")
+val covdOverridden = covdDistDir != null
+val verifyCovdBinaries by tasks.registering {
+    group = "verification"
+    description = "Checks the committed covd binaries against src/main/resources/bin/covd-manifest.properties"
+    inputs.dir(covdBinaryDir)
+    val binDir = covdBinaryDir.asFile
+    val overridden = covdOverridden
+    doLast {
+        if (overridden) {
+            logger.lifecycle("verifyCovdBinaries: skipped, -PcovdDist/COVD_DIST replaces the committed binaries")
+            return@doLast
+        }
+        val manifestFile = File(binDir, "covd-manifest.properties")
+        check(manifestFile.isFile) { "missing $manifestFile; run scripts/update-covd.sh" }
+        val manifest = Properties().apply { manifestFile.inputStream().use { load(it) } }
+        val expected = mapOf(
+            "linux-x64" to ("covd" to listOf(0x7F, 0x45, 0x4C, 0x46)),
+            "linux-arm64" to ("covd" to listOf(0x7F, 0x45, 0x4C, 0x46)),
+            "mac-x64" to ("covd" to listOf(0xCF, 0xFA, 0xED, 0xFE)),
+            "mac-arm64" to ("covd" to listOf(0xCF, 0xFA, 0xED, 0xFE)),
+            "win-x64" to ("covd.exe" to listOf(0x4D, 0x5A)),
+        )
+        val problems = mutableListOf<String>()
+        for ((platform, spec) in expected) {
+            val (name, magic) = spec
+            val file = File(binDir, "$platform/$name")
+            if (!file.isFile) { problems += "$platform: $file is missing"; continue }
+            if (file.length() < 1_000_000) { problems += "$platform: $file is only ${file.length()} bytes"; continue }
+            val head = file.inputStream().use { it.readNBytes(magic.size) }.map { it.toInt() and 0xFF }
+            if (head != magic) { problems += "$platform: $file is not an executable of this platform" }
+            val sha = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) { val n = input.read(buffer); if (n < 0) break; sha.update(buffer, 0, n) }
+            }
+            val actual = sha.digest().joinToString("") { "%02x".format(it) }
+            if (manifest.getProperty(platform) != actual) problems += "$platform: the manifest hash does not match $file"
+        }
+        check(problems.isEmpty()) { "covd binaries are not usable:\n  " + problems.joinToString("\n  ") + "\nRun scripts/update-covd.sh." }
+    }
+}
+
+tasks.matching { it.name == "buildPlugin" || it.name == "prepareSandbox" || it.name == "check" }
+    .configureEach { dependsOn(verifyCovdBinaries) }
 
 tasks.withType(org.gradle.api.tasks.testing.Test::class.java).configureEach {
     // Unit tests run with the performance log off; a real IDE keeps it on by default.

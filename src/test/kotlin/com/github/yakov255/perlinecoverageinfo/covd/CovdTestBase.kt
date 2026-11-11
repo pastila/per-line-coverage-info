@@ -104,6 +104,18 @@ abstract class CovdTestBase {
         const val PROJECT_ID = "1"
         const val BRANCH = "feature"
 
+        private val platformDir: String = run {
+            val os = System.getProperty("os.name").lowercase()
+            val arm = System.getProperty("os.arch").let { it.contains("aarch64") || it.contains("arm64") }
+            when {
+                os.contains("win") -> "win-x64"
+                os.contains("mac") -> if (arm) "mac-arm64" else "mac-x64"
+                arm -> "linux-arm64"
+                else -> "linux-x64"
+            }
+        }
+        private val committedName: String = if (platformDir == "win-x64") "covd.exe" else "covd"
+
         private val platformFile = when {
             System.getProperty("os.name").lowercase().contains("win") -> "covd-windows-amd64.exe"
             System.getProperty("os.name").lowercase().contains("mac") ->
@@ -124,7 +136,11 @@ abstract class CovdTestBase {
                 File(System.getProperty("user.dir"), "../raketa/yakov_scripts/coverage/coverage-assistant/dist/covd").path,
                 File(System.getProperty("user.home"), "projects/raketa/yakov_scripts/coverage/coverage-assistant/dist/covd").path,
             )
-            return roots.map { File(it, platformFile) }.firstOrNull { it.isFile && it.canExecute() }
+            val fromDist = roots.map { File(it, platformFile) }.firstOrNull { it.isFile && it.canExecute() }
+            if (fromDist != null) return fromDist
+            // The binaries committed with the plugin are always available.
+            val committed = File(System.getProperty("user.dir"), "src/main/resources/bin/$platformDir/$committedName")
+            return committed.takeIf { it.isFile && it.canExecute() }
         }
 
         /** Initialises a repository on branch [BRANCH] with one commit and returns its SHA. */

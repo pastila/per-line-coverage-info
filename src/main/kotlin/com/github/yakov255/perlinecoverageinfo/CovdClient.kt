@@ -35,7 +35,6 @@ object CovdClient {
     private const val DEFAULT_PING_TIMEOUT_MS = 3_000
     private const val DEFAULT_ENSURE_TIMEOUT_MS = 11 * 60 * 1_000
     private const val DEFAULT_HANDSHAKE_TIMEOUT_MS = 15_000L
-    private const val BINARY_VERSION = 1
 
     private val log = CoverageLog.get(CovdClient::class.java)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; coerceInputValues = true }
@@ -633,20 +632,67 @@ object CovdClient {
         binaryOverride?.let { return it.takeIf { file -> file.isFile } }
         val platform = platformId()
         val exeName = if (platform.startsWith("win")) "covd.exe" else "covd"
-        val resource = "/bin/$platform/$exeName"
-        val stream = CovdClient::class.java.getResourceAsStream(resource) ?: return null
         return try {
-            val dir = File(cacheRoot(), "bin-covd-$BINARY_VERSION")
-            dir.mkdirs()
-            val target = File(dir, exeName)
-            if (!target.isFile || target.length() == 0L) {
-                stream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
-                target.setExecutable(true, false)
-            }
-            target
+            extractBundledBinary("/bin/$platform/$exeName", exeName, cacheRoot())
         } catch (e: Throwable) {
             log.warn("covd: cannot extract bundled binary: ${e.message}")
             null
+        }
+    }
+
+    /** Extracted binaries by resource and cache root, so the 8 MB resource is read once per run. */
+    private val extractedBinaries = java.util.concurrent.ConcurrentHashMap<String, Pair<File, Long>>()
+    private val extractLock = Any()
+
+    /**
+     * Copies the bundled daemon binary out of the plugin jar and returns it, or null when this
+     * build carries none for the platform.
+     *
+     * The target directory is named after the SHA-256 of the binary (`bin-covd-<16 hex>`), so a
+     * plugin update that ships another covd never reuses an older extraction, and two plugin
+     * versions can live side by side. The copy goes to a temporary file in the same directory and is
+     * moved into place atomically: a half-written file (a crash, or a second IDE extracting at the
+     * same moment) can never be taken for a complete binary. A file that exists with the wrong size
+     * is replaced.
+     */
+    internal fun extractBundledBinary(resource: String, exeName: String, root: File): File? {
+        val key = "${root.absolutePath}|$resource"
+        extractedBinaries[key]?.let { (file, size) ->
+            if (file.isFile && file.length() == size) return file
+        }
+        synchronized(extractLock) {
+            extractedBinaries[key]?.let { (file, size) ->
+                if (file.isFile && file.length() == size) return file
+            }
+            val bytes = CovdClient::class.java.getResourceAsStream(resource)?.use { it.readBytes() } ?: return null
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            val id = digest.joinToString("") { "%02x".format(it) }.take(16)
+            val dir = File(root, "bin-covd-$id").apply { mkdirs() }
+            val target = File(dir, exeName)
+            if (!target.isFile || target.length() != bytes.size.toLong()) {
+                val temp = File(dir, "$exeName.tmp-${ProcessHandle.current().pid()}-${System.nanoTime()}")
+                try {
+                    temp.writeBytes(bytes)
+                    temp.setExecutable(true, false)
+                    try {
+                        java.nio.file.Files.move(
+                            temp.toPath(), target.toPath(),
+                            java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        )
+                    } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                        java.nio.file.Files.move(
+                            temp.toPath(), target.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        )
+                    }
+                } finally {
+                    temp.delete()
+                }
+            }
+            if (!target.canExecute()) target.setExecutable(true, false)
+            extractedBinaries[key] = target to bytes.size.toLong()
+            return target
         }
     }
 
