@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+- Coverage no longer breaks when the cache file is deleted or damaged by another IDE or an interrupted write: the affected files simply show no coverage instead of failing the whole highlighting
+- A long GitLab download inside the coverage daemon is no longer restarted after a timeout, so it cannot take twice as long or leave a second daemon process behind
+- Offline coverage is taken from the artifact of the current component, not from one cached for another component
+- Line mapping no longer diffs every file on every highlight when the file is unchanged, and files with Windows line endings map correctly
+- Coverage daemon start errors (for example a locked cache directory) are reported with their own reason instead of a generic "daemon unavailable"
+- The daemon token is no longer written to `idea.log` or the Log tab when a handshake is malformed
+- While a CI coverage job is running the plugin asks again after 5, 10, 20, 40 seconds (then every minute) instead of every second
 - A pinned coverage artifact (chosen in Artifacts or imported from a local .covt file) is no longer replaced by the 30-second refresh or by automatic retries; "Load Coverage from GitLab" and "Fetch" lift the pin and load the current commit
 - "Clear Coverage Data" now stays cleared: it stops the refresh timer and lifts the pin; coverage comes back on the next commit change, a settings change or a manual load
 - A coverage answer that arrives after you switched commits is shown as outdated and the coverage of the new commit is loaded right away, instead of being presented as up to date
