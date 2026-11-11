@@ -21,7 +21,6 @@ import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.TestActionEvent
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
-import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
@@ -187,11 +186,14 @@ class HeavyThreadingTest : BasePlatformTestCase() {
         }
 
         val activity = CoverageStartupActivity()
-        // On the EDT the dispatcher runs inline, which is exactly the production situation.
+        val done = AtomicInteger()
+        // Two projects starting together; the second one must not open another dialog.
         onEdt {
-            runBlocking { activity.promptForTokenIfNeeded(project) }
-            runBlocking { activity.promptForTokenIfNeeded(project) }
+            activity.promptForTokenIfNeeded(project) { done.incrementAndGet() }
+            activity.promptForTokenIfNeeded(project) { done.incrementAndGet() }
         }
+
+        assertEquals("both starts must continue after the prompt", 2, done.get())
 
         assertEquals("the dialog must open once per IDE run", 1, prompts.get())
         assertTrue("the dialog must run on the EDT", promptOnEdt.get())
