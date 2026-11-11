@@ -143,7 +143,9 @@ class LineMappingService(private val project: Project) {
 
         val gitPath = toGitRelativePath(relativePath) ?: return null
         val oldContent = CoveragePerfLog.counted("linemap.gitShow") {
-            GitCommand.run(gitRoot, "show", "$commitHash:$gitPath")
+            // Raw output: the file content itself, so an unchanged file compares equal to the
+            // editor text and the diff is skipped.
+            GitCommand.runRaw(gitRoot, "show", "$commitHash:$gitPath")
         }
         if (oldContent != null) {
             synchronized(oldContentCache) {

@@ -18,13 +18,20 @@ object CoverageLineMapper {
     /**
      * Computes a line mapping from old content to current content using ComparisonManager.
      *
+     * The comparison ignores the line separator: `git show` returns the blob exactly as
+     * committed (LF in the repository), while an editor on Windows may hold CRLF. Without this,
+     * every line would look changed and the whole file would be diffed on every highlight.
+     *
      * @return a map of oldLineNumber→newLineNumber for unchanged lines,
      *         or null if content is identical (no mapping needed, use raw coverage).
      */
     fun computeMappingFromContent(oldContent: String, currentContent: String): Map<Int, Int>? {
-        if (oldContent == currentContent) return null
+        if (normalizeLineSeparators(oldContent) == normalizeLineSeparators(currentContent)) return null
         return buildLineMapping(oldContent, currentContent)
     }
+
+    private fun normalizeLineSeparators(text: String): String =
+        text.replace("\r\n", "\n").replace('\r', '\n')
 
     /**
      * Builds a mapping of old 1-based line numbers → new 1-based line numbers

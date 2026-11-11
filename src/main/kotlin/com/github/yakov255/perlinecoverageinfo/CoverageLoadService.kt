@@ -46,6 +46,9 @@ class CoverageLoadService(private val project: Project) {
     private val retryPolicy = RetryPolicy()
     private val retryState = RetryState()
 
+    /** Growing wait between asks while the daemon answers `not_ready` for the same reason. */
+    private val notReadyBackoff = NotReadyBackoff()
+
     /** A balloon is shown once per retry cycle; the next poll stays silent. */
     @Volatile
     private var exhaustedNotified = false
@@ -133,9 +136,10 @@ class CoverageLoadService(private val project: Project) {
         log.info("Coverage: failure state reset after settings change")
     }
 
-    /** Counter, block and the "already notified" mark fall together. */
+    /** Counter, block, backoff and the "already notified" mark fall together. */
     private fun resetFailureState() {
         retryState.reset()
+        notReadyBackoff.reset()
         exhaustedNotified = false
     }
 
@@ -143,6 +147,9 @@ class CoverageLoadService(private val project: Project) {
     internal fun cancelRetriesForTest() {
         covdRetryAlarm.cancelAllRequests()
     }
+
+    /** Test seam: how many `not_ready` answers the backoff has seen for the current reason. */
+    internal fun notReadyBackoffStepForTest(): Int = notReadyBackoff.currentStep()
 
     /** Validates that the plugin is enabled and GitLab settings are configured. */
     fun validateSettings(): String? {
@@ -213,7 +220,7 @@ class CoverageLoadService(private val project: Project) {
         if (gitRoot != null) {
             val component = detectComponent(gitRoot)
             if (component != null) {
-                val cachedCommit = cache.findCachedCommit(getRecentCommits(gitRoot, 200))
+                val cachedCommit = cache.findCachedCommit(getRecentCommits(gitRoot, 200), component)
                 if (cachedCommit != null) {
                     val reader = cache.get(cachedCommit, component, gitRoot)
                     if (reader != null) {
@@ -401,9 +408,12 @@ class CoverageLoadService(private val project: Project) {
         }
 
         when (response.state) {
-            "ready" -> applyCovdCoverage(
-                response, gitRoot, componentName, showErrors, onComplete, onError, requestHead, pinnedAtStart,
-            )
+            "ready" -> {
+                notReadyBackoff.reset()
+                applyCovdCoverage(
+                    response, gitRoot, componentName, showErrors, onComplete, onError, requestHead, pinnedAtStart,
+                )
+            }
             "not_ready" -> {
                 if (headMoved(requestHead)) {
                     log.info("Coverage: not_ready answer is for an older HEAD — reloading for the new one")
@@ -411,10 +421,19 @@ class CoverageLoadService(private val project: Project) {
                     finishLoad(onComplete)
                     return
                 }
-                val delay = response.retryAfterMs.coerceIn(1_000, 60_000)
-                log.info("Coverage: not ready (${response.reason}), retrying in $delay ms")
+                // The daemon waits for CI jobs: back off per reason instead of asking every second.
+                val delay = notReadyBackoff.nextDelay(response.reason, response.retryAfterMs)
+                log.info(
+                    "Coverage: not ready (${response.reason}), retrying in $delay ms " +
+                        "(step ${notReadyBackoff.currentStep()})",
+                )
                 lastError = null
-                CoveragePerfLog.event("covd.notReady", "reason" to (response.reason ?: "-"), "retryMs" to delay)
+                CoveragePerfLog.event(
+                    "covd.notReady",
+                    "reason" to (response.reason ?: "-"),
+                    "retryMs" to delay,
+                    "step" to notReadyBackoff.currentStep(),
+                )
                 covdRetryAlarm.cancelAllRequests()
                 covdRetryAlarm.addRequest({ loadFromGitLab(showErrors = false) }, delay)
                 finishLoad(onComplete)
@@ -783,7 +802,7 @@ class CoverageLoadService(private val project: Project) {
         val headHash = GitCommand.run(gitRoot, "rev-parse", "HEAD")
         val coverageBranch = CoverageApiSettings.getInstance().coverageBranch.trim()
         val mergeBase = if (coverageBranch.isNotEmpty()) {
-            GitCommand.run(gitRoot, "merge-base", "HEAD", coverageBranch)
+            GitCommand.run(gitRoot, "merge-base", "--end-of-options", "HEAD", coverageBranch)
                 ?: GitCommand.run(gitRoot, "merge-base", "HEAD", "origin/$coverageBranch")
         } else {
             null

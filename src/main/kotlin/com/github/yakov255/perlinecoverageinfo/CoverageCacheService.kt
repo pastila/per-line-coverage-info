@@ -23,7 +23,10 @@ import java.io.File
 class CoverageCacheService(private val project: Project) {
 
     private val log = CoverageLog.get(CoverageCacheService::class.java)
-    private val json = Json { prettyPrint = false; ignoreUnknownKeys = false }
+
+    // The daemon may add fields to its index at any time; a new field must not make the whole
+    // cache invisible to the plugin (offline-first and the Artifacts tab read this file).
+    private val json = Json { prettyPrint = false; ignoreUnknownKeys = true }
 
     private fun cacheDir(): File {
         val settings = CoverageApiSettings.getInstance()
@@ -44,13 +47,18 @@ class CoverageCacheService(private val project: Project) {
             .toSet()
     }
 
-    /** Returns the most recent cached commit among [candidates], or null. */
-    fun findCachedCommit(candidates: List<String>): String? {
+    /**
+     * Returns the most recent cached commit of [component] among [candidates], or null.
+     *
+     * The component filter matters: a cache directory can hold artifacts of several components,
+     * and a commit cached for another component has no coverage for this one.
+     */
+    fun findCachedCommit(candidates: List<String>, component: String): String? {
         val index = readIndex() ?: return null
         val dir = cacheDir()
         val available = index.entries
+            .filter { it.component == component }
             .filter { File(dir, cov4FileName(it.commitHash, it.component)).exists() }
-            .sortedByDescending { it.lastUsedMs ?: it.timestampMs }
             .map { it.commitHash }
             .toSet()
         return candidates.firstOrNull { it in available }

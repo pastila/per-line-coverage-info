@@ -6,11 +6,18 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.File
+import java.net.ConnectException
 import java.net.HttpURLConnection
+import java.net.NoRouteToHostException
+import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.net.URL
-import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 
@@ -88,7 +95,11 @@ object CovdClient {
     /** The child process started by this client, or null when it reused a running daemon. */
     internal fun currentProcessForTest(): Process? = processRef.get()
 
-    class Unavailable(message: String) : Exception(message)
+    /**
+     * The daemon cannot be talked to. It stays an [java.io.IOException] so callers that treat a
+     * dead daemon like any other I/O failure keep working.
+     */
+    class Unavailable(message: String, cause: Throwable? = null) : java.io.IOException(message, cause)
 
     data class Handshake(val port: Int, val token: String, val instanceId: String)
 
@@ -259,16 +270,35 @@ object CovdClient {
     /**
      * Runs one `ensure`. Throws [Unavailable] when the daemon cannot be started or does not
      * answer; any daemon-side problem is returned as an `error` state instead.
+     *
+     * The daemon is restarted and the request repeated once only when the connection failed
+     * before any answer arrived (refused, reset). A read timeout means the daemon is still
+     * working on a long download: restarting it would double the wait and leave a second
+     * process behind, so it is reported as [Unavailable] right away.
      */
     fun ensure(request: EnsureRequest): EnsureResponse {
         val handshake = handshake(forceRestart = false)
         return try {
             postEnsure(handshake, request)
+        } catch (e: Unavailable) {
+            throw e
         } catch (e: java.io.IOException) {
-            // The daemon exited while we were talking to it: start it again and retry once.
-            log.info("covd: connection failed (${e.message}), restarting the daemon")
+            if (!connectionLostBeforeAnswer(e)) {
+                throw Unavailable(
+                    "covd did not answer the ensure request within ${ensureTimeoutMs} ms " +
+                        "(${e.javaClass.simpleName}: ${e.message})",
+                    e,
+                )
+            }
+            log.info("covd: connection failed before an answer (${e.message}), restarting the daemon")
             val restarted = handshake(forceRestart = true, stale = handshake)
-            postEnsure(restarted, request)
+            try {
+                postEnsure(restarted, request)
+            } catch (e2: Unavailable) {
+                throw e2
+            } catch (e2: java.io.IOException) {
+                throw Unavailable("covd did not answer after a restart (${e2.javaClass.simpleName}: ${e2.message})", e2)
+            }
         }
     }
 
@@ -302,10 +332,39 @@ object CovdClient {
         val response = try {
             request("POST", "/v1/import", handshake, body, ensureTimeoutMs)
         } catch (e: java.io.IOException) {
+            if (!connectionLostBeforeAnswer(e)) {
+                throw Unavailable(
+                    "covd did not answer the import request within ${ensureTimeoutMs} ms " +
+                        "(${e.javaClass.simpleName}: ${e.message})",
+                    e,
+                )
+            }
+            log.info("covd: connection failed before an import answer (${e.message}), restarting the daemon")
             val restarted = handshake(forceRestart = true, stale = handshake)
-            request("POST", "/v1/import", restarted, body, ensureTimeoutMs)
+            try {
+                request("POST", "/v1/import", restarted, body, ensureTimeoutMs)
+            } catch (e2: java.io.IOException) {
+                throw Unavailable("covd did not answer the import after a restart (${e2.javaClass.simpleName}: ${e2.message})", e2)
+            }
         }
         return completeImport(request, response.first, response.second, elapsedMs(startedNs))
+    }
+
+    /**
+     * True only when the failure happened before any answer byte arrived: a refused connection,
+     * a reset or a broken pipe. A [SocketTimeoutException] is a read timeout — the daemon is
+     * alive and busy — and must not restart it.
+     */
+    private fun connectionLostBeforeAnswer(e: java.io.IOException): Boolean = when (e) {
+        is SocketTimeoutException -> false
+        is ConnectException -> true
+        is NoRouteToHostException -> true
+        is SocketException -> true
+        else -> when (val cause = e.cause) {
+            is SocketTimeoutException -> false
+            is SocketException -> true
+            else -> false
+        }
     }
 
     /** Lists cached artifacts, or null when the daemon is unavailable. */
@@ -383,26 +442,40 @@ object CovdClient {
                 .redirectErrorStream(false)
                 .start()
         } catch (e: Throwable) {
-            throw Unavailable("cannot start covd: ${e.message}")
+            throw Unavailable("cannot start covd: ${e.message}", e)
         }
         processRef.set(process)
         startCount.incrementAndGet()
 
-        val line = readHandshakeLine(process)
-            ?: throw Unavailable("covd did not print a handshake line")
+        // stdout: the single handshake line, then drained. stderr: the last line matters,
+        // covd prints {"covdStartError":{...}} there when it cannot start at all.
+        val output = DaemonOutput(process)
+        output.start()
+
+        val line = output.awaitHandshake(handshakeTimeoutMs)
+        if (line == null) {
+            output.kill()
+            processRef.compareAndSet(process, null)
+            throw Unavailable("covd did not print a handshake line${output.failureDetail()}")
+        }
         val body = try {
             json.decodeFromString(HandshakeLine.serializer(), line).covdReady
         } catch (e: Throwable) {
             null
         }
         if (body == null || body.port <= 0 || body.token.isEmpty()) {
-            throw Unavailable("invalid covd handshake: $line")
+            output.kill()
+            processRef.compareAndSet(process, null)
+            throw Unavailable("invalid covd handshake: ${redactToken(line)}${output.failureDetail()}")
         }
 
         val handshake = Handshake(body.port, body.token, body.instanceId)
         handshakeRef.set(handshake)
         if (!pingMatches(handshake)) {
-            throw Unavailable("covd handshake points at a process that does not answer")
+            handshakeRef.compareAndSet(handshake, null)
+            output.kill()
+            processRef.compareAndSet(process, null)
+            throw Unavailable("covd handshake points at a process that does not answer${output.failureDetail()}")
         }
         // A losing start prints the live daemon's line and exits: that start was a reuse, not a spawn.
         val effectiveHow = if (how == "spawn" && !process.isAlive) "reuse" else how
@@ -412,17 +485,101 @@ object CovdClient {
         return handshake
     }
 
-    private fun readHandshakeLine(process: Process): String? {
-        val reader = CompletableFuture.supplyAsync {
-            process.inputStream.bufferedReader().readLine()
+    /**
+     * stdout/stderr of one daemon process.
+     *
+     * Both pipes are read on their own daemon threads. The first stdout line is the handshake;
+     * everything after it is drained so the child can never block on a full stdout buffer.
+     * Only the last stderr line is kept: covd writes its start error there exactly once.
+     */
+    private class DaemonOutput(private val process: Process) {
+
+        private val firstLine = AtomicReference<String?>(null)
+        private val ready = CountDownLatch(1)
+        private val stderrTail = AtomicReference<String?>(null)
+        private val threads = ArrayList<Thread>(2)
+
+        fun start() {
+            threads += Thread({
+                try {
+                    process.inputStream.bufferedReader().use { reader ->
+                        firstLine.set(reader.readLine())
+                        ready.countDown()
+                        while (reader.readLine() != null) {
+                            // Drain the remaining output; the handshake is the only line we use.
+                        }
+                    }
+                } catch (_: java.io.IOException) {
+                    // The process was killed or exited: nothing left to read.
+                } finally {
+                    ready.countDown()
+                }
+            }, "covd-stdout").apply {
+                isDaemon = true
+                start()
+            }
+
+            threads += Thread({
+                try {
+                    process.errorStream.bufferedReader().use { reader ->
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            if (line.isNotBlank()) stderrTail.set(line)
+                        }
+                    }
+                } catch (_: java.io.IOException) {
+                    // Same as stdout: the process is gone.
+                }
+            }, "covd-stderr").apply {
+                isDaemon = true
+                start()
+            }
         }
-        return try {
-            reader.get(handshakeTimeoutMs, TimeUnit.MILLISECONDS)
-        } catch (e: Throwable) {
-            log.warn("covd: no handshake within ${handshakeTimeoutMs} ms")
+
+        fun awaitHandshake(timeoutMs: Long): String? {
+            ready.await(timeoutMs, TimeUnit.MILLISECONDS)
+            return firstLine.get()
+        }
+
+        /** The daemon's own start error, or its last stderr line, for the [Unavailable] message. */
+        fun failureDetail(): String {
+            val line = stderrTail.get()?.trim().orEmpty()
+            if (line.isEmpty()) return ""
+            val startError = parseStartError(line)
+            return if (startError != null) {
+                " (${startError.first}: ${startError.second})"
+            } else {
+                " (stderr: ${redactToken(line)})"
+            }
+        }
+
+        /** Destroys the process and waits for both reader threads, so no thread outlives it. */
+        fun kill() {
+            process.destroy()
+            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+            threads.forEach { thread -> runCatching { thread.join(1_000) } }
+        }
+
+        /** `{"covdStartError":{"code":"LOCK","message":"..."}}` → code to message. */
+        private fun parseStartError(line: String): Pair<String, String>? = try {
+            Json.parseToJsonElement(line).jsonObject["covdStartError"]?.jsonObject?.let { error ->
+                val code = error["code"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val message = error["message"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                if (code.isEmpty() && message.isEmpty()) null else code.ifEmpty { "START" } to message
+            }
+        } catch (_: Throwable) {
             null
         }
     }
+
+    /**
+     * Masks the daemon token in a line that is about to be logged or shown. The token is a
+     * secret of the running daemon; a malformed handshake must not publish it.
+     */
+    internal fun redactToken(line: String): String =
+        TOKEN_PATTERN.replace(line) { match -> "${match.groupValues[1]}***${match.groupValues[2]}" }
+
+    private val TOKEN_PATTERN = Regex("(\"token\"\\s*:\\s*\")[^\"]*(\")")
 
     private fun pingMatches(handshake: Handshake): Boolean {
         return try {
