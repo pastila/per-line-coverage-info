@@ -4,6 +4,10 @@
 
 ## [Unreleased]
 
+- A pinned coverage artifact (chosen in Artifacts or imported from a local .covt file) is no longer replaced by the 30-second refresh or by automatic retries; "Load Coverage from GitLab" and "Fetch" lift the pin and load the current commit
+- "Clear Coverage Data" now stays cleared: it stops the refresh timer and lifts the pin; coverage comes back on the next commit change, a settings change or a manual load
+- A coverage answer that arrives after you switched commits is shown as outdated and the coverage of the new commit is loaded right away, instead of being presented as up to date
+- Fewer rare glitches with simultaneous loads and editor repaints: the coverage state is now updated atomically
 - Bundle the covd daemon for all five platforms in the plugin zip: earlier release builds shipped without it and could not load any coverage ("daemon unavailable"); the build now fails when a binary is missing
 - Keep an updated plugin from running the daemon binary that an older version extracted: the binary is extracted to a directory named after its content, through an atomic move, so a half-written file is never used
 - Retry a coverage load that fails on a transient daemon or GitLab error three times (5 s / 15 s / 45 s, never sooner than the daemon asks) and then show a "Coverage Notifications" balloon with *Retry now* and *Show log*; a new balloon replaces the old one

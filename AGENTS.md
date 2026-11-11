@@ -52,13 +52,13 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Loading pipeline
 | File | Purpose |
 |------|---------|
-| `CoverageLoadService.kt` | Orchestrator: `loadOfflineFirst(manual)` (cache walk → stale display → daemon refresh), `loadFromGitLab(showErrors, onComplete, onError, bypassBlock)` (one `ensure` against covd; `ready`/`not_ready`/`error` handling), `loadFromLocalFile()` (daemon `import`), `loadFromCache()` (pinned artifact). Applies the failure contract through `RetryPolicy`/`RetryState`: retry counter and block (`retryAttempt`, `retryMax`, `blockedReason()`), delayed retries on the shared `covdRetryAlarm`, reset on success/HEAD change/settings change, manual load bypasses both. Applies readers to `CoverageDataService` and computes the "behind by" warning context |
+| `CoverageLoadService.kt` | Orchestrator: `loadOfflineFirst(manual)` (cache walk → stale display → daemon refresh), `loadFromGitLab(showErrors, onComplete, onError, bypassBlock)` (one `ensure` against covd; `ready`/`not_ready`/`error` handling), `loadFromLocalFile()` (daemon `import`), `loadFromCache()` (pinned artifact). Applies the failure contract through `RetryPolicy`/`RetryState`: retry counter and block (`retryAttempt`, `retryMax`, `blockedReason()`), delayed retries on the shared `covdRetryAlarm`, reset on success/HEAD change/settings change, manual load bypasses both. Applies readers to `CoverageDataService` and computes the "behind by" warning context `loading`/`pendingReload` are `AtomicBoolean`s; `isPinned()`/`clearPin()`/`onCleared()`. An answer whose request HEAD differs from the current HEAD is applied as `stale`, raises no "Coverage updated" notice, leaves the retry/block state alone and queues a reload for the new HEAD. `loadFromLocalFile` pins the imported commit |
 | `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden. Calls `CoverageLoadService.onHeadChanged()` so a block never outlives its commit |
 | `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; logged JVM arguments for the perf log |
-| `CoveragePipelinePoller.kt` | 30-second tick that asks the daemon again; no GitLab logic. Skipped while a load is in progress or while `CoverageLoadService.isBlocked()` holds, and disabled when the gutter is hidden |
+| `CoveragePipelinePoller.kt` | 30-second tick that asks the daemon again; no GitLab logic. Skipped while a load is in progress or while `CoverageLoadService.isBlocked()` holds, and disabled when the gutter is hidden Also skipped while a coverage artifact is pinned |
 | `LoadCoverageAction.kt` | Find Action: "Load Coverage from GitLab" |
 | `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz), imported through the daemon |
-| `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" |
+| `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" — stops the poller, lifts the pin, drops the retry alarm and the queued reload, clears the data |
 
 ### On-disk format
 | File | Purpose |
@@ -70,7 +70,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### In-memory model
 | File | Purpose |
 |------|---------|
-| `CoverageDataService.kt` | Holds active coverage: primary `Cov4Reader` + optional baseline `Cov4Reader`; tracks commit hashes, git root, stale flag, warning context (`headHash`, `mergeBaseHash`, behind-by counters) and `coverageGeneration` for cache invalidation. `Cov4Reader` only — no in-memory coverage map |
+| `CoverageDataService.kt` | Holds active coverage as one immutable `@Volatile` `Snapshot` (primary/baseline `Cov4Reader`, commits, gitRoot, stale, headHash, mergeBase, behind-by), replaced whole under a lock; `snapshot()` gives a consistent view and the old properties are thin getters. `setCoverage(commit, gitRoot, stale, reader)` sets context and reader in one step. `coverageGeneration` is an `AtomicLong`, +1 per change. `Cov4Reader` only — no in-memory coverage map |
 | `CoverageWarningService.kt` | Per-generation cache of "coverage is from an older commit" warnings: primary vs `HEAD`, baseline vs merge-base, with behind-by counts; formats plain text and HTML for the Affected tab banner |
 | `LineMappingService.kt` | Maps old coverage line numbers to current document lines via `git show` + `ComparisonManager` diff; supports both primary and baseline commits; LRU cache of file contents |
 | `CoverageLineMapper.kt` | Pure functions: diff old/new content, build old→new line map |
@@ -83,7 +83,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageGutterRenderer.kt` | Gutter strip coloured by `CoverageCategory`; tooltip shows count of feature-only tests; click opens "Covering Line" panel |
 | `CoverageEditorListener.kt` | Applies highlights on editor open; re-applies on document change (debounced 300 ms) |
 | `CoverageGutterVisibilityService.kt` | Persists gutter visible/hidden toggle across restarts; gates all loading activity when hidden |
-| `CoverageUserSelectionService.kt` | Persists pinned commit hash (user-selected artifact survives IDE restart) |
+| `CoverageUserSelectionService.kt` | Persists the pinned commit hash. While a pin is set, automatic loads (poller, retry alarm, pending reload, HEAD tracker, startup) neither call the daemon nor replace the data. Cleared by "Load Coverage from GitLab", Fetch, Clear Coverage Data, or when the pinned artifact is missing from the cache |
 | `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Toggle coverage gutter project-wide; hide also stops pipeline poller, show triggers `loadOfflineFirst()` |
 | `CoverageIcons.kt` | Green/red icon constants |
 
@@ -402,6 +402,9 @@ Rules:
 - **Threading**: `ensure` runs on a pooled thread; daemon answers are applied to data services there and UI updates go through `invokeLater`.
 - **Errors**: daemon `code`/`cause`/`hint` drive the user-facing message in `CoverageLoadService`; auto-triggered callers only log. Retry/block decisions live in `RetryPolicy` only — do not branch on codes elsewhere.
 - **Failure state**: `RetryState` is keyed by a settings fingerprint (and by HEAD for deterministic errors); `CoverageHeadTracker.onHeadChanged()` resets everything except a token block, `CoverageSettingsActions.afterSettingsApplied()` resets all of it. The poller and auto-loads must call `CoverageLoadService.isBlocked()`; a manual load passes `bypassBlock = true`.
+- **Pin**: the pin protects the shown artifact from every automatic path. Automatic callers use `CoverageLoadService.isPinned()` together with `isBlocked()`. Only explicit user actions (`LoadCoverageAction`, Fetch, Clear) call `clearPin()`; a local `.covt` import and "Load" of an artifact set the pin.
+- **Stale answers**: `CoverageLoadService` remembers `currentHead()` before `ensure`. Never treat a response as fresh, and never reset `RetryState` for it, when HEAD moved meanwhile.
+- **Data service**: change `CoverageDataService` state only through its snapshot update (`update { }` / `setCoverage`); do not add separate `@Volatile` fields.
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.
