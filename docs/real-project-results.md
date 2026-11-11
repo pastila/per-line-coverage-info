@@ -63,7 +63,18 @@ run directory found nothing.
    `HEAD` lives under `.git/worktrees/...`, outside the project. A regular checkout was not measured.
 4. **Some master commits produce a `.cov4` with a single fake test `app/raketa/1`** (7 MB instead of
    107 MB with 18 k tests). On such commits "Covering Line" shows one fictitious test and the blue/green
-   split against the baseline is skewed. Looks like the data or the merge in covd.
+   split against the baseline is skewed. Confirmed on 2026-11-11: the original
+   `coverage-reports/coverage.covt.gz` from pipeline 2362676, job 14044870, already contains
+   exactly one test identifier, `app/raketa/1`. Names are lost in CI before covd reads the
+   artifact. The cause was confirmed in `raketa-libraries/behat-coverage-per-line-report` 1.0.2
+   with `php-code-coverage` 14.5.1: `lineCoverageData()` now maps interned test indices to hit
+   counts, but the reporter treated those counts as test names. The producer fix resolves the
+   map keys through `ProcessedCodeCoverageData::testIds()` and preserves the legacy name-list
+   format. A local run of the reported Client API feature then produced its two real scenario
+   identifiers (`:53`, `:116`), and the IDE watcher loaded both. CI needs a release of that library.
+   The plugin shows an explanation for already-broken numeric-session reports and offers no
+   navigation or Run actions for them. Cache commit `690b7a9592af82e6ad764317a8297c9c81189d84`
+   still contains 17,969 named tests and can be selected explicitly in Artifacts.
 5. covd writes `cache-index.json.branch = <coverage branch>` for every entry (`ensure.go:713`), so the
    Artifacts "branch" column is useless.
 6. The plugin sends `component = api/hotels` (the service dir, cache file `<sha>-api_hotels.cov4`) while

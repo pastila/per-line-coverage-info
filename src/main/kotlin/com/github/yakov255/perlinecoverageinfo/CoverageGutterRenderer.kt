@@ -72,7 +72,8 @@ class FileCoverageRenderer(
             g2.fillRect(r.x, paintY, stripWidth, paintH)
 
             if (tests.isNotEmpty()) {
-                val label = minOf(tests.size, 99).toString()
+                val namedCount = tests.count { !CoverageTestIdentity.isAnonymous(it) }
+                val label = if (namedCount == 0) "•" else minOf(namedCount, 99).toString()
                 g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
                 g2.color = Color.WHITE
                 g2.font = Font(Font.MONOSPACED, Font.BOLD, (paintH * 0.65f).toInt().coerceIn(7, 10))
@@ -126,11 +127,14 @@ class FileCoverageRenderer(
             if (newCount > 0) "$newCount new on this branch" else null,
             if (localCount > 0) "$localCount from local run" else null,
         ).joinToString(", ").let { if (it.isEmpty()) "" else " ($it)" }
+        val namedCount = tests.count { !CoverageTestIdentity.isAnonymous(it) }
         val base = if (tests.isEmpty()) {
             if (withWarnings) "Line $line: not covered" else "Line $line not covered"
+        } else if (namedCount == 0) {
+            "Line $line: covered; report has no test names"
         } else {
-            if (withWarnings) "Line $line covered by ${tests.size} test(s)$suffix"
-            else "Line $line covered by ${tests.size} tests$suffix"
+            if (withWarnings) "Line $line covered by $namedCount test(s)$suffix"
+            else "Line $line covered by $namedCount tests$suffix"
         }
         val warningText = warnings?.formatPlain()
         return when {

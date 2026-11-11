@@ -132,7 +132,7 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
     private fun refreshDisplay() {
         val displayed = computeDisplayedTests()
         val featureOnlyCount = if (currentHasBaseline) {
-            CoverageDiff.featureOnly(currentPrimary, currentBaseline).size
+            CoverageDiff.featureOnly(currentPrimary, currentBaseline).count { !CoverageTestIdentity.isAnonymous(it) }
         } else 0
 
         val fileName = currentFilePath.substringAfterLast("/")
@@ -140,10 +140,13 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
         val commitInfo = buildCommitInfo(dataService)
         val newSuffix = if (featureOnlyCount > 0) " <span style='color:#5078d8'>[+$featureOnlyCount new]</span>" else ""
 
+        val namedCount = displayed.count { !CoverageTestIdentity.isAnonymous(it) }
         titleLabel.text = if (currentPrimary.isEmpty()) {
             "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — not covered$commitInfo</html>"
+        } else if (currentPrimary.all(CoverageTestIdentity::isAnonymous)) {
+            "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — covered, test names unavailable$commitInfo</html>"
         } else {
-            "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — ${displayed.size} test(s)$newSuffix$commitInfo</html>"
+            "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — $namedCount test(s)$newSuffix$commitInfo</html>"
         }
 
         updateWarning()

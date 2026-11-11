@@ -443,6 +443,12 @@ Auto-load: `LocalFileSystem.addRootToWatch(<git root>/<localCoverageDir>)` + `VF
 
 Local run parsing/writing stays in-process (`BinaryCoverageParser`, `Cov4Writer`) solely for the local overlay and immutable source archives. The CI pipeline uses covd exclusively.
 
+`CoverageTestIdentity.isAnonymous()` recognizes numeric coverage-session IDs such as `app/raketa/1`.
+They mean the producer supplied coverage without scenario identities, not a PHPUnit method. Preserve
+line coverage, show `TestNodeData.UnnamedCoverage` in the tests tree and exclude these IDs from
+test counts and Run / Go to Test actions. Valid Behat and PHPUnit identities keep their original
+navigation targets. `HeavyTestTreeNavigationTest` covers renderer labels and actual Behat navigation.
+
 - **Reader ownership**: `CoverageCacheService.get()` / `GitLabCoordinator.sharedReader()` return owned handles. `CoverageDataService` retains its own handles and leases reads under its snapshot lock; setters do not consume the caller's handle. Close callers with `use`.
 - **Local archive ownership**: `LocalCoverageLayer.add()` takes ownership; supersession/clear releases archives. Read via `withActiveRuns(head) { ... }`, never raw stale runs.
 - **HEAD tracking and local runs**: filter to the coverage git root first, then notify `LocalCoverageService.onHeadChanged()` before the gutter visibility gate. The poller also updates local staleness while a CI artifact is pinned or a request is blocked. Hiding the gutter suppresses CI loads, not local bookkeeping.

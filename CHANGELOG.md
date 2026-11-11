@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- Render PHPUnit method names in the covering-tests tree instead of object identities; show an explanation for anonymous numeric coverage sessions, without offering broken test navigation
 - Merge the upstream covd engine, failure handling, credential-store token storage and integration test suites while retaining Raketa IDE support and the local coverage layer
 - The IDE no longer freezes for seconds when you show the coverage gutter or delete an artifact: git, the cache and the coverage daemon are used in the background
 - The Artifacts tab refreshes without UI glitches when a load finishes in the background

@@ -7,6 +7,7 @@ internal sealed class TestNodeData(val displayName: String) {
     class BehatScenario(val label: String, val originalTestName: String) : TestNodeData(label)
     class PhpUnitGroup(val className: String, displayName: String = className) : TestNodeData(displayName)
     class PhpUnitMethod(val methodName: String, val fullTestName: String) : TestNodeData(methodName)
+    data object UnnamedCoverage : TestNodeData(CoverageTestIdentity.UNNAMED_MESSAGE)
 }
 
 /** Node payloads for the affected-files pane (CheckboxTree). */
