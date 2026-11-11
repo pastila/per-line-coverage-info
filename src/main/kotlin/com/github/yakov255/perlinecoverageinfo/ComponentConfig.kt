@@ -2,6 +2,18 @@ package com.github.yakov255.perlinecoverageinfo
 
 import java.io.File
 
+/**
+ * One coverage component of the monorepo.
+ *
+ * - [serviceDir] (`api/hotels`, `raketa`) is the **component key**: what the plugin sends to covd as
+ *   `component`, and what names the cache file (`<sha>-api_hotels.cov4`, the slash becomes `_`),
+ *   the `cache-index.json` entry, the pin and the Artifacts row. covd treats it as an opaque key and
+ *   accepts slashes. Keep the values unique after `/` → `_`.
+ * - [jobName] (`hotels`) is only the token inside CI job names; it builds [coverageJobPrefix] and
+ *   [jobPrefix], which covd uses to pick the jobs.
+ *
+ * Only raketa has `serviceDir == jobName`.
+ */
 data class ComponentEntry(
     val serviceDir: String,
     val jobName: String,
