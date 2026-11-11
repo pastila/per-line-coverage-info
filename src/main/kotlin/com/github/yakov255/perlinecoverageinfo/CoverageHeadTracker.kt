@@ -1,78 +1,20 @@
 package com.github.yakov255.perlinecoverageinfo
 
-import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
-import com.intellij.util.Alarm
 import git4idea.repo.GitRepository
 import git4idea.repo.GitRepositoryChangeListener
 
 /**
- * Listens for any Git repository change (HEAD move, branch switch, pull, rebase, etc.)
- * and triggers offline-first coverage reload when the HEAD revision changes.
+ * Listens for any Git repository change (HEAD move, branch switch, pull, rebase, etc.) and
+ * triggers an offline-first coverage reload when the HEAD revision changes.
  *
- * Replaces [CoverageBranchListener] which only fired on branch switch operations.
- * Uses a 2-second debounce to avoid redundant reloads during rapid changes
- * (e.g. interactive rebase touching many commits).
+ * The state and the debounced reload live in [CoverageHeadMonitor], which the pipeline poller
+ * shares: only the repository the coverage belongs to can move the coverage state (submodules and
+ * sibling repositories are ignored), and a change the poller noticed first is not loaded twice.
  */
-class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeListener, Disposable {
-
-    private val log = CoverageLog.get(CoverageHeadTracker::class.java)
-    // This listener is not a registered Disposable owner, so the project is the Alarm's parent;
-    // dispose() below still cancels pending requests when the tracker is released explicitly.
-    private val alarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, project)
-
-    @Volatile
-    private var lastKnownRevision: String? = null
+class CoverageHeadTracker(private val project: Project) : GitRepositoryChangeListener {
 
     override fun repositoryChanged(repository: GitRepository) {
-        if (!CoverageGutterVisibilityService.getInstance(project).visible) {
-            log.info("Coverage: HEAD change ignored — gutter visibility is off")
-            return
-        }
-
-        val currentRevision = repository.currentRevision ?: return
-        val previous = lastKnownRevision
-
-        if (previous == currentRevision) return
-
-        lastKnownRevision = currentRevision
-
-        if (previous == null) {
-            log.info("Coverage: initial HEAD = ${currentRevision.take(8)} — skipped (CoverageStartupActivity handles initial load)")
-            return
-        }
-
-        log.info("Coverage: HEAD changed ${previous.take(8)} → ${currentRevision.take(8)}, scheduling reload")
-
-        // A block or a retry budget belongs to the old commit.
-        CoverageLoadService.getInstance(project).onHeadChanged(currentRevision)
-
-        CoveragePipelinePoller.getInstance(project).stop()
-
-        alarm.cancelAllRequests()
-        alarm.addRequest({
-            if (!project.isDisposed) {
-                val dataService = CoverageDataService.getInstance(project)
-                val revision = lastKnownRevision ?: return@addRequest
-
-                if (dataService.coverageCommitHash == revision && dataService.hasData() && !dataService.isStale) {
-                    log.info("Coverage: HEAD unchanged after debounce — commit $revision already loaded, skipping reload")
-                    return@addRequest
-                }
-
-                val loadService = CoverageLoadService.getInstance(project)
-                if (loadService.validateSettings() == null) {
-                    loadService.loadOfflineFirst()
-                }
-            }
-        }, DEBOUNCE_MS)
-    }
-
-    override fun dispose() {
-        alarm.cancelAllRequests()
-    }
-
-    companion object {
-        private const val DEBOUNCE_MS = 2000
+        CoverageHeadMonitor.getInstance(project).onRepositoryChanged(repository)
     }
 }

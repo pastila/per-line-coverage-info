@@ -3,7 +3,9 @@ package com.github.yakov255.perlinecoverageinfo
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.DumbAware
+import com.intellij.openapi.project.Project
 
 class ShowCoverageGutterAction : AnAction(), DumbAware {
 
@@ -15,7 +17,16 @@ class ShowCoverageGutterAction : AnAction(), DumbAware {
         CoverageGutterVisibilityService.getInstance(project).visible = true
         CoverageHighlighter.applyToOpenEditors(project)
         val loadService = CoverageLoadService.getInstance(project)
-        if (loadService.validateSettings() == null) {
+        if (loadService.validateSettings() != null) return
+
+        // Offline-first reads git, the cache index and opens the COV4 reader: must not run on the EDT.
+        val runner = backgroundRunnerForTest
+        if (runner != null) {
+            runner(project) { loadService.loadOfflineFirst() }
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (project.isDisposed) return@executeOnPooledThread
             loadService.loadOfflineFirst()
         }
     }
@@ -30,4 +41,13 @@ class ShowCoverageGutterAction : AnAction(), DumbAware {
     }
 
     override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.EDT
+
+    companion object {
+        /**
+         * Test seam: replaces the pooled-thread dispatch of the load.
+         * Production code never sets it.
+         */
+        @Volatile
+        internal var backgroundRunnerForTest: ((Project, () -> Unit) -> Unit)? = null
+    }
 }

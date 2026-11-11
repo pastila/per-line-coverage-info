@@ -70,6 +70,14 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
             return
         }
 
+        // Git4Idea reports an external checkout with a delay; ask git directly so a commit made
+        // outside the IDE is picked up on this tick instead of after the next ensure.
+        if (CoverageHeadMonitor.getInstance(project).checkHeadFromPoller()) {
+            log.info("Coverage: poll caught a HEAD change — reloading instead of asking the daemon for the old commit")
+            scheduleNext()
+            return
+        }
+
         CoveragePerfLog.event("poll.tick")
         loadService.loadFromGitLab(showErrors = false)
         scheduleNext()

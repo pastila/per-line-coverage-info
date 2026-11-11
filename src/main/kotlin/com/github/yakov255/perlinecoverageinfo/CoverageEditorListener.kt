@@ -15,14 +15,19 @@ import com.intellij.util.Alarm
 /**
  * Listens for new editors being opened and applies coverage highlights.
  *
- * Also installs a DocumentListener on each editor that has coverage data.
- * On document changes, it debounces a re-highlight so that ComparisonManager
- * recomputes the old→new line mapping from cached old content vs current text.
+ * Installs a DocumentListener on every file-backed editor, also before coverage is loaded: the
+ * coverage check is cheap and happens per change, so an editor restored before the first load
+ * still re-highlights once the data arrives and the user edits it. One listener per editor, and
+ * [editorReleased] disposes it.
  */
 class CoverageEditorListener : EditorFactoryListener {
 
     companion object {
         private val COVERAGE_DOC_DISPOSABLE_KEY = Key.create<Disposable>("COVERAGE_DOC_DISPOSABLE")
+
+        /** Test seam: true when [editor] already has the coverage document listener. */
+        internal fun isListening(editor: Editor): Boolean =
+            editor.getUserData(COVERAGE_DOC_DISPOSABLE_KEY) != null
     }
 
     override fun editorCreated(event: EditorFactoryEvent) {
@@ -34,25 +39,18 @@ class CoverageEditorListener : EditorFactoryListener {
 
     override fun editorReleased(event: EditorFactoryEvent) {
         val editor = event.editor
-        val disposable = editor.getUserData(COVERAGE_DOC_DISPOSABLE_KEY)
-        if (disposable != null) {
-            Disposer.dispose(disposable)
-            editor.putUserData(COVERAGE_DOC_DISPOSABLE_KEY, null)
-        }
+        val disposable = editor.getUserData(COVERAGE_DOC_DISPOSABLE_KEY) ?: return
+        editor.putUserData(COVERAGE_DOC_DISPOSABLE_KEY, null)
+        Disposer.dispose(disposable)
     }
 
+    /**
+     * Installs the re-highlight listener unless this editor already has one, so a second
+     * [editorCreated] for the same editor cannot subscribe twice.
+     */
     private fun installDocumentListener(editor: Editor, project: Project) {
-        val dataService = CoverageDataService.getInstance(project)
-        if (!dataService.hasData()) {
-            return
-        }
-
-        val virtualFile = FileDocumentManager.getInstance().getFile(editor.document)
-        if (virtualFile == null) {
-            return
-        }
-        val lineMappingService = LineMappingService.getInstance(project)
-        lineMappingService.toRelativePath(virtualFile.path) ?: return
+        if (editor.getUserData(COVERAGE_DOC_DISPOSABLE_KEY) != null) return
+        if (FileDocumentManager.getInstance().getFile(editor.document) == null) return
 
         val listener = CoverageDocumentListener(editor, project)
         val disposable = Disposer.newDisposable()
@@ -75,6 +73,10 @@ private class CoverageDocumentListener(
     private val alarm = Alarm(Alarm.ThreadToUse.SWING_THREAD)
 
     override fun documentChanged(event: DocumentEvent) {
+        if (project.isDisposed) return
+        // No coverage yet: the edit only marks the document for the next change.
+        if (!CoverageDataService.getInstance(project).hasData()) return
+
         alarm.cancelAllRequests()
         alarm.addRequest({
             if (!project.isDisposed && !editor.isDisposed) {
