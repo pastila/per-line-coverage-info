@@ -57,6 +57,11 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
             scheduleNext()
             return
         }
+        if (loadService.isPinned()) {
+            log.info("Coverage: poll skipped — a pinned artifact is shown")
+            scheduleNext()
+            return
+        }
         if (loadService.isBlocked()) {
             // The token is invalid or the error is deterministic for this HEAD: waiting is
             // cheaper and quieter than asking GitLab again every 30 seconds.

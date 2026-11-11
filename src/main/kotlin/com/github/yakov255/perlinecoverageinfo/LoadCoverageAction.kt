@@ -20,6 +20,8 @@ class LoadCoverageAction : AnAction(), DumbAware {
         val project = e.project ?: return
         log.info("LoadCoverageAction: manual load triggered")
         val loadService = CoverageLoadService.getInstance(project)
+        // An explicit load for the current HEAD replaces a pinned artifact.
+        loadService.clearPin()
         // Manual trigger: use offline-first (show cached immediately, then fetch fresh)
         // but fall back to loadFromGitLab with errors if settings are invalid
         val validationError = loadService.validateSettings()

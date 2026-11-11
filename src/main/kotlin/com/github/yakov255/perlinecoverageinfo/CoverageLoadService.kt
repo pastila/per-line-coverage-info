@@ -13,6 +13,7 @@ import com.intellij.openapi.ui.Messages
 import com.intellij.util.Alarm
 import java.io.File
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.zip.GZIPInputStream
 
 /**
@@ -28,11 +29,11 @@ class CoverageLoadService(private val project: Project) {
 
     private val log = CoverageLog.get(CoverageLoadService::class.java)
 
-    @Volatile
-    private var loading = false
+    /** True while a daemon load runs; taken with compareAndSet so two callers never both start one. */
+    private val loading = AtomicBoolean(false)
 
-    @Volatile
-    private var pendingReload = false
+    /** A load was requested while another one ran; [finishLoad] starts it afterwards. */
+    private val pendingReload = AtomicBoolean(false)
 
     /** Last user-facing load error, or null when the last attempt succeeded. Read by [CoverageUiTestBridge]. */
     @Volatile
@@ -55,7 +56,42 @@ class CoverageLoadService(private val project: Project) {
     /** Automatic retries allowed before the balloon. */
     val retryMax: Int get() = retryPolicy.maxAttempts
 
-    fun isLoadInProgress(): Boolean = loading
+    fun isLoadInProgress(): Boolean = loading.get()
+
+    /**
+     * True while the user keeps a specific artifact pinned. Automatic loads (poller, retry
+     * alarm, pending reload) must not reach the daemon or replace the data then; a manual
+     * "Load Coverage from GitLab" / Fetch lifts the pin via [clearPin].
+     */
+    fun isPinned(): Boolean = CoverageUserSelectionService.getInstance(project).pinnedCommitHash != null
+
+    /** Removes the pin and cancels a scheduled automatic retry that was waiting for it. */
+    fun clearPin() {
+        val selection = CoverageUserSelectionService.getInstance(project)
+        if (selection.pinnedCommitHash != null) {
+            log.info("Coverage: pin ${selection.pinnedCommitHash?.take(8)} cleared")
+            selection.pinnedCommitHash = null
+        }
+    }
+
+    /** "Clear Coverage Data": drop the pin, any scheduled retry and a queued reload. */
+    fun onCleared() {
+        clearPin()
+        covdRetryAlarm.cancelAllRequests()
+        pendingReload.set(false)
+    }
+
+    private fun setPin(commit: String) {
+        CoverageUserSelectionService.getInstance(project).pinnedCommitHash = commit
+        covdRetryAlarm.cancelAllRequests()
+    }
+
+    /** True when HEAD is no longer the commit the request was sent for. */
+    private fun headMoved(requestHead: String?): Boolean {
+        if (requestHead == null) return false
+        val now = currentHead() ?: return false
+        return now != requestHead
+    }
 
     /**
      * The active block (`AUTH` or `NON_RETRYABLE:<code>`), or null. A block is tied to the
@@ -136,8 +172,8 @@ class CoverageLoadService(private val project: Project) {
             log.info("Coverage: offline-first load skipped — gutter visibility is off")
             return
         }
-        if (loading) {
-            pendingReload = true
+        if (loading.get()) {
+            pendingReload.set(true)
             log.info("Coverage: load already in progress, will reload after completion")
             return
         }
@@ -156,15 +192,17 @@ class CoverageLoadService(private val project: Project) {
                 log.info("Coverage: offline-first pinned — commit ${pinned.take(8)}, alreadyLoaded=$alreadyLoaded")
                 if (!alreadyLoaded) {
                     if (root != null) {
-                        dataService.setCoverageContext(pinned, root, stale = false)
+                        dataService.setCoverage(pinned, root, stale = false, reader = reader)
                         computeAndStoreWarningContext(root)
+                    } else {
+                        dataService.setCov4Reader(reader)
                     }
-                    dataService.setCov4Reader(reader)
                     ApplicationManager.getApplication().invokeLater {
                         CoverageHighlighter.applyToOpenEditors(project)
                     }
                 }
-                // The user pinned this artifact deliberately: do not refresh it.
+                // The user pinned this artifact deliberately: no daemon call, no refresh.
+                // Only a manual load (which lifts the pin first) or Clear gets out of it.
                 return
             }
             log.info("Coverage: pinned commit ${pinned.take(8)} not found in cache, clearing pin")
@@ -212,9 +250,8 @@ class CoverageLoadService(private val project: Project) {
     /** Shows a cached reader immediately, marked stale until the daemon confirms it. */
     private fun showCached(commit: String, gitRoot: File, reader: Cov4Reader) {
         val dataService = CoverageDataService.getInstance(project)
-        dataService.setCoverageContext(commit, gitRoot, stale = true)
+        dataService.setCoverage(commit, gitRoot, stale = true, reader = reader)
         computeAndStoreWarningContext(gitRoot)
-        dataService.setCov4Reader(reader)
         ApplicationManager.getApplication().invokeLater {
             CoverageHighlighter.applyToOpenEditors(project)
         }
@@ -256,19 +293,22 @@ class CoverageLoadService(private val project: Project) {
             resetFailureState()
             covdRetryAlarm.cancelAllRequests()
             log.info("Coverage: manual load bypasses the failure block")
+        } else if (isPinned()) {
+            log.info("Coverage: automatic load skipped — a pinned artifact is shown")
+            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            return
         } else if (isBlocked()) {
             log.info("Coverage: load skipped — blocked by ${retryState.blocked}")
             onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
             return
         }
 
-        if (loading) {
-            pendingReload = true
+        if (!loading.compareAndSet(false, true)) {
+            pendingReload.set(true)
             log.info("Coverage: load already in progress, will reload after completion")
             onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
             return
         }
-        loading = true
         lastError = null
 
         ApplicationManager.getApplication().executeOnPooledThread {
@@ -329,6 +369,10 @@ class CoverageLoadService(private val project: Project) {
             ),
         )
 
+        // HEAD at send time: an answer for another commit must not pass as fresh.
+        val requestHead = currentHead()
+        val pinnedAtStart = isPinned()
+
         var unavailableReason: String? = null
         val response = CoveragePerfLog.span("covd.ensure", "component" to componentName) {
             try {
@@ -351,13 +395,22 @@ class CoverageLoadService(private val project: Project) {
                 retryAfterMs = 0,
                 message = message,
                 title = "Coverage Daemon Unavailable",
+                requestHead = requestHead,
             )
             return
         }
 
         when (response.state) {
-            "ready" -> applyCovdCoverage(response, gitRoot, componentName, showErrors, onComplete, onError)
+            "ready" -> applyCovdCoverage(
+                response, gitRoot, componentName, showErrors, onComplete, onError, requestHead, pinnedAtStart,
+            )
             "not_ready" -> {
+                if (headMoved(requestHead)) {
+                    log.info("Coverage: not_ready answer is for an older HEAD — reloading for the new one")
+                    pendingReload.set(true)
+                    finishLoad(onComplete)
+                    return
+                }
                 val delay = response.retryAfterMs.coerceIn(1_000, 60_000)
                 log.info("Coverage: not ready (${response.reason}), retrying in $delay ms")
                 lastError = null
@@ -379,6 +432,7 @@ class CoverageLoadService(private val project: Project) {
                     retryAfterMs = response.retryAfterMs,
                     message = message,
                     title = errorTitle(response.code),
+                    requestHead = requestHead,
                 )
             }
         }
@@ -398,7 +452,16 @@ class CoverageLoadService(private val project: Project) {
         retryAfterMs: Long,
         message: String,
         title: String,
+        requestHead: String?,
     ) {
+        if (headMoved(requestHead)) {
+            // The error belongs to a commit nobody looks at any more: no block, no retry
+            // budget for the new HEAD, just load again for it.
+            log.info("Coverage: ${code ?: "error"} answer is for an older HEAD — ignored, reloading for the new one")
+            pendingReload.set(true)
+            finishLoad(onComplete)
+            return
+        }
         lastError = message
         if (showErrors) {
             ApplicationManager.getApplication().invokeLater {
@@ -464,6 +527,8 @@ class CoverageLoadService(private val project: Project) {
         showErrors: Boolean,
         onComplete: (() -> Unit)?,
         onError: ((String) -> Unit)?,
+        requestHead: String?,
+        pinnedAtStart: Boolean,
     ) {
         val commit = response.commit
         val cov4Path = response.cov4Path
@@ -481,20 +546,30 @@ class CoverageLoadService(private val project: Project) {
             return
         }
 
+        if (!pinnedAtStart && isPinned()) {
+            // The user pinned an artifact while the daemon worked: the pin wins.
+            log.info("Coverage: answer for ${commit.take(8)} dropped — an artifact was pinned meanwhile")
+            finishLoad(onComplete)
+            return
+        }
+
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
 
+        val headMoved = headMoved(requestHead)
         val wasStale = dataService.isStale
         val previousCommit = dataService.coverageCommitHash
         val alreadyLoaded = dataService.coverageCommitHash == commit && dataService.hasData()
 
-        dataService.setCoverageContext(commit, gitRoot, stale = response.stale)
-        computeAndStoreWarningContext(gitRoot)
-
-        if (!alreadyLoaded || response.replaced) {
-            val reader = cache.get(commit, componentName, gitRoot) ?: Cov4Reader(File(cov4Path))
-            dataService.setCov4Reader(reader)
+        // An answer for an older HEAD is shown, but marked stale until the reload for the new one.
+        val stale = response.stale || headMoved
+        val reader = if (!alreadyLoaded || response.replaced) {
+            cache.get(commit, componentName, gitRoot) ?: Cov4Reader(File(cov4Path))
+        } else {
+            null
         }
+        dataService.setCoverage(commit, gitRoot, stale, reader)
+        computeAndStoreWarningContext(gitRoot)
 
         val baselineCommit = response.baselineCommit
         val baselinePath = response.baselineCov4Path
@@ -506,8 +581,13 @@ class CoverageLoadService(private val project: Project) {
             dataService.clearBaseline()
         }
 
-        lastError = null
-        resetFailureState()
+        if (headMoved) {
+            log.info("Coverage: answer for ${commit.take(8)} arrived after HEAD moved — shown as stale, reloading")
+            pendingReload.set(true)
+        } else {
+            lastError = null
+            resetFailureState()
+        }
 
         CoveragePerfLog.event(
             "covd.ready",
@@ -527,7 +607,7 @@ class CoverageLoadService(private val project: Project) {
 
         ApplicationManager.getApplication().invokeLater {
             CoverageHighlighter.applyToOpenEditors(project)
-            if (wasStale && previousCommit != commit) {
+            if (!headMoved && wasStale && previousCommit != commit) {
                 NotificationGroupManager.getInstance()
                     .getNotificationGroup("Coverage Notifications")
                     .createNotification(
@@ -567,7 +647,7 @@ class CoverageLoadService(private val project: Project) {
         val gitRoot = findGitRoot()
         val component = if (gitRoot != null) detectComponent(gitRoot) ?: "raketa" else "raketa"
 
-        CoverageUserSelectionService.getInstance(project).pinnedCommitHash = commitHash
+        setPin(commitHash)
 
         ApplicationManager.getApplication().executeOnPooledThread {
             val reader = cache.get(commitHash, component, gitRoot)
@@ -577,10 +657,11 @@ class CoverageLoadService(private val project: Project) {
                 return@executeOnPooledThread
             }
             if (gitRoot != null) {
-                dataService.setCoverageContext(commitHash, gitRoot, stale = false)
+                dataService.setCoverage(commitHash, gitRoot, stale = false, reader = reader)
                 computeAndStoreWarningContext(gitRoot)
+            } else {
+                dataService.setCov4Reader(reader)
             }
-            dataService.setCov4Reader(reader)
             log.info("Coverage: loaded from cache for commit ${commitHash.take(8)} (component=$component, ${reader.allFilePaths.size} files)")
             lastError = null
             resetFailureState()
@@ -622,14 +703,18 @@ class CoverageLoadService(private val project: Project) {
                         )
                     }
 
+                    // The imported file is what the user wants to look at: pin it first so no
+                    // poller tick replaces it, then show it.
+                    setPin(commit)
                     val cache = CoverageCacheService.getInstance(project)
                     val dataService = CoverageDataService.getInstance(project)
-                                if (gitRoot != null) {
-                        dataService.setCoverageContext(commit, gitRoot, stale = false)
-                        computeAndStoreWarningContext(gitRoot)
-                    }
                     val reader = cache.get(commit, component, gitRoot) ?: Cov4Reader(File(cov4Path))
-                    dataService.setCov4Reader(reader)
+                    if (gitRoot != null) {
+                        dataService.setCoverage(commit, gitRoot, stale = false, reader = reader)
+                        computeAndStoreWarningContext(gitRoot)
+                    } else {
+                        dataService.setCov4Reader(reader)
+                    }
                     lastError = null
                     resetFailureState()
                     log.info(
@@ -653,9 +738,8 @@ class CoverageLoadService(private val project: Project) {
     }
 
     private fun finishLoad(onComplete: (() -> Unit)?) {
-        loading = false
-        if (pendingReload) {
-            pendingReload = false
+        loading.set(false)
+        if (pendingReload.compareAndSet(true, false)) {
             log.info("Coverage: pending reload detected, starting new load")
             ApplicationManager.getApplication().invokeLater {
                 loadFromGitLab(showErrors = false)

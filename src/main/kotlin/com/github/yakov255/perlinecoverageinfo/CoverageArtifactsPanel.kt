@@ -171,8 +171,11 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
             return
         }
         showStatus(null)
+        // Fetch is an explicit request for the current HEAD: it lifts the pin and any block.
+        loadService.clearPin()
         loadService.loadFromGitLab(
             showErrors = false,
+            bypassBlock = true,
             onComplete = { refreshData() },
             onError = { msg -> showStatus(msg) },
         )

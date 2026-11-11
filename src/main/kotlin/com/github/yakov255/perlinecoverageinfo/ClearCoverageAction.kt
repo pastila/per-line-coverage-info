@@ -13,6 +13,10 @@ class ClearCoverageAction : AnAction(), DumbAware {
         val project = e.project ?: return
 
         log.info("ClearCoverageAction: clearing coverage for project ${project.name}")
+        // Clear must stay cleared: stop the poller and lift the pin so nothing brings the
+        // coverage back until HEAD or the settings change, or the user loads it again.
+        CoveragePipelinePoller.getInstance(project).stop()
+        CoverageLoadService.getInstance(project).onCleared()
         CoverageDataService.getInstance(project).clear()
 
         for (editor in EditorFactory.getInstance().allEditors) {
