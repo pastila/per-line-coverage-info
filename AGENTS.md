@@ -54,9 +54,10 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | File | Purpose |
 |------|---------|
 | `CoverageLoadService.kt` | Orchestrator: `loadOfflineFirst(manual)` (cache walk → stale display → daemon refresh), `loadFromGitLab(showErrors, onComplete, onError, bypassBlock)` (one `ensure` against covd; `ready`/`not_ready`/`error` handling), `loadFromLocalFile()` (daemon `import`), `loadFromCache()` (pinned artifact). Applies the failure contract through `RetryPolicy`/`RetryState`: retry counter and block (`retryAttempt`, `retryMax`, `blockedReason()`), delayed retries on the shared `covdRetryAlarm`, reset on success/HEAD change/settings change, manual load bypasses both. Applies readers to `CoverageDataService` and computes the "behind by" warning context. `loading`/`pendingReload` are `AtomicBoolean`s; `isPinned()`/`clearPin()`/`onCleared()`. An answer whose request HEAD differs from the current HEAD is applied as `stale`, raises no "Coverage updated" notice, leaves the retry/block state alone and queues a reload for the new HEAD. `loadFromLocalFile` pins the imported commit |
-| `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden. Calls `CoverageLoadService.onHeadChanged()` so a block never outlives its commit |
-| `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; logged JVM arguments for the perf log |
-| `CoveragePipelinePoller.kt` | 30-second tick that asks the daemon again; no GitLab logic. Skipped while a load is in progress or while `CoverageLoadService.isBlocked()` holds, and disabled when the gutter is hidden. Also skipped while a coverage artifact is pinned |
+| `CoverageHeadTracker.kt` | Git4Idea listener: forwards repository changes to `CoverageHeadMonitor`. Skipped when the gutter is hidden |
+| `CoverageHeadMonitor.kt` / `CoverageHeadTracking.kt` | Project service owning the last known HEAD revision, shared by the Git4Idea listener and the poller; repositories outside the coverage git root (submodules) are ignored (`CoverageRepositoryFilter`). On a change it calls `CoverageLoadService.onHeadChanged()` (a token block survives it) and schedules the debounced (2 s) `loadOfflineFirst()`; the first observed revision is skipped (startup handles the initial load). `HeadRevisionTracker` is the pure last-revision logic |
+| `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, the first-run token dialog (`withContext(Dispatchers.EDT)`, shown once per IDE run through `TokenPromptGuard`), then `loadOfflineFirst()` on `Dispatchers.IO`; logged JVM arguments for the perf log |
+| `CoveragePipelinePoller.kt` | 30-second tick that asks the daemon again; no GitLab logic. Skipped while a load is in progress or while `CoverageLoadService.isBlocked()` holds, and disabled when the gutter is hidden. Also skipped while a coverage artifact is pinned. On every tick it also asks `CoverageHeadMonitor.checkHeadFromPoller()` (`git rev-parse HEAD`), so a checkout Git4Idea reports late (linked worktrees) is caught within one poll |
 | `LoadCoverageAction.kt` | Find Action: "Load Coverage from GitLab" |
 | `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz), imported through the daemon |
 | `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" — stops the poller, lifts the pin, drops the retry alarm and the queued reload, clears the data |
@@ -82,10 +83,10 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 |------|---------|
 | `CoverageHighlighter.kt` | Applies line-background highlighters and gutter renderers; classifies each line as `COVERED` (green) / `UNCOVERED` (red) / `FEATURE_ONLY` (blue) when baseline is present |
 | `CoverageGutterRenderer.kt` | Gutter strip coloured by `CoverageCategory`; tooltip shows count of feature-only tests; click opens "Covering Line" panel |
-| `CoverageEditorListener.kt` | Applies highlights on editor open; re-applies on document change (debounced 300 ms) |
+| `CoverageEditorListener.kt` | Applies highlights on editor open; installs one document listener per file-backed editor (also before coverage is loaded) and re-applies on document change (debounced 300 ms) |
 | `CoverageGutterVisibilityService.kt` | Persists gutter visible/hidden toggle across restarts; gates all loading activity when hidden |
 | `CoverageUserSelectionService.kt` | Persists the pinned commit hash. While a pin is set, automatic loads (poller, retry alarm, pending reload, HEAD tracker, startup) neither call the daemon nor replace the data. Cleared by "Load Coverage from GitLab", Fetch, Clear Coverage Data, or when the pinned artifact is missing from the cache |
-| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Toggle coverage gutter project-wide; hide also stops pipeline poller, show triggers `loadOfflineFirst()` |
+| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Toggle coverage gutter project-wide; hide also stops pipeline poller, show triggers `loadOfflineFirst()` on a pooled thread |
 | `CoverageIcons.kt` | Green/red icon constants |
 
 ### Tests tool window
@@ -98,7 +99,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `AffectedTestsPanel.kt` | "Affected by Changes" tab: `AffectedFilesPane` + `TestTreeView` in splitter; warning banner from `CoverageWarningService`; toolbar: Find HEAD, Find Working Tree, Refresh, toggleView, Run All, Run All Debug, Remove Selected; F5 = Refresh |
 | `AffectedFilesPane.kt` | Left pane of the Affected tab: `CheckboxTree` of affected files with per-node test count and `(-N)` delta, toolbar (Refresh, tree/flat toggle, expand/collapse, check/uncheck all); writes the checkbox state back into `AffectedTestsModel` |
 | `NewCoveragePanel.kt` / `NewCoverageModel.kt` | "New Coverage" tab: files and lines covered only on the feature branch (primary has tests, baseline has none). Uses `git diff baseline..primary` to pick the line-mapping path for changed files and raw line comparison for unchanged ones; double-click opens the first feature-only line |
-| `CoverageArtifactsPanel.kt` | Artifacts tab: table of cached COV4 files with Fetch / Load / Delete toolbar |
+| `CoverageArtifactsPanel.kt` | Artifacts tab: table of cached COV4 files with Fetch / Load / Delete toolbar. The index is read in the background and the table is updated on the EDT (stale refreshes are dropped by a ticket); Delete runs in the background |
 | `CoverageLogPanel.kt` | Log tab: `ConsoleView` + `CoverageLogService` subscription |
 
 ### Affected-tests analysis
@@ -401,7 +402,7 @@ Rules:
 - **Raketa coverage paths**: the daemon normalizes them (`pathMode: "raketa"`); the plugin still normalizes while reading pre-upgrade caches. If `SERVICE_DIR` changes in the raketa CI, update both `coverage-assistant/internal/linecov/normalize.go` and `CoveragePathNormalizer`.
 - **Waiting and fallback** live in covd: it waits for running coverage jobs, serves the newest older ready pipeline as `stale` while the latest is unfinished, and reports `not_ready` with `reason`/`retryAfterMs` (the plugin retries with `NotReadyBackoff`, 5 s → 60 s per reason; `retryAfterMs` is a floor).
 - **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.
-- **Threading**: `ensure` runs on a pooled thread; daemon answers are applied to data services there and UI updates go through `invokeLater`.
+- **Threading**: `ensure` runs on a pooled thread; daemon answers are applied to data services there and UI updates go through `invokeLater`. Nothing that blocks (git, the cache index, opening a COV4 reader, `CovdClient`, `PasswordSafe`) runs on the EDT, actions and panel handlers included; subscribe to the message bus with a parent disposable.
 - **Errors**: daemon `code`/`cause`/`hint` drive the user-facing message in `CoverageLoadService`; auto-triggered callers only log. Retry/block decisions live in `RetryPolicy` only — do not branch on codes elsewhere.
 - **Failure state**: `RetryState` is keyed by a settings fingerprint (and by HEAD for deterministic errors); `CoverageHeadTracker.onHeadChanged()` resets everything except a token block, `CoverageSettingsActions.afterSettingsApplied()` resets all of it. The poller and auto-loads must call `CoverageLoadService.isBlocked()`; a manual load passes `bypassBlock = true`.
 - **Pin**: the pin protects the shown artifact from every automatic path. Automatic callers use `CoverageLoadService.isPinned()` together with `isBlocked()`. Only explicit user actions (`LoadCoverageAction`, Fetch, Clear) call `clearPin()`; a local `.covt` import and "Load" of an artifact set the pin.

@@ -4,6 +4,11 @@
 
 ## [Unreleased]
 
+- The IDE no longer freezes for seconds when you show the coverage gutter or delete an artifact: git, the cache and the coverage daemon are used in the background
+- The Artifacts tab refreshes without UI glitches when a load finishes in the background
+- The first-run GitLab token dialog appears once per IDE start, even when several projects open together
+- A branch switch made outside the IDE (a linked worktree, a terminal checkout) is noticed within about 30 seconds at most, and commits of a submodule no longer trigger needless coverage reloads
+- Editors restored at startup are re-highlighted after you edit them, even if the coverage was not loaded yet when they opened
 - Keep the GitLab access token in the IDE credential store (PasswordSafe) instead of plain text in the settings XML; a token left by an older version is moved automatically on the first start
 - Stop syncing the plugin settings between machines (roaming is disabled), because the token lives in the local credential store
 - Make the token field a password field: the stored token is not displayed, and a new "Remove the stored token when applied" checkbox deletes it
