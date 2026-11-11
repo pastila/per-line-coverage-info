@@ -2,11 +2,25 @@ package com.github.yakov255.perlinecoverageinfo
 
 import java.io.File
 
+/**
+ * One coverage component of the monorepo.
+ *
+ * - [coverageKey] (`api/hotels`, `raketa`) is the **component key**: what the plugin sends to covd as
+ *   `component`, and what names the cache file (`<sha>-api_hotels.cov4`, the slash becomes `_`),
+ *   the `cache-index.json` entry, the pin and the Artifacts row. covd treats it as an opaque key and
+ *   accepts slashes. Keep the values unique after `/` → `_`.
+ * - [jobName] (`hotels`) is only the token inside CI job names; it builds [coverageJobPrefix] and
+ *   [jobPrefix], which covd uses to pick the jobs.
+ *
+ * Raketa keeps the key `raketa` independently of its current service directory (`app/raketa`).
+ */
 data class ComponentEntry(
     val serviceDir: String,
     val jobName: String,
 ) {
-    /** Stable component id used in CI job names and the local cache. */
+    /** Daemon/cache key: keep raketa stable after moving its service to app/raketa. */
+    val coverageKey: String = if (jobName == "raketa") "raketa" else serviceDir
+    /** Stable component id used in CI job names and legacy caches. */
     val componentId: String = jobName
     /** CI job prefix of the legacy behat job, e.g. `test:behat:raketa`. */
     val jobPrefix: String = "test:behat:$jobName"

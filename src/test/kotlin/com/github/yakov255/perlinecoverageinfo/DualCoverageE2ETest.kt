@@ -65,8 +65,8 @@ class DualCoverageE2ETest {
             ),
         )
 
-        Cov4Writer.write(primaryCoverage, primaryFile)
-        Cov4Writer.write(baselineCoverage, baselineFile)
+        Cov4TestWriter.write(primaryCoverage, primaryFile)
+        Cov4TestWriter.write(baselineCoverage, baselineFile)
 
         // --- Act: open both readers (simulating CoverageDataService primary + baseline).
         Cov4Reader(primaryFile).use { primaryReader ->
@@ -129,7 +129,7 @@ class DualCoverageE2ETest {
                 2 to emptyList(),
             ),
         )
-        Cov4Writer.write(coverage, primaryFile)
+        Cov4TestWriter.write(coverage, primaryFile)
 
         Cov4Reader(primaryFile).use { reader ->
             val lines = reader.getCoverage(sourceFile)!!
@@ -158,11 +158,11 @@ class DualCoverageE2ETest {
     fun `baseline reader returns null for files only present in primary`() {
         // Realistic scenario: a new file added on the feature branch is absent from master coverage.
         val newFileOnBranch = "src/NewFeature.php"
-        Cov4Writer.write(
+        Cov4TestWriter.write(
             mapOf(newFileOnBranch to mapOf(1 to listOf("NewTest::a"))),
             primaryFile,
         )
-        Cov4Writer.write(
+        Cov4TestWriter.write(
             mapOf(sourceFile to mapOf(1 to listOf("OldTest::a"))),
             baselineFile,
         )

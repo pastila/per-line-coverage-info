@@ -90,8 +90,8 @@ CI (Behat with pcov) → .covt → GitLab Artifacts
 
 ## Требования
 
-- IntelliJ IDEA Ultimate 2025.2+
-- PHP plugin
+- PhpStorm / IntelliJ IDEA Ultimate 2025.2+ либо Raketa IDE 262+
+- Behat-плагин соответствующей IDE для запуска тестов из панели
 - GitLab доступ (Personal Access Token с `read_api` и `read_repository`)
 
 ## Разработка
@@ -115,3 +115,9 @@ CI (Behat with pcov) → .covt → GitLab Artifacts
 ## Лицензия
 
 MIT
+
+### Объединение с upstream
+
+Покрытие из CI загружает встроенный демон `covd`. Локальные отчёты Behat остаются отдельным слоем: «Load Coverage from File» и файловый наблюдатель добавляют запуски поверх CI. Сохранены переключатель сбора, восстановление устаревших запусков и MCP-команды локального покрытия.
+
+Ключи кэша используют каталоги сервисов, например `api/hotels`; ключ `raketa` сохранён после переноса сервиса в `app/raketa`. Старый кэш форка с ключами по именам CI-компонентов также читается офлайн.

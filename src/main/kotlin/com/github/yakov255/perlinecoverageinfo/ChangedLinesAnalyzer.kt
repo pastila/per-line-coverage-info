@@ -40,7 +40,12 @@ object ChangedLinesAnalyzer {
      * Returns an empty list on git failure (caller can detect "no changes" the same way).
      */
     fun analyze(gitRoot: File, coverageCommit: String, mode: DiffMode): List<FileChange> {
-        val args = mutableListOf("diff", "--no-color", "-U0", "-M", coverageCommit)
+        // quotePath=false keeps non-ASCII paths as UTF-8 instead of C-style escapes; --no-ext-diff
+        // and --no-textconv keep a user's local diff drivers out of the output we parse.
+        val args = mutableListOf(
+            "-c", "core.quotePath=false",
+            "diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U0", "-M", coverageCommit,
+        )
         if (mode == DiffMode.COMMITTED) args.add("HEAD")
         val output = runGit(gitRoot, args)
         if (output == null) {
@@ -153,17 +158,8 @@ object ChangedLinesAnalyzer {
     private val HUNK_RE = Regex("""^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@""")
 
     private fun runGit(gitRoot: File, args: List<String>): String? {
-        return try {
-            val process = ProcessBuilder(listOf("git") + args)
-                .directory(gitRoot)
-                .redirectErrorStream(false)
-                .start()
-            val output = process.inputStream.bufferedReader().readText()
-            val exitCode = process.waitFor()
-            if (exitCode == 0) output else null
-        } catch (e: Exception) {
-            log.warn("ChangedLinesAnalyzer: git diff command failed: ${e.message}")
-            null
-        }
+        // GitCommand reads stderr on its own thread and kills a hung child, so a large or noisy
+        // diff cannot deadlock or hang the analysis. An empty diff is a valid empty change set.
+        return GitCommand.runRaw(gitRoot, *args.toTypedArray())
     }
 }

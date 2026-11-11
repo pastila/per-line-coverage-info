@@ -1,6 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.ide.BrowserUtil
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.actionSystem.ActionManager
 import com.intellij.openapi.actionSystem.ActionPlaces
 import com.intellij.openapi.actionSystem.ActionUpdateThread
@@ -8,6 +9,7 @@ import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.editor.EditorFactory
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptor
@@ -34,6 +36,7 @@ import java.awt.event.MouseEvent
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.concurrent.atomic.AtomicInteger
 import javax.swing.JButton
 import javax.swing.JPanel
 import javax.swing.JTable
@@ -48,12 +51,37 @@ import javax.swing.table.DefaultTableCellRenderer
  * Shows an empty-state panel when no artifacts are cached, guiding the user
  * through initial setup.
  */
-class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout()) {
+class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
     private val log = CoverageLog.get(CoverageArtifactsPanel::class.java)
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm")
     private val tableModel = ArtifactsTableModel()
     private val table = JBTable(tableModel)
+
+    /** True after [dispose]: late answers of a background refresh must not touch Swing. */
+    @Volatile
+    private var disposed = false
+
+    /** True while the table card is shown; the empty-state card otherwise. Written on the EDT. */
+    @Volatile
+    private var hasArtifacts = false
+
+    /** Ticket of the newest refresh; an older listing must not overwrite a newer one. */
+    private val refreshTicket = AtomicInteger()
+
+    /**
+     * Test seam: replaces the artifact listing, which always runs off the EDT.
+     * Production code never sets it.
+     */
+    @Volatile
+    internal var artifactsLoader: (() -> List<ArtifactInfo>)? = null
+
+    /**
+     * Test seam: replaces the daemon-side deletion, which always runs off the EDT.
+     * Production code never sets it.
+     */
+    @Volatile
+    internal var artifactDeleter: ((ArtifactInfo) -> Boolean)? = null
 
     private val cardLayout = CardLayout()
     private val cardPanel = JPanel(cardLayout)
@@ -99,7 +127,7 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         add(cardPanel, BorderLayout.CENTER)
         add(statusLabel, BorderLayout.SOUTH)
 
-        project.messageBus.connect().subscribe(
+        project.messageBus.connect(this).subscribe(
             CoverageDataService.COVERAGE_CHANGED_TOPIC,
             CoverageChangeListener { refreshData() },
         )
@@ -107,18 +135,60 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         refreshData()
     }
 
-    /** Reloads the artifact list from the cache service and updates the table. */
+    /**
+     * The tool-window content registers this panel as its disposable, so the message-bus
+     * connection above and any queued update end with the panel.
+     */
+    override fun dispose() {
+        disposed = true
+    }
+
+    /**
+     * Reloads the artifact list from the cache.
+     *
+     * The coverage load publishes its change on a pooled thread, so the cache index and the file
+     * listing are read there; only the table model and the card switch run on the EDT.
+     */
     fun refreshData() {
-        val entries = CoverageCacheService.getInstance(project).listArtifacts()
-        log.info("Artifacts panel: loaded ${entries.size} cached artifact(s)")
+        if (project.isDisposed || disposed) return
+        val ticket = refreshTicket.incrementAndGet()
+
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (project.isDisposed || disposed) return@executeOnPooledThread
+            val entries = try {
+                artifactsLoader?.invoke() ?: CoverageCacheService.getInstance(project).listArtifacts()
+            } catch (ex: Exception) {
+                log.warn("Artifacts panel: cannot list cached artifacts", ex)
+                emptyList()
+            }
+            log.info("Artifacts panel: loaded ${entries.size} cached artifact(s)")
+
+            ApplicationManager.getApplication().invokeLater({
+                if (project.isDisposed || disposed) return@invokeLater
+                if (ticket != refreshTicket.get()) return@invokeLater
+                renderEntries(entries)
+            }, ModalityState.any())
+        }
+    }
+
+    /** Applies one listing to Swing; EDT only. */
+    private fun renderEntries(entries: List<ArtifactInfo>) {
         tableModel.setEntries(entries, dateFormat)
         table.repaint()
 
-        if (entries.isEmpty()) {
-            cardLayout.show(cardPanel, CARD_EMPTY)
-        } else {
-            cardLayout.show(cardPanel, CARD_TABLE)
-        }
+        hasArtifacts = entries.isNotEmpty()
+        cardLayout.show(cardPanel, if (entries.isEmpty()) CARD_EMPTY else CARD_TABLE)
+    }
+
+    /** Test seam: rows rendered in the table. */
+    internal fun rowCountForTest(): Int = tableModel.rowCount
+
+    /** Test seam: true while the empty-state card is shown. */
+    internal fun showsEmptyStateForTest(): Boolean = !hasArtifacts
+
+    /** Test seam: runs the deletion part without the modal confirmation. */
+    internal fun deleteArtifactForTest(entry: ArtifactInfo) {
+        deleteArtifact(entry)
     }
 
     private fun createEmptyStatePanel(): JPanel {
@@ -171,8 +241,11 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
             return
         }
         showStatus(null)
+        // Fetch is an explicit request for the current HEAD: it lifts the pin and any block.
+        loadService.clearPin()
         loadService.loadFromGitLab(
             showErrors = false,
+            bypassBlock = true,
             onComplete = { refreshData() },
             onError = { msg -> showStatus(msg) },
         )
@@ -225,13 +298,33 @@ class CoverageArtifactsPanel(private val project: Project) : JPanel(BorderLayout
         )
         if (confirmed != Messages.YES) return
 
-        val isActive = CoverageDataService.getInstance(project).coverageCommitHash == entry.commitHash
-        val deleted = CoverageCacheService.getInstance(project).deleteArtifact(entry.commitHash, entry.component)
+        deleteArtifact(entry)
+    }
 
-        if (deleted && isActive) {
-            doClearCoverage()
-        } else {
-            refreshData()
+    /**
+     * Deletes one artifact on a pooled thread: a cold daemon needs a handshake that can take
+     * seconds, and the EDT must stay responsive. The table is refreshed on the EDT afterwards.
+     */
+    private fun deleteArtifact(entry: ArtifactInfo) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (project.isDisposed || disposed) return@executeOnPooledThread
+            val deleted = try {
+                artifactDeleter?.invoke(entry)
+                    ?: CoverageCacheService.getInstance(project).deleteArtifact(entry.commitHash, entry.component)
+            } catch (ex: Exception) {
+                log.warn("Artifacts panel: deleting ${entry.commitHash.take(8)} failed", ex)
+                false
+            }
+
+            ApplicationManager.getApplication().invokeLater({
+                if (project.isDisposed || disposed) return@invokeLater
+                val isActive = CoverageDataService.getInstance(project).coverageCommitHash == entry.commitHash
+                if (deleted && isActive) {
+                    doClearCoverage()
+                } else {
+                    refreshData()
+                }
+            }, ModalityState.any())
         }
     }
 

@@ -43,10 +43,14 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
     private var currentModel: NewCoverageModel? = null
     private var lastCoverageGeneration: Long = -1
 
+    /** True after [dispose]: a late background answer must not touch Swing. */
+    @Volatile
+    private var disposed = false
+
     @Volatile
     private var computing = false
 
-    private val messageBusConnection = project.messageBus.connect()
+    private val messageBusConnection = project.messageBus.connect(this)
 
     private val filesRoot = DefaultMutableTreeNode("root")
     private val treeModel = DefaultTreeModel(filesRoot)
@@ -79,18 +83,21 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
         messageBusConnection.subscribe(
             CoverageDataService.COVERAGE_CHANGED_TOPIC,
             CoverageChangeListener {
-                ApplicationManager.getApplication().invokeLater { refresh() }
+                ApplicationManager.getApplication().invokeLater { if (!project.isDisposed && !disposed) refresh() }
             },
         )
 
         refresh()
     }
 
+    /** The tool-window content registers this panel as its disposable; the bus connection ends with it. */
     override fun dispose() {
+        disposed = true
         messageBusConnection.dispose()
     }
 
     fun refresh() {
+        if (project.isDisposed || disposed) return
         val dataService = CoverageDataService.getInstance(project)
         if (!dataService.hasBaseline()) {
             clearTree()
@@ -130,7 +137,7 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
 
         // ── Phase 1: find files changed between baseline and primary commits ──
         indicator.text = "Resolving changed files…"
-        val changedFiles = CoverageResolver.runGitCommand(
+        val changedFiles = GitCommand.run(
             gitRoot, "diff", "--name-only", baselineCommit, primaryCommit,
         )?.lines()?.map { it.replace('\\', '/') }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
 
@@ -220,6 +227,7 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
     }
 
     private fun populate(model: NewCoverageModel) {
+        if (project.isDisposed || disposed) return
         currentModel = model
         lastCoverageGeneration = CoverageDataService.getInstance(project).coverageGeneration
         rebuildTree(model)
@@ -327,26 +335,31 @@ class NewCoveragePanel(private val project: Project) : JPanel(BorderLayout()), D
                 }
         }
 
-        val mappedLine = if (currentContent != null) {
-            val lineMappingService = LineMappingService.getInstance(project)
-            val mappedPrimary = lineMappingService.getMappedCoverage(vf.path, currentContent)
-            val mappedBaseline = lineMappingService.getMappedBaselineCoverage(vf.path, currentContent)
-            if (mappedPrimary != null) {
-                mappedPrimary.entries
-                    .filter { (line, tests) ->
-                        val bt = mappedBaseline?.get(line) ?: emptyList()
-                        tests.isNotEmpty() && bt.isEmpty()
-                    }
-                    .minOfOrNull { it.key }
-            } else {
-                null
-            }
-        } else {
-            null
-        } ?: file.firstFeatureOnlyLine
+        // Line mapping runs `git show` and a diff: it must not run on the EDT. Open the editor
+        // with the computed line once the mapping is ready.
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val mapped = if (currentContent != null) firstFeatureOnlyLine(vf.path, currentContent) else null
+            val target = mapped ?: file.firstFeatureOnlyLine
+            val line = if (target > 0) target - 1 else 0
 
-        val line = if (mappedLine > 0) mappedLine - 1 else 0
-        FileEditorManager.getInstance(project).openTextEditor(OpenFileDescriptor(project, vf, line, 0), true)
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed || disposed) return@invokeLater
+                FileEditorManager.getInstance(project).openTextEditor(OpenFileDescriptor(project, vf, line, 0), true)
+            }
+        }
+    }
+
+    /** First feature-only line of [absolutePath] after mapping the coverage commit to [currentContent]. */
+    private fun firstFeatureOnlyLine(absolutePath: String, currentContent: String): Int? {
+        val lineMappingService = LineMappingService.getInstance(project)
+        val mappedPrimary = lineMappingService.getMappedCoverage(absolutePath, currentContent) ?: return null
+        val mappedBaseline = lineMappingService.getMappedBaselineCoverage(absolutePath, currentContent)
+        return mappedPrimary.entries
+            .filter { (line, tests) ->
+                val baselineTests = mappedBaseline?.get(line) ?: emptyList()
+                tests.isNotEmpty() && baselineTests.isEmpty()
+            }
+            .minOfOrNull { it.key }
     }
 
     private fun createToolbar(): com.intellij.openapi.actionSystem.ActionToolbar {

@@ -2,6 +2,10 @@ package com.github.yakov255.perlinecoverageinfo
 
 import java.io.DataInputStream
 import java.io.File
+import java.io.EOFException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.zip.CRC32
+import java.util.zip.CheckedInputStream
 
 /**
  * Random-access reader for COV4 binary coverage files.
@@ -59,10 +63,13 @@ private class Contents(
     val lifetime = SharedLifetime(snapshot::close)
     private val tests: List<String>
     private val entriesByPath: Map<String, Cov4Reader.IndexEntry>  // normalized path → entry
+    private val damagedWarned = ConcurrentHashMap.newKeySet<String>()
 
     init {
         try {
-            val (rawTests, idx) = readHeaderAndIndex()
+            val (rawTests, idx) = CoveragePerfLog.span("cov4.init", "file" to sourceName, "bytes" to coverageSize) {
+                readHeaderAndIndex()
+            }
             tests = rawTests.map(testNormalizer)
 
             val byPath = LinkedHashMap<String, Cov4Reader.IndexEntry>(idx.size)
@@ -79,6 +86,9 @@ private class Contents(
             entriesByPath = byPath
         } catch (t: Throwable) {
             snapshot.close()
+            if (t is EOFException) throw CoverageApiException(
+                "Truncated COV4 header or index in $sourceName", t, kind = CoverageErrorKind.ARTIFACT_PARSE,
+            )
             throw t
         }
     }
@@ -94,17 +104,41 @@ private class Contents(
     fun getCoverage(filePath: String): Map<Int, List<String>>? {
         val entry = entriesByPath[pathNormalizer(filePath)] ?: return null
 
-        // Independent bounded streams let concurrent requests decode only their own block.
-        require(entry.dataOffset >= 0 && entry.dataSize >= 0 && entry.dataOffset.toLong() + entry.dataSize <= coverageSize) {
-            "Invalid COV4 file block bounds"
+        return try {
+            CoveragePerfLog.counted("cov4.readFile") {
+                snapshot.readSection(entry.dataOffset.toLong(), entry.dataSize.toLong()) { input ->
+                    val crc = CRC32()
+                    val checked = DataInputStream(CheckedInputStream(input, crc))
+                    val result = parseFileSection(checked)
+                    // Include any trailing bytes in the checksum, without buffering the section.
+                    val remainder = ByteArray(8 * 1024)
+                    while (checked.read(remainder) >= 0) CoverageCancellation.check()
+                    requireFormat(entry.crc32 == 0 || crc.value.toInt() == entry.crc32) {
+                        "COV4 CRC mismatch for '${entry.filePath}' in $sourceName"
+                    }
+                    result
+                }
+            }
+        } catch (e: CoverageApiException) {
+            warnDamaged(entry, e.message)
+            emptyMap()
+        } catch (e: EOFException) {
+            warnDamaged(entry, "truncated section")
+            emptyMap()
         }
-        return snapshot.readSection(entry.dataOffset.toLong(), entry.dataSize.toLong(), ::parseFileSection)
+    }
+
+    private fun warnDamaged(entry: Cov4Reader.IndexEntry, reason: String?) {
+        if (damagedWarned.add(entry.filePath)) {
+            log.warn("COV4: $sourceName: damaged section for '${entry.filePath}': $reason — showing no coverage for it")
+        }
     }
 
     /**
      * Reads header (28 bytes), global test list, and INDX section.
      */
     private fun readHeaderAndIndex(): Pair<List<String>, List<Cov4Reader.IndexEntry>> {
+        requireFormat(coverageSize >= 28) { "COV4 file $sourceName is too short: $coverageSize bytes" }
         var indexOffset = 0
         val tests = snapshot.readSection(0, coverageSize) { input ->
             val magic = input.readIntLe()
@@ -122,8 +156,11 @@ private class Contents(
             input.readIntLe() // directory count
             indexOffset = input.readIntLe()
             input.readIntLe() // directory section offset
-            require(testCount >= 0 && testCount.toLong() * 4 <= coverageSize - 28) { "Invalid COV4 test count" }
-            List(testCount) { input.readString() }
+            checkCount("test", testCount, coverageSize - 28, 4)
+            requireFormat(indexOffset >= 28 && indexOffset.toLong() + 8 <= coverageSize) { "Invalid COV4 index offset" }
+            ArrayList<String>(minOf(testCount, 4096)).also { tests ->
+                repeat(testCount) { tests.add(input.readString()) }
+            }
         }
 
         // --- INDX SECTION ---
@@ -135,10 +172,8 @@ private class Contents(
         )
 
         val entryCount = indexHeader.int
-        require(entryCount >= 0 && entryCount.toLong() * 24 <= coverageSize - indexOffset - 8) {
-            "Invalid COV4 index count"
-        }
-        val entries = ArrayList<Cov4Reader.IndexEntry>(entryCount)
+        checkCount("index entry", entryCount, coverageSize - indexOffset - 8, 24)
+        val entries = ArrayList<Cov4Reader.IndexEntry>(minOf(entryCount, 4096))
         snapshot.readSection(indexOffset.toLong() + 8, entryCount.toLong() * 24) { input ->
             repeat(entryCount) {
                 val pathHash = java.lang.Long.reverseBytes(input.readLong())
@@ -147,14 +182,14 @@ private class Contents(
                 val dataSize = input.readIntLe()
                 val crc32 = input.readIntLe()
 
-                require(dataOffset >= 0 && dataSize >= 0 && dataOffset.toLong() + dataSize <= coverageSize) {
+                requireFormat(dataOffset >= 28 && dataSize > 0 && dataOffset.toLong() + dataSize <= coverageSize) {
                     "Invalid COV4 file block bounds"
                 }
-                require(pathOffset >= 0 && pathOffset.toLong() + 4 <= dataSize) { "Invalid COV4 path offset" }
+                requireFormat(pathOffset >= 4 && pathOffset.toLong() + 4 <= dataSize) { "Invalid COV4 path offset" }
                 // Read the file path from the FILE section
                 val pathPosition = dataOffset.toLong() + pathOffset
                 val pathLength = snapshot.read(pathPosition, 4).int
-                require(pathLength >= 0 && pathLength.toLong() + pathOffset + 4 <= dataSize) { "Invalid COV4 path length" }
+                requireFormat(pathLength in 0..MAX_STRING_BYTES && pathLength.toLong() + pathOffset + 4 <= dataSize) { "Invalid COV4 path length" }
                 val filePath = String(snapshot.read(pathPosition + 4, pathLength).array(), Charsets.UTF_8)
 
                 entries.add(Cov4Reader.IndexEntry(pathHash, pathOffset, dataOffset, dataSize, crc32, filePath))
@@ -181,10 +216,12 @@ private class Contents(
 
         // Test sets
         val testSetsCount = buf.readIntLe()
-        val testSets = ArrayList<List<String>>(testSetsCount)
+        checkCount("test set", testSetsCount, buf.available().toLong(), 4)
+        val testSets = ArrayList<List<String>>(minOf(testSetsCount, 4096))
         for (s in 0 until testSetsCount) {
             val setSize = buf.readIntLe()
-            val names = ArrayList<String>(setSize)
+            checkCount("test set size", setSize, buf.available().toLong(), 4)
+            val names = ArrayList<String>(minOf(setSize, 4096))
             for (idx in 0 until setSize) {
                 val testIdx = buf.readIntLe()
                 names.add(if (testIdx in tests.indices) tests[testIdx] else "unknown-test-$testIdx")
@@ -194,7 +231,8 @@ private class Contents(
 
         // Line mappings
         val lineCount = buf.readIntLe()
-        val lineMap = LinkedHashMap<Int, List<String>>(lineCount)
+        checkCount("line", lineCount, buf.available().toLong(), 8)
+        val lineMap = LinkedHashMap<Int, List<String>>(minOf(lineCount, 4096))
         for (l in 0 until lineCount) {
             if (l % 256 == 0) CoverageCancellation.check()
             val lineNumber = buf.readIntLe()
@@ -214,16 +252,28 @@ private class Contents(
 
     private fun DataInputStream.readString(): String {
         val length = readIntLe()
-        require(length >= 0 && length.toLong() <= coverageSize) { "Invalid COV4 string length" }
+        requireFormat(length >= 0) { "COV4: negative string length $length" }
+        requireFormat(length <= MAX_STRING_BYTES && length <= available()) { "Invalid COV4 string length $length" }
         val bytes = ByteArray(length)
         readFully(bytes)
         return String(bytes, Charsets.UTF_8)
     }
 
     companion object {
+        private const val MAX_STRING_BYTES = 1 shl 20
         private const val MAGIC = 0x434F5633       // "COV3"
         private const val VERSION = 4
         private const val MARKER_FILE = 0x46494C45 // "FILE"
         private const val MARKER_INDEX = 0x494E4458 // "INDX"
+    }
+
+    private fun requireFormat(condition: Boolean, message: () -> String) {
+        if (!condition) throw CoverageApiException(message(), kind = CoverageErrorKind.ARTIFACT_PARSE)
+    }
+
+    private fun checkCount(what: String, count: Int, remaining: Long, recordSize: Int) {
+        requireFormat(count >= 0 && count.toLong() * recordSize <= remaining) {
+            "COV4: implausible $what count $count in $sourceName"
+        }
     }
 }

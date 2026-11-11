@@ -4,6 +4,49 @@
 
 ## [Unreleased]
 
+- Merge the upstream covd engine, failure handling, credential-store token storage and integration test suites while retaining Raketa IDE support and the local coverage layer
+- The IDE no longer freezes for seconds when you show the coverage gutter or delete an artifact: git, the cache and the coverage daemon are used in the background
+- The Artifacts tab refreshes without UI glitches when a load finishes in the background
+- The first-run GitLab token dialog appears once per IDE start, even when several projects open together
+- A branch switch made outside the IDE (a linked worktree, a terminal checkout) is noticed within about 30 seconds at most, and commits of a submodule no longer trigger needless coverage reloads
+- Editors restored at startup are re-highlighted after you edit them, even if the coverage was not loaded yet when they opened
+- Keep the GitLab access token in the IDE credential store (PasswordSafe) instead of plain text in the settings XML; a token left by an older version is moved automatically on the first start
+- Stop syncing the plugin settings between machines (roaming is disabled), because the token lives in the local credential store
+- Make the token field a password field: the stored token is not displayed, and a new "Remove the stored token when applied" checkbox deletes it
+- Build the token link and the project search from the same base URL as the loader, so a GitLab with an explicit `http://host:port` domain works everywhere
+- Fix the default GitLab domain to `gitlab.raketa.in` instead of the external URL `raketa.dev`
+- Rename the enable checkbox to "Enable the coverage plugin for this IDE installation": it is an IDE-wide switch, not a per-project one
+- Validate COV4 lengths, counters and section checksums; a damaged FILE section shows no coverage while intact files remain usable, and active immutable snapshots survive cache replacement or deletion
+- A long GitLab download inside the coverage daemon is no longer restarted after a timeout, so it cannot take twice as long or leave a second daemon process behind
+- Offline coverage is taken from the artifact of the current component, not from one cached for another component
+- Line mapping no longer diffs every file on every highlight when the file is unchanged, and files with Windows line endings map correctly
+- Coverage daemon start errors (for example a locked cache directory) are reported with their own reason instead of a generic "daemon unavailable"
+- The daemon token is no longer written to `idea.log` or the Log tab when a handshake is malformed
+- While a CI coverage job is running the plugin asks again after 5, 10, 20, 40 seconds (then every minute) instead of every second
+- A pinned coverage artifact chosen in Artifacts is no longer replaced by the 30-second refresh or by automatic retries; "Load Coverage from GitLab" and "Fetch" lift the pin and load the current commit
+- "Clear Coverage Data" now stays cleared: it stops the refresh timer and lifts the pin; coverage comes back on the next commit change, a settings change or a manual load
+- A coverage answer that arrives after you switched commits is shown as outdated and the coverage of the new commit is loaded right away, instead of being presented as up to date
+- Fewer rare glitches with simultaneous loads and editor repaints: the coverage state is now updated atomically
+- Bundle the covd daemon for all five platforms in the plugin zip: earlier release builds shipped without it and could not load any coverage ("daemon unavailable"); the build now fails when a binary is missing
+- Keep an updated plugin from running the daemon binary that an older version extracted: the binary is extracted to a directory named after its content, through an atomic move, so a half-written file is never used
+- Retry a coverage load that fails on a transient daemon or GitLab error three times (5 s / 15 s / 45 s, never sooner than the daemon asks) and then show a "Coverage Notifications" balloon with *Retry now* and *Show log*; a new balloon replaces the old one
+- Stop retrying an expired or invalid GitLab token: a sticky balloon offers *Update token…*, the 30 s poller and the HEAD tracker stay quiet until the token or other GitLab settings change (switching HEAD preserves the auth block), and applying the settings loads again without an IDE restart
+- Stop asking GitLab every 30 seconds for a deterministic failure (`NO_COMPONENT_JOBS`, `NO_DATA`, `PROJECT_SETUP`, `GIT`): the poller waits for a new HEAD or changed settings, and a manual *Load Coverage from GitLab* always bypasses the block
+- Add test/diagnostics knobs `-Dcoverage.retry.delaysMs=500,1500,4500` and `-Dcoverage.uiTestCommands=<file>`; the UI-test snapshot reports `retryAttempt`, `retryMax`, `blocked`, `notifications` and `lastCommand`
+- Add real-project diagnostics: `-Dcoverage.cacheRoot` and `-Dcoverage.perf.dir` relocate the covd cache and the perf log, `-Dcoverage.covdResponses=<dir>` saves every `ensure`/`import` answer (never the token), the daemon trace now keeps its GitLab calls and errors, the perf log gains `covd.response`/`covd.spawn`/`ev=covdsample` (pid, RSS, CPU, threads, VSZ of the daemon), and the UI-test snapshot reports `loading`, `coverageGeneration`, `dumb`, `covdInstanceId` and `covdPid`
+- Start the covd daemon once when several coverage requests arrive together (a cold client used to spawn one process per caller), and restart it once, not once per caller, after it exits
+- Handle daemon answers by HTTP status: an error without a `state` (for example an expired daemon token) is reported as an error instead of an empty state, and a non-JSON reply from a proxy is reported as "daemon unavailable" instead of failing with a parser exception
+- Accept an explicit scheme in the GitLab domain setting (`http://host:8080`) for GitLab instances without TLS; a bare domain still means `https://`
+- Fix the GitLab project list in Settings → Tools → GitLab Coverage: project paths were always empty (snake_case fields were not mapped), so rows were blank and search by path found nothing
+- Retry the project list request on timeouts and `5xx` answers (3 attempts with a pause) and show the real failure reason in the dialog instead of an empty list
+- Load coverage through the covd daemon: pipeline resolution, artifact download and COV4 building happen outside the IDE process and are shared by all IDE windows; the daemon is required, the plugin no longer downloads or parses artifacts itself
+- Keep local `.covt`/`.covt.gz` imports, collection and stale-run restoration as a separate overlay over daemon-loaded CI coverage; retain in-process parsing and writing for local archives
+- Reduce memory and CPU overhead when processing coverage artifacts: decode shared test sets once and normalize each unique test name once per report
+- Reuse the decoded test set when reading cached COV4 data, so opening a file no longer allocates one test list per covered line
+- Add structured performance logging (heap, per-thread allocations, CPU, GC per phase) with a Find Action to reveal the log folder; disable with `-Dcoverage.perf.log=false`
+- Reuse a cached master (baseline) coverage artifact when the current pipeline has no jobs for the component, instead of re-downloading and rewriting it on every refresh
+- Speed up large coverage loads: merge shards in one pass, write COV4 sets as int arrays, and open the cache index without reading the whole file
+
 ## [2.9.7] - 2026-11-06
 
 - Close GitLab HTTP/retry executors and cancel pending requests when replacing the client or unloading the plugin
@@ -62,6 +105,14 @@
 - Lines covered by a local run are shown in dark blue (`LOCAL` category); the tooltip shows how many covering tests come from it
 - "Collect Local Coverage" toggle (Covering Line toolbar, Find Action, settings): Behat runs started from the IDE — gutter ▶, run configurations, Run from the coverage panels — get pcov and binary-coverage options added and write `local.covt` into the local coverage dir; services whose `behat.yml` has no profile with the binary coverage extension run unchanged
 - "Collect Local Coverage" also works for runs through PhpStorm's Behat helper (`.phpstorm_helpers/behat.php`): the service directory is taken from `IDE_BEHAT_DIR` or `--config`
+
+## [2.7.2] - 2026-11-05
+- Fix raketa coverage paths after the `core` → `app/raketa` move: strip the new `app/raketa/web/` CI prefix (legacy `core/web/` still supported)
+- Restore the `features/` segment in raketa behat test paths so test navigation and run work again
+- Update the bundled PHP coverage extension to the v2 repo-relative contract (`perLine.repoRoot`)
+- Normalize old `.cov4` caches on read (paths and test names), so existing coverage keeps working after the format change without re-downloading artifacts
+- Remove the `<until-build>` cap so the plugin stays installable on future IDE versions (required for `since-build` 243+)
+
 
 ## [2.7.0] - 2026-08-17
 - Shared app-level GitLab coordinator: single worker thread, TTL-cached metadata and a rate limiter — dramatically fewer API requests

@@ -15,7 +15,7 @@ import com.intellij.util.Alarm
 /**
  * Listens for new editors being opened and applies coverage highlights.
  *
- * Also installs a DocumentListener on each editor that has coverage data.
+ * Also installs a DocumentListener on each file-backed editor, even before coverage is loaded.
  * On document changes, it debounces a re-highlight so that ComparisonManager
  * recomputes the old→new line mapping from cached old content vs current text.
  */
@@ -23,6 +23,9 @@ class CoverageEditorListener : EditorFactoryListener {
 
     companion object {
         private val COVERAGE_DOC_DISPOSABLE_KEY = Key.create<Disposable>("COVERAGE_DOC_DISPOSABLE")
+
+        internal fun isListening(editor: Editor): Boolean =
+            editor.getUserData(COVERAGE_DOC_DISPOSABLE_KEY) != null
     }
 
     override fun editorCreated(event: EditorFactoryEvent) {
@@ -43,15 +46,13 @@ class CoverageEditorListener : EditorFactoryListener {
     }
 
     private fun installDocumentListener(editor: Editor, project: Project) {
+        if (isListening(editor)) return
         // Installed even without coverage: local runs can arrive while the editor is open,
         // and re-highlighting is a no-op until there is data.
         val virtualFile = FileDocumentManager.getInstance().getFile(editor.document)
         if (virtualFile == null) {
             return
         }
-        val lineMappingService = LineMappingService.getInstance(project)
-        lineMappingService.toRelativePath(virtualFile.path) ?: return
-
         val listener = CoverageDocumentListener(editor, project)
         // Parented to the plugin so a dynamic unload removes the listener from the document.
         val disposable = Disposer.newDisposable(CoveragePluginDisposable.getInstance(project), "CoverageDocumentListener")

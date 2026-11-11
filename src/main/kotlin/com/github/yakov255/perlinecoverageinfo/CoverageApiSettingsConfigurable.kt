@@ -2,13 +2,11 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.ide.BrowserUtil
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.application.invokeLater
 import com.intellij.openapi.options.Configurable
-import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.ui.HyperlinkLabel
 import com.intellij.ui.components.JBList
-import com.intellij.ui.components.JBLabel
+import com.intellij.ui.components.JBPasswordField
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
 import com.intellij.util.ui.JBUI
@@ -22,12 +20,16 @@ class CoverageApiSettingsConfigurable : Configurable {
 
     private val log = CoverageLog.get(CoverageApiSettingsConfigurable::class.java)
 
-    private val enabledCheckBox = JCheckBox("Enable coverage plugin for this project")
+    // The plugin is an application service, so the switch applies to the whole IDE installation.
+    private val enabledCheckBox = JCheckBox("Enable the coverage plugin for this IDE installation")
     private val gitlabDomainField = JBTextField()
-    private val bearerTokenField = JBTextField()
+
+    // Password field: the stored token is never shown, and a new one is never logged.
+    private val bearerTokenField = JBPasswordField()
+    private val clearTokenCheckBox = JCheckBox("Remove the stored token when applied")
     private val coverageBranchField = JBTextField()
     private val localCoverageDirField = JBTextField()
-    private val collectLocalCoverageCheckBox = JCheckBox("Collect coverage when running Behat from the IDE")
+    private val collectLocalCoverageCheckBox = JCheckBox("Collect local coverage from IDE Behat runs")
     private val projectNameLabel = JBTextField().apply { isEditable = false }
     private val tokenLink = HyperlinkLabel("Create a Personal Access Token (scope: read_api)")
 
@@ -45,8 +47,19 @@ class CoverageApiSettingsConfigurable : Configurable {
             override fun changedUpdate(e: DocumentEvent?) = updateTokenLinkUrl()
         })
 
+        bearerTokenField.toolTipText =
+            "Stored in the IDE credential store. Leave empty to keep the current token."
+        clearTokenCheckBox.addItemListener {
+            if (clearTokenCheckBox.isSelected) {
+                bearerTokenField.text = ""
+                bearerTokenField.isEnabled = false
+            } else {
+                bearerTokenField.isEnabled = true
+            }
+        }
+
         tokenLink.addHyperlinkListener {
-            BrowserUtil.browse("https://${gitlabDomainField.text.trimEnd('/')}/-/user_settings/personal_access_tokens")
+            BrowserUtil.browse(tokenSettingsUrl())
         }
 
         val searchButton = JButton("Search...").apply {
@@ -63,20 +76,25 @@ class CoverageApiSettingsConfigurable : Configurable {
             .addLabeledComponent("GitLab Domain:", gitlabDomainField)
             .addLabeledComponent("Access Token:", bearerTokenField)
             .addComponentToRightColumn(tokenLink)
+            .addComponentToRightColumn(clearTokenCheckBox)
             .addLabeledComponent("GitLab Project:", projectPanel)
             .addLabeledComponent("Coverage Branch:", coverageBranchField)
-            .addSeparator()
             .addLabeledComponent("Local Coverage Dir:", localCoverageDirField)
-            .addComponentToRightColumn(JBLabel("Relative to the git root; new .covt files there are merged over CI coverage"))
             .addComponent(collectLocalCoverageCheckBox)
             .addComponentFillVertically(JPanel(), 0)
             .panel
     }
 
+    /** Same base URL as the loader: an explicit `http://host:port` domain is kept as it is. */
+    private fun tokenSettingsUrl(): String =
+        "${CoverageApiSettings.baseUrlFor(gitlabDomainField.text)}/-/user_settings/personal_access_tokens"
+
     private fun updateTokenLinkUrl() {
-        val domain = gitlabDomainField.text.trimEnd('/')
-        tokenLink.setHyperlinkTarget("https://$domain/-/user_settings/personal_access_tokens")
+        tokenLink.setHyperlinkTarget(tokenSettingsUrl())
     }
+
+    /** What the user typed; `""` means "keep the stored token". */
+    private fun typedToken(): String = String(bearerTokenField.password)
 
     private fun showProjectSearchDialog() {
         val dialog = ProjectSearchDialog()
@@ -135,12 +153,15 @@ class CoverageApiSettingsConfigurable : Configurable {
         }
 
         private fun loadProjects() {
-            val domain = gitlabDomainField.text.trimEnd('/')
-            val token = bearerTokenField.text
+            val baseUrl = CoverageApiSettings.baseUrlFor(gitlabDomainField.text)
+            val typed = typedToken()
 
             ApplicationManager.getApplication().executeOnPooledThread {
                 try {
-                    val projects = GitLabApiClient("https://$domain", token).use { it.listMemberProjects() }
+                    // An empty field means the user did not retype the token: use the stored one.
+                    val token = typed.ifEmpty { CoverageApiSettings.getInstance().bearerToken }
+                    val client = GitLabProjectsClient(baseUrl, token)
+                    val projects = client.listMemberProjects()
                     log.debug("listMemberProjects returned ${projects.size} results")
 
                     SwingUtilities.invokeLater {
@@ -180,7 +201,7 @@ class CoverageApiSettingsConfigurable : Configurable {
         val settings = CoverageApiSettings.getInstance()
         return enabledCheckBox.isSelected != settings.enabled ||
                gitlabDomainField.text != settings.gitlabDomain ||
-               bearerTokenField.text != settings.bearerToken ||
+               tokenModified(settings) ||
                selectedProjectId != settings.gitlabProjectId ||
                selectedProjectName != settings.gitlabProjectName ||
                coverageBranchField.text != settings.coverageBranch ||
@@ -188,57 +209,49 @@ class CoverageApiSettingsConfigurable : Configurable {
                collectLocalCoverageCheckBox.isSelected != settings.collectLocalCoverage
     }
 
+    /**
+     * The token counts as changed only when the user typed a new one or asked to remove it. The
+     * stored value is never copied into the field, so an untouched page is never "modified".
+     */
+    private fun tokenModified(settings: CoverageApiSettings): Boolean {
+        if (clearTokenCheckBox.isSelected) return true
+        val typed = typedToken()
+        return typed.isNotEmpty() && typed != settings.bearerToken
+    }
+
     override fun apply() {
         val settings = CoverageApiSettings.getInstance()
-        val localDirChanged = localCoverageDirField.text.trim().trim('/') != settings.localCoverageDir
         settings.enabled = enabledCheckBox.isSelected
         settings.gitlabDomain = gitlabDomainField.text
-        settings.bearerToken = bearerTokenField.text
+        val typed = typedToken()
+        when {
+            clearTokenCheckBox.isSelected -> settings.bearerToken = ""
+            typed.isNotEmpty() -> settings.bearerToken = typed
+        }
+        // Never keep the secret in a widget after it was saved.
+        bearerTokenField.text = ""
+        clearTokenCheckBox.isSelected = false
         settings.gitlabProjectId = selectedProjectId
         settings.gitlabProjectName = selectedProjectName
         settings.coverageBranch = coverageBranchField.text
-        settings.localCoverageDir = localCoverageDirField.text.trim().trim('/')
+        settings.localCoverageDir = localCoverageDirField.text.trim()
         settings.collectLocalCoverage = collectLocalCoverageCheckBox.isSelected
 
-        if (localDirChanged) {
-            for (project in ProjectManager.getInstance().openProjects) {
-                if (project.isDisposed) continue
-                ApplicationManager.getApplication().executeOnPooledThread {
-                    LocalCoverageService.getInstance(project).restartWatching()
-                }
-            }
-        }
         triggerCoverageLoad()
     }
 
     private fun triggerCoverageLoad() {
-        val settings = CoverageApiSettings.getInstance()
-        if (!settings.enabled) {
-            log.info("CoverageApiSettingsConfigurable: plugin not enabled, skipping auto-load")
-            return
-        }
-        if (settings.gitlabDomain.isBlank() || settings.bearerToken.isBlank() || settings.gitlabProjectId <= 0) {
-            log.info("CoverageApiSettingsConfigurable: settings not configured, skipping auto-load")
-            return
-        }
-
-        invokeLater {
-            for (project in ProjectManager.getInstance().openProjects) {
-                if (!project.isDisposed) {
-                    log.info("CoverageApiSettingsConfigurable: triggering load for project ${project.name}")
-                    ApplicationManager.getApplication().executeOnPooledThread {
-                        CoverageLoadService.getInstance(project).loadOfflineFirst()
-                    }
-                }
-            }
-        }
+        CoverageSettingsActions.afterSettingsApplied()
     }
 
     override fun reset() {
         val settings = CoverageApiSettings.getInstance()
         enabledCheckBox.isSelected = settings.enabled
         gitlabDomainField.text = settings.gitlabDomain
-        bearerTokenField.text = settings.bearerToken
+        // The stored token is not shown: the empty field means "keep it".
+        bearerTokenField.text = ""
+        bearerTokenField.isEnabled = true
+        clearTokenCheckBox.isSelected = false
         selectedProjectId = settings.gitlabProjectId
         selectedProjectName = settings.gitlabProjectName
         projectNameLabel.text = selectedProjectName

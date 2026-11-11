@@ -4,42 +4,45 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
 
 /**
- * Manages disk-based cache of coverage data in COV4 binary format.
+ * Read-only view of the coverage cache written by the covd daemon.
  *
- * Cache structure:
  * ```
  * ~/.cache/coverage-plugin/<projectId>/
- *   <commitHash>-<component>.cov4   -- component-scoped binary coverage file
- *   cache-index.json                 -- metadata for all cached entries
+ *   <commitHash>-<component>.cov4   -- binary per-line coverage
+ *   cache-index.json                -- metadata, written only by the daemon
  * ```
  *
- * Cache key is the **commit hash + component** (not pipeline ID), since the same commit
- * always produces the same coverage regardless of which pipeline ran it.
+ * The plugin never writes the index or deletes files itself: mutations go through the
+ * daemon API, otherwise two writers would corrupt `cache-index.json`.
  */
 @Service(Service.Level.PROJECT)
 class CoverageCacheService(private val project: Project) {
 
     private val log = CoverageLog.get(CoverageCacheService::class.java)
-    private val json = Json { prettyPrint = false }
+
+    // The daemon may add fields to its index at any time; a new field must not make the whole
+    // cache invisible to the plugin (offline-first and the Artifacts tab read this file).
+    private val json = Json { prettyPrint = false; ignoreUnknownKeys = true }
 
     private fun cacheDir(): File {
         val settings = CoverageApiSettings.getInstance()
-        val home = System.getProperty("user.home")
-        return File(home, ".cache/coverage-plugin/${settings.gitlabProjectId}")
+        val root = CoveragePaths.cacheRoot(cacheRootOverride)
+        return File(root, settings.gitlabProjectId.toString())
     }
+
+    private fun canonicalComponent(component: String): String = ComponentConfig.allEntries()
+        .firstOrNull { it.componentId == component || it.coverageKey == component }?.coverageKey ?: component
 
     private fun cov4FileName(commitHash: String, component: String): String =
         "${commitHash}-${component.replace('/', '_')}.cov4"
 
-    /**
-     * Returns the set of all commit hashes that have cached .cov4 files.
-     * Used for fast offline lookup without opening readers.
-     */
+    /** Commit hashes that have a cached `.cov4` on disk. Used for the offline-first lookup. */
     fun cachedCommitHashes(): Set<String> {
         val index = readIndex() ?: return emptySet()
         val dir = cacheDir()
@@ -50,29 +53,42 @@ class CoverageCacheService(private val project: Project) {
     }
 
     /**
-     * Finds the first commit from [candidates] that has a cached .cov4 file.
-     * Returns the commit hash, or null if none are cached.
+     * Returns the most recent cached commit of [component] among [candidates], or null.
+     *
+     * The component filter matters: a cache directory can hold artifacts of several components,
+     * and a commit cached for another component has no coverage for this one.
      */
-    fun findCachedCommit(candidates: List<String>): String? {
-        val cached = cachedCommitHashes()
-        if (cached.isEmpty()) return null
-        return candidates.firstOrNull { it in cached }
+    fun findCachedCommit(candidates: List<String>, component: String): String? {
+        val index = readIndex() ?: return null
+        val dir = cacheDir()
+        val available = index.entries
+            .filter { canonicalComponent(it.component) == canonicalComponent(component) }
+            .filter { File(dir, cov4FileName(it.commitHash, it.component)).exists() }
+            .map { it.commitHash }
+            .toSet()
+        return candidates.firstOrNull { it in available }
     }
 
     /**
-     * Looks up cached coverage for a commit and component.
-     * Returns a [Cov4Reader] for on-demand file access, or null if not cached.
-     * The caller owns the reader lifecycle and must close it when done.
+     * Opens a reader for a cached artifact, sharing it between windows of the same repo.
+     * Returns null when the index has no entry or the file is missing.
      */
     fun get(commitHash: String, component: String, gitRoot: File? = null): Cov4Reader? {
         val index = readIndex() ?: return null
-        val entry = index.entries.find { it.commitHash == commitHash && it.component == component } ?: return null
-        val cov4File = File(cacheDir(), cov4FileName(commitHash, component))
-        if (!cov4File.exists()) return null
+        val entry = index.entries.firstOrNull { it.commitHash == commitHash && it.component == component }
+            ?: index.entries.firstOrNull {
+                it.commitHash == commitHash && canonicalComponent(it.component) == canonicalComponent(component)
+            } ?: return null
+        val cov4File = File(cacheDir(), cov4FileName(commitHash, entry.component))
+        val identity = try {
+            val attributes = Files.readAttributes(cov4File.toPath(), BasicFileAttributes::class.java)
+            "${cov4File.canonicalPath}|${attributes.fileKey()}|${attributes.size()}|${attributes.lastModifiedTime()}"
+        } catch (_: java.io.IOException) {
+            return null
+        }
 
-        // Old .cov4 files were written before path normalization (and local .covt imports
-        // are still written as-is), so normalize keys and test names while reading.
-        // For the current repo-relative format this is a no-op.
+        // Old caches were written before path normalization; normalizing while reading keeps
+        // them usable. For the current daemon-written layout this is a no-op.
         val pathNormalizer: (String) -> String
         val testNormalizer: (String) -> String
         if (component == "raketa") {
@@ -84,255 +100,74 @@ class CoverageCacheService(private val project: Project) {
             testNormalizer = { it }
         }
 
-        // Share Cov4Reader instances across project windows so large files are read
-        // once per commit, not once per open window. Each caller owns a handle;
-        // closing it leaves the cache and other project owners intact.
         return GitLabCoordinator.getInstance().sharedReader(
             commitHash,
             component,
             open = {
                 try {
-                    Cov4Reader(cov4File, pathNormalizer, testNormalizer).also {
-                        log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB, component=$component)")
+                    CoveragePerfLog.span("cov4.open", "commit" to commitHash.take(8), "component" to component, "bytes" to cov4File.length()) {
+                        Cov4Reader(cov4File, pathNormalizer, testNormalizer).also {
+                            log.info("Coverage cache: opened COV4 reader for commit $commitHash (${cov4File.length() / 1024}KB, component=$component)")
+                        }
                     }
                 } catch (e: Exception) {
                     log.warn("Coverage cache: failed to open COV4 file for commit $commitHash (component=$component)", e)
                     null
                 }
             },
-            variant = if (component == "raketa") "norm-v1" else "plain",
+            variant = "$identity|" +
+                if (component == "raketa") "norm-v1" else "plain",
         )
     }
 
-    /**
-     * Updates the last-used timestamp for an existing cache entry.
-     * Called whenever an artifact is activated so the Artifacts panel can show
-     * when each artifact was last viewed.
-     */
-    fun updateLastUsed(commitHash: String, component: String) {
-        synchronized(LOCK) {
-            val index = readIndex() ?: return
-            if (index.entries.none { it.commitHash == commitHash && it.component == component }) return
-            val updated = index.entries.map { entry ->
-                if (entry.commitHash == commitHash && entry.component == component)
-                    entry.copy(lastUsedMs = System.currentTimeMillis()) else entry
-            }
-            writeIndex(CacheIndex(entries = updated))
-        }
-    }
-
-    /**
-     * Writes merged coverage data to a .cov4 cache file.
-     * Computes and persists coverage statistics (file count, line counts) into the cache index.
-     */
-    fun writeCov4(
-        commitHash: String,
-        pipelineId: Long,
-        coverage: Map<String, Map<Int, List<String>>>,
-        component: String,
-        branch: String? = null,
-    ) {
-        synchronized(LOCK) {
-            cleanup()
-            val dir = cacheDir()
-            dir.mkdirs()
-            val cov4File = File(dir, cov4FileName(commitHash, component))
-
-            try {
-                Cov4Writer.write(coverage, cov4File)
-            } catch (e: Exception) {
-                log.warn("Coverage cache: failed to write COV4 for commit $commitHash (component=$component)", e)
-                return
-            }
-
-            val totalFiles = coverage.size
-            val totalLines = coverage.values.sumOf { it.size }
-            val coveredLines = coverage.values.sumOf { lineMap -> lineMap.values.count { it.isNotEmpty() } }
-
-            val now = System.currentTimeMillis()
-            val index = readIndex() ?: CacheIndex(entries = emptyList())
-            val newEntry = CacheEntry(
-                commitHash = commitHash,
-                pipelineId = pipelineId,
-                component = component,
-                branch = branch,
-                timestampMs = now,
-                totalFiles = totalFiles,
-                totalLines = totalLines,
-                coveredLines = coveredLines,
-                lastUsedMs = now,
-            )
-            val updated = index.entries.filter { it.commitHash != commitHash || it.component != component } + newEntry
-            writeIndex(CacheIndex(entries = updated))
-
-            log.info("Coverage cache: stored commit $commitHash as COV4 (${cov4File.length() / 1024}KB, component=$component, $totalFiles files, $coveredLines/$totalLines lines covered)")
-        }
-    }
-
-    /**
-     * Deletes the cached artifact for [commitHash] — both the .cov4 file and its index entry.
-     * Returns true if the file was deleted (or was already absent), false on I/O error.
-     */
+    /** Deletes a cached artifact through the daemon, which owns the cache and the index. */
     fun deleteArtifact(commitHash: String, component: String): Boolean {
-        synchronized(LOCK) {
-            val dir = cacheDir()
-            val cov4File = File(dir, cov4FileName(commitHash, component))
-
-            if (cov4File.exists() && !cov4File.delete()) {
-                log.warn("Coverage cache: failed to delete ${cov4File.absolutePath}")
-                return false
-            }
-
-            val index = readIndex() ?: CacheIndex(entries = emptyList())
-            val updated = index.entries.filter { it.commitHash != commitHash || it.component != component }
-            if (updated.size != index.entries.size) {
-                writeIndex(CacheIndex(entries = updated))
-            }
-
-            log.info("Coverage cache: deleted artifact for commit $commitHash (component=$component)")
-            return true
+        val settings = CoverageApiSettings.getInstance()
+        val storedComponent = readIndex()?.entries?.firstOrNull {
+            it.commitHash == commitHash && canonicalComponent(it.component) == canonicalComponent(component)
+        }?.component ?: component
+        return CovdClient.deleteArtifact(settings.gitlabProjectId.toString(), commitHash, storedComponent).also { deleted ->
+            if (deleted) GitLabCoordinator.getInstance().evictSharedReaders(commitHash, component)
         }
     }
 
-    /**
-     * Returns metadata for all locally cached artifacts, sorted newest-first.
-     * Entries whose .cov4 file is missing from disk are excluded.
-     */
+    /** Cached artifacts for the Artifacts panel, newest first. */
     fun listArtifacts(): List<ArtifactInfo> {
-        val dir = cacheDir()
         val index = readIndex() ?: return emptyList()
-        return index.entries
-            .sortedByDescending { it.timestampMs }
-            .mapNotNull { entry ->
-                val cov4File = File(dir, cov4FileName(entry.commitHash, entry.component))
-                if (!cov4File.exists()) return@mapNotNull null
-                ArtifactInfo(
-                    commitHash = entry.commitHash,
-                    component = entry.component,
-                    pipelineId = entry.pipelineId,
-                    timestampMs = entry.timestampMs,
-                    fileSizeBytes = cov4File.length(),
-                    totalFiles = entry.totalFiles,
-                    totalLines = entry.totalLines,
-                    coveredLines = entry.coveredLines,
-                    lastUsedMs = entry.lastUsedMs,
-                    branch = entry.branch,
-                )
-            }
-    }
-
-    /**
-     * Removes cache entries older than [maxAgeDays] days, then reconciles the
-     * index with the files actually on disk:
-     *  - index entries whose `.cov4` file is missing are dropped
-     *  - `.cov4` files in the cache dir with no matching index entry are deleted
-     *
-     * If a `.cov4` file fails to delete, the matching index entry is kept so the
-     * next cleanup can retry.
-     */
-    fun cleanup(maxAgeDays: Int = 7) {
-        synchronized(LOCK) {
-            val dir = cacheDir()
-            val index = readIndex() ?: CacheIndex(entries = emptyList())
-            val cutoff = System.currentTimeMillis() - maxAgeDays * 24 * 60 * 60 * 1000L
-            val (freshEntries, expiredEntries) = index.entries.partition { (it.lastUsedMs ?: 0) > cutoff }
-
-            val expiredRetained = mutableListOf<CacheEntry>()
-            var expiredDeleted = 0
-            for (entry in expiredEntries) {
-                val cov4File = File(dir, cov4FileName(entry.commitHash, entry.component))
-                if (!cov4File.exists()) {
-                    continue
-                }
-                if (cov4File.delete()) {
-                    expiredDeleted++
-                    log.info("Coverage cache: cleaned up commit ${entry.commitHash} (component=${entry.component})")
-                } else {
-                    log.warn("Coverage cache: failed to delete ${cov4File.absolutePath}; will retry on next cleanup")
-                    expiredRetained.add(entry)
-                }
-            }
-
-            // Drop index entries whose file is missing (crashed write, manual rm, etc.).
-            val (existing, missing) = freshEntries.partition {
-                File(dir, cov4FileName(it.commitHash, it.component)).exists()
-            }
-            if (missing.isNotEmpty()) {
-                log.info("Coverage cache: dropped ${missing.size} index entries with no file on disk")
-            }
-
-            // Delete orphan .cov4 files on disk that no index entry references.
-            val knownKeys = (existing + expiredRetained).map { it.commitHash to it.component }.toHashSet()
-            var orphansDeleted = 0
-            var orphansFailed = 0
-            dir.listFiles { f -> f.isFile && f.name.endsWith(".cov4") }?.forEach { file ->
-                val key = fileKey(file)
-                if (key !in knownKeys) {
-                    if (file.delete()) {
-                        orphansDeleted++
-                        log.info("Coverage cache: deleted orphan file ${file.name}")
-                    } else {
-                        orphansFailed++
-                        log.warn("Coverage cache: failed to delete orphan ${file.absolutePath}")
-                    }
-                }
-            }
-
-            val finalEntries = existing + expiredRetained
-            if (finalEntries.size != index.entries.size) {
-                writeIndex(CacheIndex(entries = finalEntries))
-            }
-
-            if (expiredDeleted > 0 || missing.isNotEmpty() || orphansDeleted > 0 || orphansFailed > 0) {
-                log.info(
-                    "Coverage cache: cleanup done — expired=$expiredDeleted, " +
-                        "missingIndexDropped=${missing.size}, orphansDeleted=$orphansDeleted, " +
-                        "orphansFailed=$orphansFailed, remaining=${finalEntries.size}"
-                )
-            }
-        }
-    }
-
-    /**
-     * Parses a .cov4 filename back into (commitHash, component).
-     * Example: "a280a1c1-api_avia.cov4" → ("a280a1c1", "api_avia")
-     */
-    private fun fileKey(file: File): Pair<String, String> {
-        val name = file.name.removeSuffix(".cov4")
-        val dash = name.indexOf('-')
-        return if (dash > 0) {
-            name.substring(0, dash) to name.substring(dash + 1).replace('_', '/')
-        } else {
-            // Legacy file without component — ignore by using empty string
-            name to ""
-        }
+        val dir = cacheDir()
+        return index.entries.mapNotNull { entry ->
+            val file = File(dir, cov4FileName(entry.commitHash, entry.component))
+            if (!file.exists()) return@mapNotNull null
+            ArtifactInfo(
+                commitHash = entry.commitHash,
+                pipelineId = entry.pipelineId,
+                timestampMs = entry.timestampMs,
+                fileSizeBytes = file.length(),
+                totalFiles = entry.totalFiles,
+                totalLines = entry.totalLines,
+                coveredLines = entry.coveredLines,
+                lastUsedMs = entry.lastUsedMs,
+                component = canonicalComponent(entry.component),
+                branch = entry.branch,
+            )
+        }.sortedByDescending { it.lastUsedMs ?: it.timestampMs }
     }
 
     private fun readIndex(): CacheIndex? {
-        val indexFile = File(cacheDir(), "cache-index.json")
-        if (!indexFile.exists()) return null
         return try {
-            json.decodeFromString<CacheIndex>(indexFile.readText())
+            val indexFile = File(cacheDir(), "cache-index.json")
+            if (!indexFile.isFile) return null
+            json.decodeFromString(CacheIndex.serializer(), indexFile.readText())
         } catch (e: Exception) {
-            log.warn("Coverage cache: failed to read index", e)
+            log.warn("Coverage cache: cannot read cache-index.json: ${e.message}")
             null
         }
     }
 
-    private fun writeIndex(index: CacheIndex) {
-        val dir = cacheDir()
-        dir.mkdirs()
-        val indexFile = File(dir, "cache-index.json")
-        try {
-            indexFile.writeText(json.encodeToString(index))
-        } catch (e: Exception) {
-            log.warn("Coverage cache: failed to write index", e)
-        }
-    }
-
     companion object {
-        /** Serializes in-JVM cache/index mutations across project windows sharing a repo. */
-        private val LOCK = Any()
+        /** Test seam: replaces `~/.cache/coverage-plugin`. Production code never sets it. */
+        @Volatile
+        internal var cacheRootOverride: File? = null
 
         fun getInstance(project: Project): CoverageCacheService = project.service()
     }
