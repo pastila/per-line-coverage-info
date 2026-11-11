@@ -25,10 +25,11 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Settings
 | File | Purpose |
 |------|---------|
-| `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel |
-| `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; Apply/OK save the settings and run `CoverageSettingsActions.afterSettingsApplied()` (clears every project's failure block and retry counter, then loads) |
+| `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel. The access token lives in `PasswordSafe` through `TokenStore.kt`; `State.bearerToken` is a read-only legacy field (`getState()` always returns it empty, migration happens in `loadState`), and the storage declares `roamingType = RoamingType.DISABLED` because the token is machine-local. `baseUrlFor(domain)` is the single base-URL helper (keeps an explicit `http://host:port`, adds `https://` otherwise) |
+| `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; a password field for the token (the stored value is never shown, empty means "keep", "Remove the stored token when applied" clears it), Apply/OK save the settings and run `CoverageSettingsActions.afterSettingsApplied()` (clears every project's failure block and retry counter, then loads) |
 | `CoverageSettingsActions.kt` | Shared "settings applied" path used by the settings page and the bridge command `settings.apply`: reloads every open project and lifts a token or deterministic-error block |
-| `GitLabTokenDialog.kt` | First-run dialog that asks for the GitLab domain and token when the token is empty and `tokenPrompted` is false |
+| `GitLabTokenDialog.kt` | First-run dialog that asks for the GitLab token when none is stored and `tokenPrompted` is false; password field, links built with `CoverageApiSettings.baseUrlFor` |
+| `TokenStore.kt` | `TokenStore` with a `PasswordSafe` implementation (single `CredentialAttributes` entry) and an in-memory one; `TokenCache` keeps the credential store off the EDT (cached get, background load, one writer thread, last-write-wins) and is used by `CoverageApiSettings.bearerToken`. `-Dcoverage.tokenStore=memory` is an inert-by-default test escape hatch |
 | `CustomRepoProvider.kt` | `updateSettingsProvider` — points the IDE updater at `docs/updatePlugins.xml` instead of JetBrains Marketplace |
 
 ### Component configuration
@@ -369,7 +370,7 @@ moves the covd cache and the extracted binary (the daemon is shared per cache ro
 `-Dcoverage.perf.dir=<dir>` moves the perf log, `-Dcoverage.covdResponses=<dir>` saves the raw
 daemon answers, `-Dcoverage.retry.delaysMs=500,1500,4500` replaces the retry ladder (test hook)
 and `-Dcoverage.uiTestCommands=<file>` feeds `reload` / `settings.token=` / `settings.apply` to the
-bridge (test hook). All are off by default; a normal run never sets them.
+bridge (test hook), `-Dcoverage.tokenStore=memory` keeps the GitLab token in the process instead of `PasswordSafe` (test escape hatch). All are off by default; a normal run never sets them.
 
 ## Release
 
@@ -406,6 +407,7 @@ Rules:
 - **Pin**: the pin protects the shown artifact from every automatic path. Automatic callers use `CoverageLoadService.isPinned()` together with `isBlocked()`. Only explicit user actions (`LoadCoverageAction`, Fetch, Clear) call `clearPin()`; a local `.covt` import and "Load" of an artifact set the pin.
 - **Stale answers**: `CoverageLoadService` remembers `currentHead()` before `ensure`. Never treat a response as fresh, and never reset `RetryState` for it, when HEAD moved meanwhile.
 - **Data service**: change `CoverageDataService` state only through its snapshot update (`update { }` / `setCoverage`); do not add separate `@Volatile` fields.
+- **Token**: read and write it only through `CoverageApiSettings.bearerToken`; `TokenStore`/`TokenCache` own the credential store and keep every `PasswordSafe` call off the EDT. Never log or display a token, and never add a second plain-text copy to `State`.
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.

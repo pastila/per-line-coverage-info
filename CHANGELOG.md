@@ -4,6 +4,12 @@
 
 ## [Unreleased]
 
+- Keep the GitLab access token in the IDE credential store (PasswordSafe) instead of plain text in the settings XML; a token left by an older version is moved automatically on the first start
+- Stop syncing the plugin settings between machines (roaming is disabled), because the token lives in the local credential store
+- Make the token field a password field: the stored token is not displayed, and a new "Remove the stored token when applied" checkbox deletes it
+- Build the token link and the project search from the same base URL as the loader, so a GitLab with an explicit `http://host:port` domain works everywhere
+- Fix the default GitLab domain to `gitlab.raketa.in` instead of the external URL `raketa.dev`
+- Rename the enable checkbox to "Enable the coverage plugin for this IDE installation": it is an IDE-wide switch, not a per-project one
 - Coverage no longer breaks when the cache file is deleted or damaged by another IDE or an interrupted write: the affected files simply show no coverage instead of failing the whole highlighting
 - A long GitLab download inside the coverage daemon is no longer restarted after a timeout, so it cannot take twice as long or leave a second daemon process behind
 - Offline coverage is taken from the artifact of the current component, not from one cached for another component
