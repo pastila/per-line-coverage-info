@@ -5,6 +5,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
+import org.junit.After
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
@@ -30,6 +31,14 @@ import java.util.concurrent.TimeUnit
  */
 class SandboxIdeIntegrationTest {
 
+    private val workDirs = mutableListOf<java.io.File>()
+
+    /** Each test creates a sandbox under /tmp (RAM-backed): never leave it behind. */
+    @After
+    fun deleteWorkDirs() {
+        workDirs.forEach { it.deleteRecursively() }
+    }
+
     @Test
     fun `starts a sandbox ide writes a bridge snapshot and stops only its own process`() {
         assumeTrue(
@@ -44,7 +53,7 @@ class SandboxIdeIntegrationTest {
             SandboxIde.findSandboxPluginsDir(projectRoot) != null,
         )
 
-        val work = Files.createTempDirectory("rp-ide-smoke").toFile()
+        val work = Files.createTempDirectory("rp-ide-smoke").toFile().also { workDirs += it }
         val project = File(work, "project").apply { mkdirs() }
         File(project, "index.php").writeText("<?php\n\necho 'ok';\n")
         val cacheRoot = File(work, "shared-cache").apply { mkdirs() }
@@ -97,6 +106,7 @@ class SandboxIdeIntegrationTest {
         } finally {
             sampler.stop()
             ide?.stop()
+            ide?.rootDir?.let { workDirs += it }
             context.event("smoke", "stopped", "IDE stopped", jsonObjectOf("pid" to (ide?.pid ?: -1).toString()))
             assertFalse("stop() must end the IDE process", ide?.isAlive() == true)
             assertTrue("an unrelated process must survive stop()", bystander.isAlive)
@@ -125,7 +135,7 @@ class SandboxIdeIntegrationTest {
             SandboxIde.findSandboxPluginsDir(projectRoot) != null,
         )
 
-        val work = Files.createTempDirectory("rp-ide-pair").toFile()
+        val work = Files.createTempDirectory("rp-ide-pair").toFile().also { workDirs += it }
         val projects = (1..2).map { index ->
             File(work, "project-$index").apply { mkdirs() }
                 .also { File(it, "index.php").writeText("<?php\n\necho $index;\n") }
@@ -160,6 +170,8 @@ class SandboxIdeIntegrationTest {
         } finally {
             first.stop()
             second?.stop()
+            workDirs += first.rootDir
+            second?.rootDir?.let { workDirs += it }
             assertFalse(second?.isAlive() == true)
         }
     }

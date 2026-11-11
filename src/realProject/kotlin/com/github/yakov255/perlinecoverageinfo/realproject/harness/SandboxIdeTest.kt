@@ -9,6 +9,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
@@ -20,6 +21,11 @@ import java.nio.file.Files
 class SandboxIdeTest {
 
     private val temp: File = Files.createTempDirectory("rp-sandbox-test").toFile()
+
+    @After
+    fun deleteTemp() {
+        temp.deleteRecursively()
+    }
 
     private fun fakeIdeaHome(): File = File(temp, "idea-2025.2.6.2").apply {
         File(this, "bin").mkdirs()

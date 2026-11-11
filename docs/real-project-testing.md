@@ -28,7 +28,7 @@ git worktree /tmp/raketa-load                             journals every request
 
 * The GitLab API is readable anonymously (pipelines, jobs, `HEAD` on artifacts → 200).
 * Project 335 = `raketa/raketa`. A master `push` pipeline has 7 coverage shards
-  `test:behat:coverage:raketa-8.5: [sprint:N]` of 4.5-5.8 MB each (≈ 32-40 MB; dual ≈ 70 MB).
+  `test:behat:coverage:raketa-8.5: [sprint:N]`; `plan.json` `bytes` is the size of `artifacts.zip` (4.5-5.8 MB per shard, ≈ 32-40 MB, dual ≈ 70 MB), but the daemon downloads the single `coverage.covt.gz` (≈ 0.8-1.9 MB per shard): a cold dual load moves ≈ 26 MB on the wire (14 artifacts).
   `schedule` pipelines have **no** coverage jobs. hotels: `test:behat:coverage:hotels-8.5`, ≈ 0.7 MB,
   only on branches that touch hotels.
 * covd runs the work with `context.WithoutCancel` (`ensure.go`): a client that disconnects does
@@ -97,7 +97,7 @@ Content (the token is never present; `settings.token` is not written):
 | ID | What | Expectation |
 |---|---|---|
 | R0 | Open worktree root, wait for indexing (`dumb=false`) | Baseline memory/CPU |
-| R1 | Cold start: empty cache, master, dual | `ready`; phase timings; peak daemon RSS; ≈ 70 MB through the proxy |
+| R1 | Cold start: empty cache, master, dual | `ready`; phase timings; peak daemon RSS; ≈ 26 MB through the proxy (14 artifacts) |
 | R2 | Repeat load, then IDE restart | `cached=true`, 0 GitLab requests |
 | R3 | Tour of 8-10 branches, two laps | Lap 1 downloads, lap 2 hits the cache; no IDE heap leak |
 | R4 | Open `api/hotels` as its own project | Component `hotels`; coverage keys match `api/hotels/...`; gutter classification works |

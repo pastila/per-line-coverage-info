@@ -4,6 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
@@ -15,6 +16,11 @@ import java.nio.file.Files
 class ProcSamplerTest {
 
     private val temp: File = Files.createTempDirectory("rp-proc-test").toFile()
+
+    @After
+    fun deleteTemp() {
+        temp.deleteRecursively()
+    }
 
     /** `comm` contains spaces and parentheses, utime=11+1? see assertion in the test. */
     private val stat = "4242 (java thread (pool-1)) S 1 4242 4242 0 -1 4194560 " +

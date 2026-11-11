@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Test
 import java.io.File
 import java.nio.file.Files
@@ -14,6 +15,11 @@ import java.nio.file.Files
 class RunContextTest {
 
     private val temp: File = Files.createTempDirectory("rp-run-test").toFile()
+
+    @After
+    fun deleteTemp() {
+        temp.deleteRecursively()
+    }
 
     @Test
     fun `run id is sortable and filesystem safe`() {

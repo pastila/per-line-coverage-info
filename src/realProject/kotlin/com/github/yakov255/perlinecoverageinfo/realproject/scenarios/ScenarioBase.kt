@@ -204,6 +204,27 @@ abstract class ScenarioBase {
 
     // --- finishing -----------------------------------------------------------------------
 
+    /**
+     * Keeps the tail of the IDE's `idea.log` in the run directory and deletes the sandbox
+     * (`/tmp/rp-ide-<name>`: config, indexes and caches, ~650 MB each on a RAM-backed `/tmp`).
+     * Set `-DrealProject.keepIde=true` to keep it for debugging.
+     */
+    private fun saveLogAndDropSandbox(ide: SandboxIde) {
+        runCatching {
+            val log = ide.ideaLog
+            if (log.isFile) {
+                val target = File(ctx.dir, "ide-logs/${ide.name}-idea.log").apply { parentFile.mkdirs() }
+                val bytes = log.length()
+                log.inputStream().use { input ->
+                    if (bytes > MAX_SAVED_LOG_BYTES) input.skip(bytes - MAX_SAVED_LOG_BYTES)
+                    target.outputStream().use { out -> input.copyTo(out) }
+                }
+            }
+        }
+        val keep = (System.getProperty("realProject.keepIde") ?: System.getenv("REAL_PROJECT_KEEP_IDE")) == "true"
+        if (!keep) runCatching { ide.rootDir.deleteRecursively() }
+    }
+
     /** Stops everything, collects the evidence, writes the report and fails on leaked credentials. */
     protected fun finish(): File {
         if (finished) return File(ctx.dir, "report.md")
@@ -212,6 +233,7 @@ abstract class ScenarioBase {
         polling = false
         pollers.forEach { it.interrupt() }
         ides.forEach { runCatching { it.stop() } }
+        ides.forEach { saveLogAndDropSandbox(it) }
         runCatching { sampler.stop() }
         ctx.stopSnapshotPolling()
         ctx.copyPerfLogs(File(cacheRoot, "perf"))
@@ -221,5 +243,9 @@ abstract class ScenarioBase {
         println("real-project report: ${File(ctx.dir, "report.md")}")
         assertTrue("credentials found in the run directory (${output.secretFindings.size} findings, see summary.json)", output.secretFindings.isEmpty())
         return File(ctx.dir, "report.md")
+    }
+
+    private companion object {
+        const val MAX_SAVED_LOG_BYTES = 5L * 1024 * 1024
     }
 }
