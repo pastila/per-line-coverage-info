@@ -18,10 +18,10 @@ class GitLabTokenDialog(project: Project?) : DialogWrapper(project) {
     init {
         title = "GitLab Coverage — Setup"
         init()
-        val domain = CoverageApiSettings.getInstance().gitlabDomain.trimEnd('/')
-        tokenLink.setHyperlinkTarget("https://$domain/-/user_settings/personal_access_tokens")
+        val url = "${CoverageApiSettings.baseUrlFor(CoverageApiSettings.getInstance().gitlabDomain)}/-/user_settings/personal_access_tokens"
+        tokenLink.setHyperlinkTarget(url)
         tokenLink.addHyperlinkListener {
-            BrowserUtil.browse("https://$domain/-/user_settings/personal_access_tokens")
+            BrowserUtil.browse(url)
         }
     }
 
