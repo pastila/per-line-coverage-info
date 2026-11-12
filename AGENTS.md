@@ -108,6 +108,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `ChangedLinesAnalyzer.kt` | `git diff -U0` parser → changed old-side line numbers; modes: COMMITTED / WORKING_TREE |
 | `AffectedTestsService.kt` | Looks up changed lines in coverage data → `AffectedTests` result |
 | `AffectedTestsModel.kt` | Pure data model for affected-files view: checked files, removed tests, delta computation |
+| `ShowCommitAffectedTestsAction.kt` / `CommitAffectedTests.kt` / `ChangedTestSources.kt` | Git Log **Show Affected Tests** action for one or several commits from one root. Union each selected commit's diff against its first parent (root commits supported), independently of unselected commits/reverts. Combine historical CI coverage with added/modified Behat scenarios and PHPUnit methods, preserving per-test reasons/commits/files. Exact cached artifacts plus retained primary/baseline readers only; no daemon request or active-coverage replacement. Map only unchanged lines across revisions, warn on missing coverage, map Behat identities to HEAD, and keep unavailable tests out of the runnable tree. Feature parsing uses the bundled Gherkin dialect keywords; PHP parsing references no PHP plugin classes. Refresh/F5 keeps the commit selection; request tickets and panel disposal discard late UI results. |
 | `CoveragePathResolver.kt` | Resolves git-root-relative path in coverage map (direct + leading-`/` variant); also `resolveBaseline()` for baseline reader |
 | `ToggleAffectedFilesViewAction.kt` | Toolbar toggle: tree ↔ flat list in the files pane |
 
@@ -116,6 +117,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 |------|---------|
 | `BehatTestRunner.kt` / `BehatLauncher.kt` | Platform-only runner using optional `PhpStormBehatLauncher` or `RaketaBehatLauncher`. Pins each launch to the owning Behat config (`BehatConfigLocator`), passes separate relative paths (`file:1 file:2`), and launches services sequentially. |
 | `CoverageTestNavigator.kt` | PSI navigation to scenario; converts git-root-relative feature paths to project-relative |
+| `BehatTestReferences.kt` / `BehatReferenceSession.kt` | Shared source-aware Behat reference resolver. Match scenarios and concrete Examples rows from their coverage revision (or local archived feature text) to current documents; never select the nearest scenario or promote a row to the whole outline. Expand explicitly selected outlines into concrete rows, deduplicate launch paths, and report deleted/changed/ambiguous references separately. `TestTreeView` resolves on a pooled thread, shows Ready/selected/unresolved counts and non-executable problem nodes, revalidates selected references before Run/Debug and navigation, and guards callbacks by lifetime/ticket. Commit-mode output is in `Result.head` coordinates, so its tree uses that revision rather than the active artifact's revision. |
 
 ### Errors & logging
 | File | Purpose |

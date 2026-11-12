@@ -11,10 +11,9 @@ import com.intellij.openapi.actionSystem.Separator
 import com.intellij.openapi.actionSystem.ToggleAction
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.invokeLater
-import com.intellij.openapi.project.DumbService
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.project.guessProjectDir
-import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.ui.CheckboxTree
 import com.intellij.ui.CheckboxTreeBase
 import com.intellij.ui.CheckboxTreeListener
@@ -31,6 +30,7 @@ import javax.swing.JComponent
 import javax.swing.JPanel
 import javax.swing.JTree
 import javax.swing.tree.DefaultTreeModel
+import java.io.File
 
 /**
  * Shared "tests tree" widget used by both the per-line and affected-by-changes panels.
@@ -43,7 +43,20 @@ import javax.swing.tree.DefaultTreeModel
  * Checkboxes allow the user to exclude individual tests; [checkedTestNames] returns
  * only the currently checked test leaves.
  */
-internal class TestTreeView(private val project: Project) {
+internal class TestTreeView(private val project: Project) : Disposable {
+
+    private val lifetime = CoveragePluginDisposable.getInstance(project)
+    private val coverageData = CoverageDataService.getInstance(project)
+    private val localCoverage = LocalCoverageService.getInstance(project)
+    private val log = CoverageLog.get(TestTreeView::class.java)
+    @Volatile private var disposed = false
+    private var resolutionTicket = 0L
+    private var resolutionPending = false
+    private var references: List<BehatTestReferences.Resolved> = emptyList()
+    private var problems: List<BehatTestReferences.Problem> = emptyList()
+    private var labels: Map<String, String> = emptyMap()
+    private var inputAnnotations: Map<String, String> = emptyMap()
+    private var inputDetails: Map<String, String> = emptyMap()
 
     var isTreeView: Boolean = true
         set(value) {
@@ -66,6 +79,7 @@ internal class TestTreeView(private val project: Project) {
         ) {
             val node = value as? CheckedTreeNode ?: return
             val r = textRenderer
+            toolTipText = null
             when (val data = node.userObject) {
                 is TestNodeData.Dir -> {
                     r.icon = AllIcons.Nodes.Folder
@@ -81,6 +95,8 @@ internal class TestTreeView(private val project: Project) {
                 is TestNodeData.BehatScenario -> {
                     r.icon = PhpFileIcon.forFeature()
                     r.append(data.displayName, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                    testAnnotations[data.originalTestName]?.let { r.append(" — $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+                    toolTipText = testDetails[data.originalTestName]
                 }
                 is TestNodeData.PhpUnitGroup -> {
                     r.icon = AllIcons.Nodes.TestGroup
@@ -91,10 +107,21 @@ internal class TestTreeView(private val project: Project) {
                 is TestNodeData.PhpUnitMethod -> {
                     r.icon = AllIcons.Nodes.Method
                     r.append(data.displayName, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                    testAnnotations[data.fullTestName]?.let { r.append(" — $it", SimpleTextAttributes.GRAYED_ATTRIBUTES) }
+                    toolTipText = testDetails[data.fullTestName]
                 }
                 is TestNodeData.UnnamedCoverage -> {
                     r.icon = AllIcons.General.Warning
                     r.append(data.displayName, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                }
+                is TestNodeData.UnresolvedGroup -> {
+                    r.icon = AllIcons.General.Warning
+                    r.append(data.displayName, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                }
+                is TestNodeData.Unresolved -> {
+                    r.icon = AllIcons.General.Warning
+                    r.append("${data.reference} — ${data.reason}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                    toolTipText = data.reason
                 }
                 else -> r.append(node.userObject?.toString() ?: "", SimpleTextAttributes.REGULAR_ATTRIBUTES)
             }
@@ -107,18 +134,23 @@ internal class TestTreeView(private val project: Project) {
     private val toolbar: ActionToolbar
     private val statusLabel = JBLabel()
     private var allTests: List<String> = emptyList()
+    private var testAnnotations: Map<String, String> = emptyMap()
+    private var testDetails: Map<String, String> = emptyMap()
+    private var testGitRoot: File? = null
     private var emptyMessage: String = "No tests"
 
     init {
+        Disposer.register(lifetime, this)
         tree.isRootVisible = false
         tree.showsRootHandles = true
+        javax.swing.ToolTipManager.sharedInstance().registerComponent(tree)
 
         tree.addMouseListener(object : MouseAdapter() {
             override fun mouseClicked(e: MouseEvent) {
                 if (e.clickCount == 2) {
                     val node = tree.lastSelectedPathComponent as? CheckedTreeNode ?: return
                     val testName = resolveFullTestName(node) ?: return
-                    CoverageTestNavigator.navigateToTest(project, testName)
+                    navigate(testName)
                 }
             }
         })
@@ -141,7 +173,7 @@ internal class TestTreeView(private val project: Project) {
                     menu.addSeparator()
                 }
                 menu.add(javax.swing.JMenuItem("Go to Test").apply {
-                    addActionListener { CoverageTestNavigator.navigateToTest(project, testName) }
+                    addActionListener { navigate(testName) }
                 })
                 menu.show(comp, x, y)
             }
@@ -247,9 +279,88 @@ internal class TestTreeView(private val project: Project) {
 
     // ── Public API ──────────────────────────────────────────────────
 
-    fun setTests(tests: List<String>) {
-        allTests = tests
+    fun setTests(
+        tests: List<String>, annotations: Map<String, String> = emptyMap(),
+        details: Map<String, String> = emptyMap(), gitRoot: File? = null,
+        sourceRevisions: Map<String, Set<String?>>? = null,
+        includeLocal: Boolean = false,
+    ) {
+        val snapshot = coverageData.snapshot()
+        val root = gitRoot ?: snapshot.gitRoot
+        testGitRoot = root
+        inputAnnotations = annotations
+        inputDetails = details
+        val ticket = ++resolutionTicket
+        references = emptyList()
+        problems = emptyList()
+        allTests = emptyList()
+        resolutionPending = tests.isNotEmpty()
         rebuild()
+        if (tests.isEmpty()) return
+        val requests = tests.distinct().flatMap { name ->
+            val revisions = sourceRevisions?.get(name) ?: setOf(if (sourceRevisions == null) snapshot.commit else null)
+            revisions.map { BehatTestReferences.Request(name, it) }
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (!alive()) return@executeOnPooledThread
+            val resolvedRoot = root ?: if (includeLocal) localCoverage.gitRootOrNull() else null
+            val result = try {
+                val local = if (includeLocal) localCoverage.testFeatureSnapshots(tests.toSet()) else emptyMap()
+                val missing = mutableListOf<BehatTestReferences.Problem>()
+                val prepared = requests.mapNotNull { request ->
+                    if (request.name in local && request.revision == snapshot.commit) {
+                        local[request.name]?.let { request.copy(revision = null, source = it) } ?: run {
+                            missing += BehatTestReferences.Problem(request, "Local run has no feature snapshot; collect coverage again")
+                            null
+                        }
+                    } else request
+                }
+                val resolved = BehatReferenceSession(project, resolvedRoot).resolve(prepared)
+                resolved.copy(unresolved = resolved.unresolved + missing)
+            } catch (error: java.io.IOException) {
+                log.warn("Cannot resolve test references: ${error.message}")
+                BehatTestReferences.Result(emptyList(), requests.map { BehatTestReferences.Problem(it, error.message ?: "Source lookup failed") })
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (!alive() || ticket != resolutionTicket) return@invokeLater
+                testGitRoot = resolvedRoot
+                resolutionPending = false
+                applyResolution(result)
+            }
+        }
+    }
+
+    private fun alive(): Boolean = !disposed && !lifetime.isDisposed && !project.isDisposed
+
+    override fun dispose() { disposed = true; resolutionTicket++ }
+
+    private fun applyResolution(result: BehatTestReferences.Result, checked: Set<String>? = null) {
+        references = result.resolved
+        problems = result.unresolved
+        allTests = result.names
+        labels = references.associate { it.target to it.label.take(180) }
+        testAnnotations = references.groupBy { it.target }.mapValues { (_, entries) ->
+            entries.mapNotNull { inputAnnotations[it.origin.requested] }.distinct().joinToString(", ")
+        }.filterValues { it.isNotEmpty() }
+        testDetails = references.groupBy { it.target }.mapValues { (_, entries) ->
+            entries.mapNotNull { inputDetails[it.origin.requested] }.distinct().joinToString("; ")
+        }
+        rebuild()
+        if (checked != null) {
+            fun restore(node: CheckedTreeNode): Boolean {
+                val name = when (val data = node.userObject) {
+                    is TestNodeData.BehatScenario -> data.originalTestName
+                    is TestNodeData.PhpUnitMethod -> data.fullTestName
+                    else -> null
+                }
+                val children = (0 until node.childCount).map { restore(node.getChildAt(it) as CheckedTreeNode) }
+                node.isChecked = if (name != null) name in checked else children.isNotEmpty() && children.all { it }
+                return node.isChecked
+            }
+            restore(rootNode)
+            refreshCheckedCount()
+        }
+        toolbar.updateActionsAsync()
     }
 
     fun setEmptyMessage(message: String) {
@@ -280,11 +391,13 @@ internal class TestTreeView(private val project: Project) {
         tree.repaint()
     }
 
-    fun hasAnyBehatTest(): Boolean = allTests.any { isBehatTest(it) }
+    fun hasAnyBehatTest(): Boolean = !resolutionPending && allTests.any { isBehatTest(it) }
 
     private fun refreshCheckedCount() {
         val count = checkedTestNames().size
-        statusLabel.text = if (count == 0 && allTests.isEmpty()) "" else "selected $count test${if (count != 1) "s" else ""}"
+        val ready = allTests.count { !CoverageTestIdentity.isAnonymous(it) }
+        statusLabel.text = if (resolutionPending) "Resolving test references…"
+            else "Ready: $ready · selected: $count · unresolved: ${problems.size}"
     }
 
     /** Resolves all test-leaf names under the user's tree selection. */
@@ -303,54 +416,13 @@ internal class TestTreeView(private val project: Project) {
      * Tracks [runAllInProgress] so callers can disable their toolbar buttons.
      */
     fun runAllBehatBundled(debug: Boolean) {
-        if (runAllInProgress) return
-        if (!BehatTestRunner.isAvailable()) return
-        val behatTests = checkedTestNames().filter { isBehatTest(it) }
-        if (behatTests.isEmpty()) return
-        val pathsByFile = buildPathsByFile(behatTests)
-        if (pathsByFile.isEmpty()) return
-        runAllInProgress = true
-        BehatTestRunner.runMultiplePathsWithCallback(
-            project,
-            pathsByFile,
-            onFinished = { runAllInProgress = false },
-            debug = debug,
-        )
+        runBehatTests(checkedTestNames(), debug)
     }
 
     // ── Internals ───────────────────────────────────────────────────
 
     private fun rebuild() {
-        rootNode.removeAllChildren()
-        treeModel.reload()
-
-        if (allTests.isEmpty()) {
-            rootNode.add(CheckedTreeNode(emptyMessage))
-            treeModel.reload()
-            return
-        }
-
-        val tests = allTests
-        if (DumbService.isDumb(project)) {
-            populateTreeNodes(tests, emptyMap())
-            return
-        }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            val scenarioLabels = resolveScenarioLabels(tests)
-            ApplicationManager.getApplication().invokeLater {
-                if (allTests !== tests) return@invokeLater
-                populateTreeNodes(tests, scenarioLabels)
-            }
-        }
-    }
-
-    private fun resolveScenarioLabels(tests: List<String>): Map<String, String> {
-        return tests.filter { isBehatTest(it) }.associate { testName ->
-            val featurePath = testName.substringBeforeLast(":", testName)
-            val line = testName.substringAfterLast(":", "")
-            val label = CoverageTestNavigator.resolveScenarioName(project, featurePath, line) ?: "line $line"
-            testName to label
-        }
+        populateTreeNodes(allTests, labels)
     }
 
     private fun populateTreeNodes(tests: List<String>, scenarioLabels: Map<String, String>) {
@@ -371,7 +443,7 @@ internal class TestTreeView(private val project: Project) {
             if (behatTests.isNotEmpty()) {
                 val behatGrouped = behatTests.groupBy { it.substringBeforeLast(":", it) }
                 for ((featurePath, entries) in behatGrouped.toSortedMap()) {
-                    val displayPath = CoverageTestNavigator.toProjectRelativeFeaturePath(featurePath, project)
+                    val displayPath = CoverageTestNavigator.toProjectRelativeFeaturePath(featurePath, project, testGitRoot)
                     val fileNode = CheckedTreeNode(TestNodeData.BehatGroup(featurePath, displayPath))
                     fileNode.isChecked = true
                     for (entry in entries) {
@@ -405,6 +477,20 @@ internal class TestTreeView(private val project: Project) {
         if (namedTests.size != tests.size) {
             rootNode.add(CheckedTreeNode(TestNodeData.UnnamedCoverage))
         }
+        if (problems.isNotEmpty()) {
+            val group = CheckedTreeNode(TestNodeData.UnresolvedGroup(problems.size))
+            group.isChecked = false
+            group.isEnabled = false
+            for (problem in problems) {
+                val name = problem.request.name + (problem.request.revision?.let { " @${it.take(8)}" } ?: "")
+                group.add(CheckedTreeNode(TestNodeData.Unresolved(name, problem.reason)).apply {
+                    isChecked = false
+                    isEnabled = false
+                })
+            }
+            rootNode.add(group)
+        }
+        if (rootNode.childCount == 0) rootNode.add(CheckedTreeNode(if (resolutionPending) "Resolving test references…" else emptyMessage))
         treeModel.reload()
         for (i in 0 until tree.rowCount) tree.expandRow(i)
         refreshCheckedCount()
@@ -422,7 +508,7 @@ internal class TestTreeView(private val project: Project) {
 
         val top = DirEntry()
         for ((featurePath, entries) in behatGrouped.toSortedMap()) {
-            val displayPath = CoverageTestNavigator.toProjectRelativeFeaturePath(featurePath, project)
+            val displayPath = CoverageTestNavigator.toProjectRelativeFeaturePath(featurePath, project, testGitRoot)
             val parts = displayPath.split("/")
             var current = top
             for (i in 0 until parts.size - 1) {
@@ -567,7 +653,7 @@ internal class TestTreeView(private val project: Project) {
     }
 
     private fun setAllChecked(node: CheckedTreeNode, checked: Boolean) {
-        node.isChecked = checked
+        node.isChecked = checked && node.isEnabled
         for (i in 0 until node.childCount) {
             setAllChecked(node.getChildAt(i) as CheckedTreeNode, checked)
         }
@@ -575,40 +661,63 @@ internal class TestTreeView(private val project: Project) {
 
     private fun runTest(testName: String, debug: Boolean) {
         if (isBehatTest(testName)) {
-            runBehatTest(testName, debug)
+            runBehatTests(setOf(testName), debug)
         } else {
-            CoverageTestNavigator.navigateToTest(project, testName)
+            CoverageTestNavigator.navigateToTest(project, testName, testGitRoot)
         }
     }
 
-    private fun runBehatTest(testName: String, debug: Boolean) {
-        if (!BehatTestRunner.isAvailable()) {
-            CoverageTestNavigator.navigateToBehatTest(project, testName)
+    private fun runBehatTests(tests: Set<String>, debug: Boolean) {
+        if (runAllInProgress || resolutionPending || !BehatTestRunner.isAvailable()) return
+        prepareBehatRun(tests) { paths ->
+            if (paths.isEmpty() || !alive()) return@prepareBehatRun
+            runAllInProgress = true
+            BehatTestRunner.runMultiplePathsWithCallback(project, paths, onFinished = { runAllInProgress = false }, debug = debug)
+        }
+    }
+
+    /** Shared preparation for individual/bundled Run and Debug; no process is started here. */
+    internal fun prepareBehatRun(tests: Set<String>, onPrepared: (Map<String, List<Int>>) -> Unit) {
+        validate(tests.filterTo(linkedSetOf(), ::isBehatTest)) { ready -> onPrepared(buildPathsByFile(ready)) }
+    }
+
+    private fun navigate(testName: String) {
+        if (!isBehatTest(testName)) {
+            if (testName.endsWith(".feature")) CoverageTestNavigator.navigateToBehatTest(project, "$testName:1", testGitRoot)
+            else CoverageTestNavigator.navigateToTest(project, testName, testGitRoot)
             return
         }
+        validate(setOf(testName)) { ready ->
+            ready.firstOrNull()?.let { CoverageTestNavigator.navigateToTest(project, it, testGitRoot) }
+        }
+    }
 
-        val rawFeaturePath = testName.substringBeforeLast(":", "")
-        val featurePath = CoverageTestNavigator.toProjectRelativeFeaturePath(rawFeaturePath, project)
-        val lineStr = testName.substringAfterLast(":", "")
-        val lineNumber = lineStr.toIntOrNull()
-
-        val projectDir = project.guessProjectDir() ?: return
-        val vf = VfsUtil.findRelativeFile(featurePath, projectDir) ?: return
-        val absolutePath = vf.path
-
-        if (lineNumber != null) {
-            ApplicationManager.getApplication().executeOnPooledThread {
-                val scenarioName = CoverageTestNavigator.resolveScenarioName(project, rawFeaturePath, lineStr)
-                invokeLater {
-                    if (scenarioName != null) {
-                        BehatTestRunner.runScenario(project, absolutePath, lineNumber, scenarioName, debug)
-                    } else {
-                        BehatTestRunner.runFeatureFile(project, absolutePath, debug)
-                    }
-                }
+    private fun validate(tests: Set<String>, onValidated: (List<String>) -> Unit) {
+        if (resolutionPending || runAllInProgress || !alive()) return
+        val selected = references.filter { it.target in tests }
+        if (selected.isEmpty()) { onValidated(emptyList()); return }
+        val ticket = resolutionTicket
+        val root = testGitRoot
+        val previous = references
+        val previousProblems = problems
+        val checked = checkedTestNames()
+        runAllInProgress = true
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (!alive()) return@executeOnPooledThread
+            val result = try {
+                BehatReferenceSession(project, root).resolve(selected.map { it.origin })
+            } catch (error: java.io.IOException) {
+                BehatTestReferences.Result(emptyList(), selected.map { BehatTestReferences.Problem(it.origin, error.message ?: "Source lookup failed") })
             }
-        } else {
-            BehatTestRunner.runFeatureFile(project, absolutePath, debug)
+            ApplicationManager.getApplication().invokeLater {
+                runAllInProgress = false
+                if (!alive() || ticket != resolutionTicket) return@invokeLater
+                val merged = BehatTestReferences.Result(previous.filter { it.target !in tests } + result.resolved,
+                    (previousProblems + result.unresolved).distinct())
+                val checkedOrigins = selected.filter { it.target in checked }.map { it.origin }.toSet()
+                applyResolution(merged, (checked - tests) + result.resolved.filter { it.origin in checkedOrigins }.map { it.target })
+                onValidated(result.names)
+            }
         }
     }
 
@@ -616,16 +725,14 @@ internal class TestTreeView(private val project: Project) {
         isBehatTest(testName) && BehatTestRunner.isAvailable()
 
     private fun buildPathsByFile(tests: List<String>): Map<String, List<Int>> {
-        val projectDir = project.guessProjectDir() ?: return emptyMap()
         val map = linkedMapOf<String, MutableList<Int>>()
         val wholeFile = mutableSetOf<String>()
         for (test in tests) {
             if (!isBehatTest(test)) continue
             val rawFeaturePath = test.substringBeforeLast(":", test)
-            val featurePath = CoverageTestNavigator.toProjectRelativeFeaturePath(rawFeaturePath, project)
             val lineStr = test.substringAfterLast(":", "")
             val lineNumber = lineStr.toIntOrNull()
-            val vf = VfsUtil.findRelativeFile(featurePath, projectDir) ?: continue
+            val vf = CoverageTestNavigator.resolveFeatureFile(project, rawFeaturePath, testGitRoot) ?: continue
             val absolutePath = vf.path
             val list = map.getOrPut(absolutePath) { mutableListOf() }
             if (lineNumber == null) {

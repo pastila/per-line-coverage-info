@@ -5,6 +5,18 @@ import org.junit.Test
 
 class LocalCoverageArchiveTest {
     @Test
+    fun `feature snapshots survive edits without adding feature files to line coverage`() {
+        val original = "Feature: test\n  Scenario: first\n    Given first\n"
+        val sources = mutableMapOf("a.php" to "<?php", "tests/Test.feature" to original)
+        LocalCoverageArchive.store(setOf("tests/Test.feature:2"), mapOf("a.php" to mapOf(1 to listOf("tests/Test.feature:2"))),
+            "head", additionalSources = setOf("tests/Test.feature")) { sources.getValue(it) }.use { run ->
+            sources["tests/Test.feature"] = "changed"
+            assertEquals(original, run.snapshots["tests/Test.feature"])
+            assertEquals(setOf("a.php"), run.coverage.keys)
+        }
+    }
+
+    @Test
     fun `clear closes archives immediately after outstanding readers finish`() {
         val layer = LocalCoverageLayer()
         val run = LocalCoverageArchive.store(setOf("t"), mapOf("a.php" to mapOf(1 to listOf("t"))), "head") { "source" }

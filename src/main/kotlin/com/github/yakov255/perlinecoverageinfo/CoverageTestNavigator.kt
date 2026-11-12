@@ -7,6 +7,9 @@ import com.intellij.openapi.project.DumbService
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.VfsUtil
+import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.vfs.VirtualFile
+import java.io.File
 import com.intellij.psi.PsiManager
 import com.intellij.psi.search.FilenameIndex
 import com.intellij.psi.search.GlobalSearchScope
@@ -31,9 +34,8 @@ internal object CoverageTestNavigator {
      * Idempotent: if the path does not start with the computed prefix (or the
      * project is already at the git root), the original path is returned unchanged.
      */
-    fun toProjectRelativeFeaturePath(rawPath: String, project: Project): String {
-        val dataService = CoverageDataService.getInstance(project)
-        val gitRoot = dataService.gitRoot ?: return rawPath
+    fun toProjectRelativeFeaturePath(rawPath: String, project: Project, gitRootOverride: File? = null): String {
+        val gitRoot = gitRootOverride ?: CoverageDataService.getInstance(project).gitRoot ?: return rawPath
         val basePath = project.basePath ?: return rawPath
         val gitRootNorm = gitRoot.path.trimEnd('/')
         val basePathNorm = basePath.trimEnd('/')
@@ -53,9 +55,9 @@ internal object CoverageTestNavigator {
             .openTextEditor(OpenFileDescriptor(project, vf, line, 0), true)
     }
 
-    fun navigateToTest(project: Project, testName: String) {
+    fun navigateToTest(project: Project, testName: String, gitRoot: File? = null) {
         if (isBehatTest(testName)) {
-            navigateToBehatTest(project, testName)
+            navigateToBehatTest(project, testName, gitRoot)
             return
         }
 
@@ -91,17 +93,15 @@ internal object CoverageTestNavigator {
         }
     }
 
-    fun navigateToBehatTest(project: Project, testName: String) {
+    fun navigateToBehatTest(project: Project, testName: String, gitRoot: File? = null) {
         log.info("CoverageTestNavigator: navigating to behat test: $testName")
         val rawFeaturePath = testName.substringBeforeLast(":", "")
-        val featurePath = toProjectRelativeFeaturePath(rawFeaturePath, project)
         val lineStr = testName.substringAfterLast(":", "")
         val lineNumber = lineStr.toIntOrNull() ?: 0
 
-        val projectDir = project.guessProjectDir() ?: return
-        val vf = VfsUtil.findRelativeFile(featurePath, projectDir)
+        val vf = resolveFeatureFile(project, rawFeaturePath, gitRoot)
         if (vf == null) {
-            log.warn("CoverageTestNavigator: feature file not found: $featurePath")
+            log.warn("CoverageTestNavigator: feature file not found: $rawFeaturePath")
             return
         }
 
@@ -111,16 +111,20 @@ internal object CoverageTestNavigator {
     }
 
     /** Resolves a scenario name from a feature file path and line number string. */
-    fun resolveScenarioName(project: Project, featurePath: String, lineStr: String): String? {
+    fun resolveScenarioName(project: Project, featurePath: String, lineStr: String, gitRoot: File? = null): String? {
         if (DumbService.isDumb(project)) return null
         val lineNumber = lineStr.toIntOrNull() ?: return null
-        val relPath = toProjectRelativeFeaturePath(featurePath, project)
-        val projectDir = project.guessProjectDir() ?: return null
-        val vf = VfsUtil.findRelativeFile(relPath, projectDir) ?: return null
+        val vf = resolveFeatureFile(project, featurePath, gitRoot) ?: return null
         return ReadAction.computeCancellable<String?, RuntimeException> {
             val psiFile = PsiManager.getInstance(project).findFile(vf) as? GherkinFile ?: return@computeCancellable null
             findScenarioAtLine(psiFile, lineNumber)
         }
+    }
+
+    fun resolveFeatureFile(project: Project, path: String, gitRoot: File? = null): VirtualFile? {
+        if (gitRoot != null) return LocalFileSystem.getInstance().findFileByIoFile(File(gitRoot, path))
+        val projectDir = project.guessProjectDir() ?: return null
+        return VfsUtil.findRelativeFile(toProjectRelativeFeaturePath(path, project), projectDir)
     }
 
     /** Finds the scenario name at a given 1-based line number in a Gherkin file. */

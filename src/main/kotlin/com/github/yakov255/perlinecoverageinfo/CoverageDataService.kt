@@ -61,6 +61,19 @@ class CoverageDataService(private val project: Project) : Disposable {
     /** The current consistent view of all coverage state. */
     fun snapshot(): Snapshot = state
 
+    /** A consistent, owned pair of readers for a long background analysis. */
+    internal fun <T> withRetainedSnapshot(action: (Snapshot) -> T): T {
+        val retained = synchronized(lock) {
+            state.copy(primary = state.primary?.retain(), baseline = state.baseline?.retain())
+        }
+        try {
+            return action(retained)
+        } finally {
+            retained.primary?.close()
+            retained.baseline?.close()
+        }
+    }
+
     val coverageCommitHash: String? get() = state.commit
     val baselineCommitHash: String? get() = state.baselineCommit
     val gitRoot: java.io.File? get() = state.gitRoot

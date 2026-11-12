@@ -24,7 +24,7 @@ import javax.swing.JPanel
  * Tool-window tab showing the tests that cover the line currently selected
  * in the editor (via [CoverageGutterRenderer] click).
  */
-class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
+class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()), com.intellij.openapi.Disposable {
 
     enum class TestFilter { BOTH, MASTER_ONLY, FEATURE_ONLY }
 
@@ -146,13 +146,22 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
         } else if (currentPrimary.all(CoverageTestIdentity::isAnonymous)) {
             "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — covered, test names unavailable$commitInfo</html>"
         } else {
-            "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — $namedCount test(s)$newSuffix$commitInfo</html>"
+            "<html><a style='text-decoration:underline'>$fileName:$currentLineNumber</a> — $namedCount coverage reference(s)$newSuffix$commitInfo</html>"
         }
 
         updateWarning()
 
-        testTree.setTests(displayed)
+        val snapshot = dataService.snapshot()
+        val origins = displayed.associateWith { name ->
+            buildSet<String?> {
+                if (name in currentPrimary) add(snapshot.commit)
+                if (name in currentBaseline) add(snapshot.baselineCommit)
+            }
+        }
+        testTree.setTests(displayed, gitRoot = snapshot.gitRoot, sourceRevisions = origins, includeLocal = true)
     }
+
+    override fun dispose() { com.intellij.openapi.util.Disposer.dispose(testTree) }
 
     private fun updateWarning() {
         val warnings = CoverageWarningService.getInstance(project).getWarnings()
@@ -229,11 +238,13 @@ class CoveringLinePanel(private val project: Project) : JPanel(BorderLayout()) {
             baselineTests: List<String> = emptyList(),
             hasBaseline: Boolean = false,
         ) {
+            val lifetime = CoveragePluginDisposable.getInstance(project)
             val toolWindow = ToolWindowManager.getInstance(project)
                 .getToolWindow("Coverage Tests") ?: return
             val content = toolWindow.contentManager.findContent(TAB_TITLE) ?: return
             toolWindow.contentManager.setSelectedContent(content)
             toolWindow.show {
+                if (project.isDisposed || lifetime.isDisposed) return@show
                 val panel = content.component as? CoveringLinePanel ?: return@show
                 panel.showTests(lineNumber, filePath, tests, baselineTests, hasBaseline)
             }

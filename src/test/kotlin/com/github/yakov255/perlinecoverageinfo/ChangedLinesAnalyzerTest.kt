@@ -164,4 +164,30 @@ class ChangedLinesAnalyzerTest {
     fun `empty diff returns empty list`() {
         assertTrue(ChangedLinesAnalyzer.parseUnifiedDiff("").isEmpty())
     }
+
+    @Test
+    fun `new side lines include additions and neighbours of a deletion`() {
+        val changes = ChangedLinesAnalyzer.parseUnifiedDiff("""
+            diff --git a/src/Foo.php b/src/Foo.php
+            --- a/src/Foo.php
+            +++ b/src/Foo.php
+            @@ -2 +2,2 @@
+            @@ -9,2 +10,0 @@
+        """.trimIndent())
+        assertEquals(setOf(2, 3, 10, 11), changes.single().affectedNewLines)
+    }
+
+    @Test
+    fun `patch body resembling a file header cannot change the file path`() {
+        val changes = ChangedLinesAnalyzer.parseUnifiedDiff("""
+            diff --git a/src/Foo.php b/src/Foo.php
+            --- a/src/Foo.php
+            +++ b/src/Foo.php
+            @@ -2 +2 @@
+            --- this is removed content
+            +++ this is added content
+        """.trimIndent())
+        assertEquals("src/Foo.php", changes.single().oldPath)
+        assertEquals("src/Foo.php", changes.single().newPath)
+    }
 }

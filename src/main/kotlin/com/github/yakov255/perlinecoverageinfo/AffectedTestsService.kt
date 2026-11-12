@@ -26,20 +26,24 @@ class AffectedTestsService(private val project: Project) {
         val filesWithoutCoverage: List<String>,
         /** Mode the result was computed for, for status display. */
         val mode: ChangedLinesAnalyzer.DiffMode,
+        val sourceCommit: String? = null,
+        val gitRoot: java.io.File? = null,
     )
 
     /**
      * Resolves coverage context, runs the diff, and joins lines with tests.
      * Throws [CoverageApiException] if coverage isn't loaded.
      */
-    fun compute(mode: ChangedLinesAnalyzer.DiffMode): AffectedTests {
-        val data = CoverageDataService.getInstance(project)
-        val commit = data.coverageCommitHash
+    fun compute(mode: ChangedLinesAnalyzer.DiffMode): AffectedTests =
+        CoverageDataService.getInstance(project).withRetainedSnapshot { compute(it, mode) }
+
+    private fun compute(snapshot: CoverageDataService.Snapshot, mode: ChangedLinesAnalyzer.DiffMode): AffectedTests {
+        val commit = snapshot.commit
             ?: throw CoverageApiException(
                 "No coverage loaded — load coverage first",
                 kind = CoverageErrorKind.NO_DATA,
             )
-        val gitRoot = data.gitRoot
+        val gitRoot = snapshot.gitRoot
             ?: throw CoverageApiException(
                 "Coverage data has no git root context",
                 kind = CoverageErrorKind.GIT,
@@ -67,7 +71,9 @@ class AffectedTestsService(private val project: Project) {
             if (change.affectedOldLines.isEmpty()) continue
 
             val candidates = listOfNotNull(change.oldPath, change.newPath).distinct()
-            val coverage = CoveragePathResolver.resolve(data, candidates)
+            val coverage = candidates.firstNotNullOfOrNull { path ->
+                snapshot.primary?.getCoverage(path) ?: snapshot.primary?.getCoverage("/$path")
+            }
             if (coverage == null) {
                 noCoverage += displayPath
                 continue
@@ -94,8 +100,35 @@ class AffectedTestsService(private val project: Project) {
             deletedFiles = deletedFiles,
             filesWithoutCoverage = noCoverage,
             mode = mode,
+            sourceCommit = commit,
+            gitRoot = gitRoot,
         )
     }
+
+    internal fun computeCommits(gitRoot: java.io.File, commits: List<String>): CommitAffectedTests.Result =
+        CoverageDataService.getInstance(project).withRetainedSnapshot { snapshot ->
+            if (snapshot.gitRoot != null && snapshot.gitRoot.canonicalFile != gitRoot.canonicalFile) {
+                throw CoverageApiException("Select commits from the coverage repository", kind = CoverageErrorKind.GIT)
+            }
+            val loaded = listOfNotNull(
+                snapshot.primary?.let { reader -> snapshot.commit?.let { CommitAffectedTests.Coverage(it, reader::getCoverage) } },
+                snapshot.baseline?.let { reader -> snapshot.baselineCommit?.let { CommitAffectedTests.Coverage(it, reader::getCoverage) } },
+            )
+            val component = project.basePath?.let { ComponentConfig.detectComponent(it, gitRoot)?.coverageKey }
+            val cache = CoverageCacheService.getInstance(project)
+            val readers = mutableMapOf<String, Cov4Reader?>()
+            try {
+                CommitAffectedTests(gitRoot, loaded) { revision ->
+                    if (component == null) null else {
+                        if (!readers.containsKey(revision)) readers[revision] = cache.get(revision, component, gitRoot)
+                        val reader = readers[revision]
+                        reader?.let { CommitAffectedTests.Coverage(revision, it::getCoverage) }
+                    }
+                }.compute(commits)
+            } finally {
+                readers.values.filterNotNull().forEach { it.close() }
+            }
+        }
 
     companion object {
         fun getInstance(project: Project): AffectedTestsService = project.service()

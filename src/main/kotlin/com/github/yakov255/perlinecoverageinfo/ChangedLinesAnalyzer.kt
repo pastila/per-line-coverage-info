@@ -33,6 +33,8 @@ object ChangedLinesAnalyzer {
         val isNew: Boolean,
         val isDeleted: Boolean,
         val isRenamed: Boolean,
+        /** New-side lines, including neighbours of a deletion. */
+        val affectedNewLines: Set<Int> = emptySet(),
     )
 
     /**
@@ -70,6 +72,7 @@ object ChangedLinesAnalyzer {
         var isDeleted = false
         var isRenamed = false
         val affected = mutableSetOf<Int>()
+        val affectedNew = mutableSetOf<Int>()
         var inHeader = false
 
         fun flush() {
@@ -83,6 +86,7 @@ object ChangedLinesAnalyzer {
                 isNew = isNew,
                 isDeleted = isDeleted,
                 isRenamed = isRenamed,
+                affectedNewLines = if (isDeleted) emptySet() else affectedNew.toSet(),
             )
             oldPath = null
             newPath = null
@@ -90,6 +94,7 @@ object ChangedLinesAnalyzer {
             isDeleted = false
             isRenamed = false
             affected.clear()
+            affectedNew.clear()
         }
 
         for (line in diff.lineSequence()) {
@@ -113,12 +118,12 @@ object ChangedLinesAnalyzer {
                 inHeader && line.startsWith("rename to ") -> {
                     newPath = line.removePrefix("rename to ")
                 }
-                line.startsWith("--- ") -> {
-                    val p = line.removePrefix("--- ")
+                inHeader && line.startsWith("--- ") -> {
+                    val p = line.removePrefix("--- ").removeSuffix("\t")
                     if (p != "/dev/null") oldPath = p.removePrefix("a/")
                 }
-                line.startsWith("+++ ") -> {
-                    val p = line.removePrefix("+++ ")
+                inHeader && line.startsWith("+++ ") -> {
+                    val p = line.removePrefix("+++ ").removeSuffix("\t")
                     if (p != "/dev/null") newPath = p.removePrefix("b/")
                     inHeader = false
                 }
@@ -126,6 +131,15 @@ object ChangedLinesAnalyzer {
                     inHeader = false
                     val hunk = parseHunkHeader(line) ?: continue
                     val (oldStart, oldCount) = hunk
+                    val match = HUNK_RE.find(line)!!
+                    val newStart = match.groupValues[3].toIntOrNull() ?: continue
+                    val newCount = match.groupValues[4].ifEmpty { "1" }.toIntOrNull() ?: continue
+                    if (newCount == 0) {
+                        if (newStart >= 1) affectedNew += newStart
+                        affectedNew += newStart + 1
+                    } else {
+                        for (l in newStart until newStart + newCount) if (l >= 1) affectedNew += l
+                    }
                     if (oldCount == 0) {
                         // Pure addition: include the lines straddling the insertion point
                         // so the surrounding function's tests get re-run.
@@ -155,7 +169,7 @@ object ChangedLinesAnalyzer {
         return oldStart to oldCount
     }
 
-    private val HUNK_RE = Regex("""^@@ -(\d+)(?:,(\d+))? \+\d+(?:,\d+)? @@""")
+    private val HUNK_RE = Regex("""^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@""")
 
     private fun runGit(gitRoot: File, args: List<String>): String? {
         // GitCommand reads stderr on its own thread and kills a hung child, so a large or noisy

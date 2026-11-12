@@ -4,4 +4,12 @@
         <listener class="com.github.yakov255.perlinecoverageinfo.CoverageHeadTracker"
                   topic="git4idea.repo.GitRepositoryChangeListener"/>
     </projectListeners>
+    <actions>
+        <action id="ShowCommitAffectedTests"
+                class="com.github.yakov255.perlinecoverageinfo.ShowCommitAffectedTestsAction"
+                text="Show Affected Tests"
+                description="Show covering tests and tests added or modified in the selected commits">
+            <add-to-group group-id="Vcs.Log.ContextMenu" anchor="last"/>
+        </action>
+    </actions>
 </idea-plugin>

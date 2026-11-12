@@ -8,6 +8,8 @@ internal sealed class TestNodeData(val displayName: String) {
     class PhpUnitGroup(val className: String, displayName: String = className) : TestNodeData(displayName)
     class PhpUnitMethod(val methodName: String, val fullTestName: String) : TestNodeData(methodName)
     data object UnnamedCoverage : TestNodeData(CoverageTestIdentity.UNNAMED_MESSAGE)
+    class UnresolvedGroup(count: Int) : TestNodeData("Unresolved references ($count)")
+    class Unresolved(val reference: String, val reason: String) : TestNodeData(reference)
 }
 
 /** Node payloads for the affected-files pane (CheckboxTree). */

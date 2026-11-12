@@ -69,6 +69,18 @@ class LocalCoverageService(private val project: Project) : Disposable {
     /** Tests executed locally on the current HEAD — they supersede their CI coverage. */
     fun tests(): Set<String> = layer.activeTests(headCommit)
 
+    /** Read feature snapshots under archive leases; a null value means an older run lacks that source. */
+    internal fun testFeatureSnapshots(tests: Set<String>): Map<String, String?> = layer.withActiveRuns(headCommit) { runs ->
+        buildMap {
+            for (run in runs) for (name in run.tests.intersect(tests)) {
+                if (!CoverageTestNavigator.isBehatTest(name)) continue
+                val path = name.substringBeforeLast(':')
+                val archived = LocalCoveragePaths.normalize(path) { it in run.snapshots }
+                put(name, archived?.let { run.snapshots[it] })
+            }
+        }
+    }
+
     /** Number of loaded local runs, stale ones included. */
     fun runCount(): Int = layer.runs().size
 
@@ -304,7 +316,10 @@ class LocalCoverageService(private val project: Project) : Disposable {
 
         // Keep source text on disk and read one file at a time. The run executed the on-disk
         // working tree, not unsaved editor text; future lookups use this immutable snapshot.
-        val run = LocalCoverageArchive.store(covt.tests.toSet(), coverage, commit = null) { path ->
+        val featureSources = covt.tests.filter(CoverageTestNavigator::isBehatTest).mapNotNull { name ->
+            LocalCoveragePaths.normalize(name.substringBeforeLast(':')) { File(root, it).isFile }
+        }.toSet()
+        val run = LocalCoverageArchive.store(covt.tests.toSet(), coverage, commit = null, additionalSources = featureSources) { path ->
             File(root, path).readText()
         }
         val head = resolveHead(root) ?: headCommit

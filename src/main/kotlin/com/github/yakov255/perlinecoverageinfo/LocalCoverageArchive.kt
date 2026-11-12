@@ -11,6 +11,7 @@ internal object LocalCoverageArchive {
         tests: Set<String>,
         coverage: Map<String, Map<Int, List<String>>>,
         commit: String?,
+        additionalSources: Set<String> = emptySet(),
         readSource: (String) -> String,
     ): LocalCoverageRun {
         val temporary = Files.createTempFile("local-coverage-", ".archive").toFile()
@@ -22,7 +23,7 @@ internal object LocalCoverageArchive {
             // Capture source contents before the potentially expensive coverage serialization.
             FileOutputStream(sources).buffered().use { output ->
                 var offset = 0L
-                for (path in coverage.keys) {
+                for (path in coverage.keys + additionalSources) {
                     // Read and encode just one source file at a time, never the whole run.
                     val bytes = readSource(path).toByteArray(Charsets.UTF_8)
                     blocks[path] = TextBlock(offset, bytes.size)

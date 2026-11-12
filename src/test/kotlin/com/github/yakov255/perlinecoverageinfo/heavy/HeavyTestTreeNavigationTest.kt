@@ -61,6 +61,7 @@ class HeavyTestTreeNavigationTest : BasePlatformTestCase() {
             val event = MouseEvent(view.tree, MouseEvent.MOUSE_CLICKED, 0, 0, 1, 1, 2, false)
             view.tree.mouseListeners.forEach { it.mouseClicked(event) }
         }
+        waitFor { FileEditorManager.getInstance(project).selectedTextEditor != null }
         val editor = FileEditorManager.getInstance(project).selectedTextEditor
         assertNotNull("double-click must open the feature", editor)
         assertEquals(feature, FileDocumentManager.getInstance().getFile(editor!!.document))

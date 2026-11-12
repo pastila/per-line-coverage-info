@@ -17,12 +17,14 @@ class CoverageTestsToolWindowFactory : ToolWindowFactory, DumbAware {
         val coveringLineContent = contentFactory.createContent(
             coveringLinePanel, CoveringLinePanel.TAB_TITLE, false
         ).apply { isCloseable = false }
+        Disposer.register(coveringLineContent, coveringLinePanel)
         contentManager.addContent(coveringLineContent)
 
         val affectedPanel = AffectedTestsPanel(project)
         val affectedContent = contentFactory.createContent(
             affectedPanel, AffectedTestsPanel.TAB_TITLE, false
         ).apply { isCloseable = false }
+        Disposer.register(affectedContent, affectedPanel)
         contentManager.addContent(affectedContent)
 
         val newCoveragePanel = NewCoveragePanel(project)
