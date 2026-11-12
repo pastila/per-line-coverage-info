@@ -1,5 +1,11 @@
 package com.github.yakov255.perlinecoverageinfo
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
 /**
  * Rewrites a Behat command line so the run writes a `.covt` into the local coverage directory.
  *
@@ -13,6 +19,9 @@ object LocalCoverageCommand {
 
     private const val EXTENSION_MARKER = "BehatBinaryCoverage"
     private const val PREFERRED_PROFILE = "coverage-clover"
+    private const val REPORTER_PACKAGE = "raketa-libraries/behat-coverage-per-line-report"
+    private const val LEGACY_ROOT_OPTION = "binary-coverage-root"
+    private const val REPO_ROOT_OPTION = "binary-coverage-repo-root"
     private val BEHAT_SCRIPT_SUFFIXES = listOf("/vendor/behat/behat/bin/behat", "/vendor/bin/behat")
 
     /** PhpStorm's wrapper; the real Behat executable is passed in [BEHAT_DIR_ENV]. */
@@ -78,11 +87,51 @@ object LocalCoverageCommand {
         val behatArgs = listOfNotNull(
             profile.takeIf { it.isNotEmpty() }?.let { "--profile=$it" },
             "--binary-coverage-target=${remoteRoot.trimEnd('/')}/${coverageDir.trim('/')}/$REPORT_FILE_NAME",
-            "--binary-coverage-root=$serviceDir",
+            coverageRootArgument(serviceDir, remoteRoot, readLocalFile),
         )
         val patched = parameters.subList(0, scriptIndex) + interpreterArgs +
             parameters.subList(scriptIndex, parameters.size) + behatArgs
         return Result.Patched(patched, serviceDir)
+    }
+
+    /**
+     * 1.x expects a relative service prefix; 2.x expects the absolute interpreter-side repository
+     * root. Prefer the installed controller over Composer metadata (the vendor tree may be patched
+     * or not yet match the lock). Missing metadata keeps the legacy command line working.
+     */
+    private fun coverageRootArgument(
+        serviceDir: String,
+        remoteRoot: String,
+        readLocalFile: (String) -> String?,
+    ): String {
+        val controller = readLocalFile("$serviceDir/vendor/$REPORTER_PACKAGE/src/Cli/CoverageReporterController.php")
+        val usesRepoRoot = when {
+            controller != null && Regex("""['"]$REPO_ROOT_OPTION['"]""").containsMatchIn(controller) -> true
+            controller != null && Regex("""['"]$LEGACY_ROOT_OPTION['"]""").containsMatchIn(controller) -> false
+            else -> {
+                val major = sequenceOf("$serviceDir/vendor/composer/installed.json", "$serviceDir/composer.lock")
+                    .mapNotNull { readLocalFile(it)?.let(::reporterMajorVersion) }
+                    .firstOrNull()
+                major != null && major >= 2
+            }
+        }
+        return if (usesRepoRoot) "--$REPO_ROOT_OPTION=$remoteRoot" else "--$LEGACY_ROOT_OPTION=$serviceDir"
+    }
+
+    private fun reporterMajorVersion(metadata: String): Int? {
+        val json = runCatching { Json.parseToJsonElement(metadata) }.getOrNull() ?: return null
+        val packages = when (json) {
+            is JsonArray -> json.toList() // Composer 1 installed.json
+            is JsonObject -> listOf("packages", "packages-dev").flatMap { key ->
+                (json[key] as? JsonArray)?.toList().orEmpty()
+            }
+            else -> return null
+        }
+        val reporter = packages.filterIsInstance<JsonObject>().firstOrNull {
+            (it["name"] as? JsonPrimitive)?.contentOrNull == REPORTER_PACKAGE
+        } ?: return null
+        val version = (reporter["version"] as? JsonPrimitive)?.contentOrNull ?: return null
+        return Regex("""^v?(\d+)\.""").find(version)?.groupValues?.get(1)?.toIntOrNull()
     }
 
     /**
