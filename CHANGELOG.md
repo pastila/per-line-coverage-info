@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.11.0] - 2026-11-12
+
 - Resolve historical Behat test links against current feature sources, preserving individual Examples rows and deduplicating overlapping outline/row selections. Show ready and unresolved counts with reasons, revalidate before Run/Debug and navigation, and archive feature sources for local coverage runs
 - Show affected tests from the Git Log context menu for one or several selected commits: combine covering tests with added or modified Behat scenarios and PHPUnit methods, keep per-commit reasons, and report missing historical coverage and tests unavailable at HEAD
 

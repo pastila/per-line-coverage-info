@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.11.0/per-line-coverage-info-2.11.0.zip" version="2.11.0">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252"/>
+        <change-notes><![CDATA[<ul><li>Resolve historical Behat test links against current feature sources, preserving individual Examples rows and deduplicating overlapping outline/row selections. Show ready and unresolved counts with reasons, revalidate before Run/Debug and navigation, and archive feature sources for local coverage runs</li><li>Show affected tests from the Git Log context menu for one or several selected commits: combine covering tests with added or modified Behat scenarios and PHPUnit methods, keep per-commit reasons, and report missing historical coverage and tests unavailable at HEAD</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.10.2/per-line-coverage-info-2.10.2.zip" version="2.10.2">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>
