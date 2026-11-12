@@ -7,11 +7,8 @@ import com.intellij.openapi.project.Project
 import com.intellij.util.Alarm
 
 /**
- * Periodic refresh tick.
- *
- * The covd daemon resolves and memorizes the pipeline itself, so polling is just "ask again
- * in 30 seconds": `ensure` answers from its TTL cache and only downloads when something new
- * appeared. This class therefore contains no GitLab logic at all.
+ * Checks local git refs every 30 seconds so external checkouts and push/fetch are noticed.
+ * The load service asks covd only while waiting for coverage or after those refs change.
  */
 @Service(Service.Level.PROJECT)
 class CoveragePipelinePoller(private val project: Project) : Disposable {
@@ -74,8 +71,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
             return
         }
 
-        CoveragePerfLog.event("poll.tick")
-        loadService.loadFromGitLab(showErrors = false)
+        loadService.pollForUpdates()
         scheduleNext()
     }
 

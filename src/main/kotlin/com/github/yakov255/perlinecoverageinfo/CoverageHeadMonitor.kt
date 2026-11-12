@@ -124,6 +124,7 @@ class CoverageHeadMonitor(private val project: Project) : Disposable {
 
             if (dataService.coverageCommitHash == revision && dataService.hasData() && !dataService.isStale) {
                 log.info("Coverage: HEAD unchanged after debounce — commit $revision already loaded, skipping reload")
+                CoveragePipelinePoller.getInstance(project).start()
                 return@addRequest
             }
 

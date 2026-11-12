@@ -8,6 +8,7 @@ import com.github.yakov255.perlinecoverageinfo.CoverageApiSettings
 import com.github.yakov255.perlinecoverageinfo.CoverageCacheService
 import com.github.yakov255.perlinecoverageinfo.CoverageDataService
 import com.github.yakov255.perlinecoverageinfo.CoverageGutterVisibilityService
+import com.github.yakov255.perlinecoverageinfo.CoverageHeadMonitor
 import com.github.yakov255.perlinecoverageinfo.CoverageLoadService
 import com.github.yakov255.perlinecoverageinfo.CoverageNotifier
 import com.github.yakov255.perlinecoverageinfo.CoveragePipelinePoller
@@ -16,6 +17,7 @@ import com.github.yakov255.perlinecoverageinfo.LoadCoverageAction
 import com.github.yakov255.perlinecoverageinfo.covd.CovdTestBase
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.impl.SimpleDataContext
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.TestActionEvent
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -80,6 +82,16 @@ class HeavyLoadStateTest : BasePlatformTestCase() {
         CoverageDataService.getInstance(project).clear()
         loadService().onSettingsApplied()
         CoverageNotifier.getInstance(project).clearForTest()
+        // Light fixtures reuse project services; seed this test's HEAD without queuing a reload.
+        CoverageDataService.getInstance(project).setCoverageContext(head(), repo)
+        val monitor = CoverageHeadMonitor.getInstance(project)
+        monitor.reloadForTest = {}
+        try {
+            monitor.checkHeadFromPoller()
+        } finally {
+            monitor.reloadForTest = null
+        }
+        CoverageDataService.getInstance(project).clear()
     }
 
     override fun tearDown() {
@@ -269,6 +281,189 @@ class HeavyLoadStateTest : BasePlatformTestCase() {
 
     // --- helpers ---------------------------------------------------------------------
 
+    fun testReadyCoverageStopsIdleRequestsAndAutomaticLoadsRespectCooldown() {
+        val head = head()
+        CovdTestBase.git(repo, "update-ref", remoteRef(), head)
+        daemon.ensureScript = { ready(head, cov4("idle.cov4", "src/Idle.php")) }
+        loadAndWait()
+        val count = daemon.ensureCount.get()
+        val generation = CoverageDataService.getInstance(project).coverageGeneration
+
+        repeat(3) { pollerTick() }
+        val done = AtomicInteger()
+        loadService().loadFromGitLab(showErrors = false, onComplete = { done.incrementAndGet() })
+        waitUntil("automatic duplicate finishes") { done.get() == 1 && !loadService().isLoadInProgress() }
+
+        assertEquals("idle ticks and duplicate refreshes must not reach covd", count, daemon.ensureCount.get())
+        assertEquals(generation, CoverageDataService.getInstance(project).coverageGeneration)
+    }
+
+    fun testPushWithUnchangedHeadRefreshesOnceWithoutRepublishingIdenticalCoverage() {
+        val head = head()
+        val file = cov4("push.cov4", "src/Push.php")
+        CovdTestBase.git(repo, "update-ref", "-d", remoteRef())
+        daemon.ensureScript = { ready(head, file) }
+        loadAndWait()
+        val before = daemon.ensureCount.get()
+        val data = CoverageDataService.getInstance(project)
+        val generation = data.coverageGeneration
+        val reader = data.snapshot().primary
+
+        CovdTestBase.git(repo, "update-ref", remoteRef(), head)
+        pollerTick()
+        waitUntil("push is checked") { daemon.ensureCount.get() > before && !loadService().isLoadInProgress() }
+        pollerTick()
+
+        assertEquals(before + 1, daemon.ensureCount.get())
+        assertEquals("same coverage does not publish another generation", generation, data.coverageGeneration)
+        assertSame(reader, data.snapshot().primary)
+    }
+
+    fun testManualRefreshBypassesCooldownButUnchangedAnswerKeepsBothReaders() {
+        val head = head()
+        val file = cov4("primary.cov4", "src/Primary.php")
+        val baseline = cov4("baseline.cov4", "src/Baseline.php")
+        daemon.ensureScript = {
+            ready(head, file).dropLast(1) +
+                ",\"baselineCommit\":\"baseline\",\"baselineCov4Path\":\"${baseline.absolutePath}\"}"
+        }
+        loadAndWait()
+        val data = CoverageDataService.getInstance(project)
+        val snapshot = data.snapshot()
+        val generation = data.coverageGeneration
+        val before = daemon.ensureCount.get()
+
+        loadAndWait()
+
+        assertEquals("explicit refresh must still reach covd", before + 1, daemon.ensureCount.get())
+        assertEquals(generation, data.coverageGeneration)
+        assertSame(snapshot.primary, data.snapshot().primary)
+        assertSame(snapshot.baseline, data.snapshot().baseline)
+    }
+
+    fun testReplacedReportForTheSameCommitIsApplied() {
+        val head = head()
+        val file = cov4("replace.cov4", "src/Before.php")
+        daemon.ensureScript = { ready(head, file) }
+        loadAndWait()
+        val data = CoverageDataService.getInstance(project)
+        val generation = data.coverageGeneration
+        Cov4TestWriter.write(mapOf("src/After.php" to mapOf(1 to listOf("a.feature:1"))), file)
+        daemon.ensureScript = { ready(head, file).dropLast(1) + ",\"replaced\":true}" }
+
+        loadAndWait()
+
+        assertTrue(data.coverageGeneration > generation)
+        assertEquals(setOf("src/After.php"), data.allFiles())
+    }
+
+    fun testManualNotReadyDoesNotLetThePreviousSuccessSuppressItsRetry() {
+        val head = head()
+        val file = cov4("rerun.cov4", "src/Rerun.php")
+        daemon.ensureScript = { ready(head, file) }
+        loadAndWait()
+        daemon.ensureScript = { """{"state":"not_ready","reason":"jobs_running","retryAfterMs":60000}""" }
+        loadAndWait()
+        loadService().cancelRetriesForTest()
+        val before = daemon.ensureCount.get()
+        daemon.ensureScript = { ready(head, file) }
+        val done = AtomicInteger()
+
+        // Fire the automatic retry explicitly instead of waiting a minute for the alarm.
+        loadService().loadFromGitLab(showErrors = false, onComplete = { done.incrementAndGet() })
+        waitUntil("the retry completes") { done.get() == 1 && !loadService().isLoadInProgress() }
+
+        assertEquals(before + 1, daemon.ensureCount.get())
+    }
+
+    fun testFetchOfBaselineRefreshesWithoutChangingPrimary() {
+        val head = head()
+        val primary = cov4("fetch-primary.cov4", "src/Primary.php")
+        val baseline = cov4("fetch-baseline.cov4", "src/Baseline.php")
+        val settings = CoverageApiSettings.getInstance()
+        settings.coverageBranch = "coverage-base"
+        CovdTestBase.git(repo, "update-ref", remoteRef(), head)
+        CovdTestBase.git(repo, "update-ref", "refs/remotes/origin/coverage-base", head)
+        daemon.ensureScript = { ready(head, primary) }
+        loadAndWait()
+        val count = daemon.ensureCount.get()
+
+        // A new baseline commit arrives via fetch; the feature HEAD and origin ref stay put.
+        val fetched = CovdTestBase.git(repo, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "baseline fetched")
+        CovdTestBase.git(repo, "update-ref", "refs/remotes/origin/coverage-base", fetched)
+        daemon.ensureScript = {
+            ready(head, primary).dropLast(1) +
+                ",\"baselineCommit\":\"$fetched\",\"baselineCov4Path\":\"${baseline.absolutePath}\"}"
+        }
+        pollerTick()
+        val data = CoverageDataService.getInstance(project)
+        waitUntil("fetched baseline is applied") {
+            data.baselineCommitHash == fetched && !loadService().isLoadInProgress()
+        }
+        pollerTick()
+        assertEquals(count + 1, daemon.ensureCount.get())
+        assertEquals(head, data.coverageCommitHash)
+        assertNotNull(data.getBaselineCoverage("src/Baseline.php"))
+    }
+
+    fun testStaleCoverageKeepsPollingUntilPushedCommitIsReady() {
+        val head = head()
+        val file = cov4("stale-poll.cov4", "src/Stale.php")
+        CovdTestBase.git(repo, "update-ref", remoteRef(), head)
+        daemon.ensureScript = { ready("older", file).dropLast(1) + ",\"stale\":true}" }
+        loadAndWait()
+        val count = daemon.ensureCount.get()
+        assertTrue(CoverageDataService.getInstance(project).isStale)
+
+        daemon.ensureScript = { ready(head, file) }
+        pollerTick()
+        val data = CoverageDataService.getInstance(project)
+        waitUntil("pushed coverage becomes fresh") {
+            data.coverageCommitHash == head && !data.isStale && !loadService().isLoadInProgress()
+        }
+        pollerTick()
+        assertEquals(count + 1, daemon.ensureCount.get())
+    }
+
+    fun testIdenticalWarningContextAndAbsentBaselineDoNotPublishChanges() {
+        val data = CoverageDataService.getInstance(project)
+        data.setWarningContext("head", "base", 2, 3)
+        val generation = data.coverageGeneration
+        data.setWarningContext("head", "base", 2, 3)
+        data.clearBaseline()
+        assertEquals(generation, data.coverageGeneration)
+        data.setWarningContext("head", "base", 1, 3)
+        assertEquals(generation + 1, data.coverageGeneration)
+    }
+
+    fun testUnpublishedHeadWithNoPipelineWaitsForPushWithoutSchedulingRetries() {
+        val head = head()
+        val file = cov4("first-push.cov4", "src/FirstPush.php")
+        CovdTestBase.git(repo, "update-ref", "-d", remoteRef())
+        daemon.ensureScript = { """{"state":"not_ready","reason":"no_pipeline_yet","retryAfterMs":0}""" }
+        loadAndWait()
+        assertFalse("an unpublished HEAD has no pipeline to wait for yet", loadService().hasScheduledRetryForTest())
+        val count = daemon.ensureCount.get()
+        pollerTick()
+        assertEquals(count, daemon.ensureCount.get())
+
+        CovdTestBase.git(repo, "update-ref", remoteRef(), head)
+        daemon.ensureScript = { ready(head, file) }
+        pollerTick()
+        waitUntil("the first push resumes coverage collection") {
+            CoverageDataService.getInstance(project).hasData() && !loadService().isLoadInProgress()
+        }
+        assertEquals(count + 1, daemon.ensureCount.get())
+    }
+
+    private fun remoteRef() = "refs/remotes/origin/" + CovdTestBase.git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+
+    private fun loadAndWait() {
+        val done = AtomicInteger()
+        loadService().loadFromGitLab(showErrors = false, bypassBlock = true, onComplete = { done.incrementAndGet() })
+        waitUntil("explicit load completes") { done.get() == 1 && !loadService().isLoadInProgress() }
+    }
+
     private fun loadService() = CoverageLoadService.getInstance(project)
 
     private fun head(): String = CovdTestBase.git(repo, "rev-parse", "HEAD")
@@ -298,8 +493,10 @@ class HeavyLoadStateTest : BasePlatformTestCase() {
         try {
             CoveragePipelinePoller::class.java.getDeclaredField("started").apply { isAccessible = true }
                 .setBoolean(poller, true)
-            CoveragePipelinePoller::class.java.getDeclaredMethod("onPoll").apply { isAccessible = true }
-                .invoke(poller)
+            ApplicationManager.getApplication().executeOnPooledThread(java.util.concurrent.Callable {
+                CoveragePipelinePoller::class.java.getDeclaredMethod("onPoll").apply { isAccessible = true }
+                    .invoke(poller)
+            }).get(10, TimeUnit.SECONDS)
         } finally {
             poller.stop()
         }

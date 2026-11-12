@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Stop idle coverage requests after a successful refresh; inspect only local HEAD and origin refs until checkout, push/fetch, settings change or manual refresh, retain the 60-second automatic-refresh cooldown, and keep waiting for unfinished CI coverage
+- Keep readers and editor highlights when a daemon answer has not changed; avoid publishing identical warning context and clearing an already absent baseline
 ## [2.10.0] - 2026-11-12
 
 - Support automatic local coverage collection with behat-coverage-per-line-report 2.x: pass the interpreter-side repository root via `--binary-coverage-repo-root`, while retaining the legacy 1.x option

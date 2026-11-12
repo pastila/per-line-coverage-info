@@ -74,15 +74,16 @@ class CoverageDataService(private val project: Project) : Disposable {
      * Swaps the snapshot under the lock and closes the readers the new one no longer holds.
      * Closing happens inside the lock so two racing updates cannot close each other's reader twice.
      */
-    private fun update(change: (Snapshot) -> Snapshot) {
+    private fun update(change: (Snapshot) -> Snapshot): Boolean =
         synchronized(lock) {
             val old = state
             val new = change(old)
+            if (old == new) return@synchronized false
             state = new
             if (old.primary != null && old.primary !== new.primary) closeQuietly(old.primary, "COV4")
             if (old.baseline != null && old.baseline !== new.baseline) closeQuietly(old.baseline, "baseline COV4")
+            true
         }
-    }
 
     /**
      * Sets a COV4 reader for on-demand file coverage (from disk cache).
@@ -126,7 +127,7 @@ class CoverageDataService(private val project: Project) : Disposable {
         primaryBehindBy: Int?,
         baselineBehindBy: Int?,
     ) {
-        update {
+        val changed = update {
             it.copy(
                 headHash = headHash,
                 mergeBaseHash = mergeBaseHash,
@@ -134,12 +135,11 @@ class CoverageDataService(private val project: Project) : Disposable {
                 baselineBehindBy = baselineBehindBy,
             )
         }
-        notifyChanged()
+        if (changed) notifyChanged()
     }
 
     fun clearBaseline() {
-        update { it.copy(baseline = null, baselineCommit = null) }
-        notifyChanged()
+        if (update { it.copy(baseline = null, baselineCommit = null) }) notifyChanged()
     }
 
     fun hasBaseline(): Boolean = state.baseline != null

@@ -48,6 +48,25 @@ class CoverageLoadService(private val project: Project) {
 
     /** Growing wait between asks while the daemon answers `not_ready` for the same reason. */
     private val notReadyBackoff = NotReadyBackoff()
+    private val refreshState = CoverageRefreshState()
+
+    private data class CoverageFileStamp(val path: String, val size: Long, val modified: Long) {
+        constructor(path: String) : this(File(path).absolutePath, File(path).length(), File(path).lastModified())
+    }
+
+    private data class AppliedCoverage(
+        val gitRoot: String,
+        val head: String?,
+        val baselineRef: String?,
+        val commit: String,
+        val primary: CoverageFileStamp,
+        val baselineCommit: String?,
+        val baseline: CoverageFileStamp?,
+        val stale: Boolean,
+    )
+
+    private var lastApplied: AppliedCoverage? = null
+    private var lastAppliedGeneration = -1L
 
     /** A balloon is shown once per retry cycle; the next poll stays silent. */
     @Volatile
@@ -82,6 +101,8 @@ class CoverageLoadService(private val project: Project) {
         clearPin()
         covdRetryAlarm.cancelAllRequests()
         pendingReload.set(false)
+        refreshState.clear()
+        lastApplied = null
     }
 
     private fun setPin(commit: String) {
@@ -131,6 +152,7 @@ class CoverageLoadService(private val project: Project) {
 
     /** Settings were applied: clear the block and the counter, then the caller loads again. */
     fun onSettingsApplied() {
+        refreshState.clear()
         resetFailureState()
         covdRetryAlarm.cancelAllRequests()
         log.info("Coverage: failure state reset after settings change")
@@ -148,8 +170,44 @@ class CoverageLoadService(private val project: Project) {
         covdRetryAlarm.cancelAllRequests()
     }
 
+    internal fun hasScheduledRetryForTest(): Boolean = !covdRetryAlarm.isEmpty
+
     /** Test seam: how many `not_ready` answers the backoff has seen for the current reason. */
     internal fun notReadyBackoffStepForTest(): Int = notReadyBackoff.currentStep()
+
+    /** Called off the EDT. Idle ticks inspect local refs only, never GitLab or covd. */
+    internal fun pollForUpdates() {
+        if (!covdRetryAlarm.isEmpty || (exhaustedNotified && retryAttempt >= retryMax)) return
+        val root = findGitRoot() ?: return
+        val context = refreshContext(root) ?: return
+        if (refreshState.shouldPoll(context, CoverageDataService.getInstance(project).coverageCommitHash)) {
+            CoveragePerfLog.event("poll.refresh")
+            loadFromGitLab(showErrors = false)
+        }
+    }
+
+    private fun refreshContext(root: File): CoverageRefreshContext? {
+        val revision = GitCommand.run(root, "rev-parse", "HEAD", "--abbrev-ref", "HEAD")?.lines() ?: return null
+        val head = revision.firstOrNull() ?: return null
+        val branch = revision.getOrNull(1)?.takeUnless { it == "HEAD" }
+        val coverageBranch = CoverageApiSettings.getInstance().coverageBranch.trim()
+        val patterns = listOfNotNull(
+            branch?.let { "refs/remotes/origin/$it" },
+            coverageBranch.takeIf { it.isNotEmpty() }?.let { "refs/remotes/origin/$it" },
+            coverageBranch.takeIf { it.isNotEmpty() }?.let { "refs/heads/$it" },
+        )
+        // Missing refs and detached HEAD are normal, so do not run failing rev-parse probes.
+        val refs = if (patterns.isEmpty()) emptyMap() else {
+            GitCommand.runRaw(root, "for-each-ref", "--format=%(refname) %(objectname)", *patterns.toTypedArray())
+                .orEmpty().lineSequence().mapNotNull { line ->
+                    val parts = line.split(' ', limit = 2)
+                    if (parts.size == 2) parts[0] to parts[1] else null
+                }.toMap()
+        }
+        val remote = branch?.let { refs["refs/remotes/origin/$it"] }
+        val baseline = refs["refs/remotes/origin/$coverageBranch"] ?: refs["refs/heads/$coverageBranch"]
+        return CoverageRefreshContext(root.absolutePath, head, branch, remote, baseline, settingsFingerprint())
+    }
 
     /** Validates that the plugin is enabled and GitLab settings are configured. */
     fun validateSettings(): String? {
@@ -297,6 +355,7 @@ class CoverageLoadService(private val project: Project) {
 
         if (bypassBlock || showErrors) {
             // A manual load is the user's explicit request: no block, fresh retry budget.
+            refreshState.clear()
             resetFailureState()
             covdRetryAlarm.cancelAllRequests()
             log.info("Coverage: manual load bypasses the failure block")
@@ -320,7 +379,7 @@ class CoverageLoadService(private val project: Project) {
 
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                loadViaCovd(showErrors, onComplete, onError)
+                loadViaCovd(showErrors, onComplete, onError, bypassBlock || showErrors)
             } catch (ex: Throwable) {
                 log.warn("Coverage: unexpected error while loading coverage: ${ex.message}", ex)
                 if (showErrors) {
@@ -333,7 +392,12 @@ class CoverageLoadService(private val project: Project) {
         }
     }
 
-    private fun loadViaCovd(showErrors: Boolean, onComplete: (() -> Unit)?, onError: ((String) -> Unit)?) {
+    private fun loadViaCovd(
+        showErrors: Boolean,
+        onComplete: (() -> Unit)?,
+        onError: ((String) -> Unit)?,
+        manual: Boolean,
+    ) {
         val settings = CoverageApiSettings.getInstance()
         val gitRoot = findGitRoot()
         val componentName = gitRoot?.let { detectComponent(it) }
@@ -377,8 +441,15 @@ class CoverageLoadService(private val project: Project) {
         )
 
         // HEAD at send time: an answer for another commit must not pass as fresh.
-        val requestHead = currentHead()
+        val context = refreshContext(gitRoot)
+        val requestHead = context?.head ?: currentHead()
         val pinnedAtStart = isPinned()
+        val data = CoverageDataService.getInstance(project)
+        if (!manual && context != null && data.hasData() && !data.isStale && refreshState.isWithinCooldown(context)) {
+            log.info("Coverage: automatic refresh skipped — unchanged refs within the refresh cooldown")
+            finishLoad(onComplete)
+            return
+        }
 
         var unavailableReason: String? = null
         val response = CoveragePerfLog.span("covd.ensure", "component" to componentName) {
@@ -411,7 +482,7 @@ class CoverageLoadService(private val project: Project) {
             "ready" -> {
                 notReadyBackoff.reset()
                 applyCovdCoverage(
-                    response, gitRoot, componentName, showErrors, onComplete, onError, requestHead, pinnedAtStart,
+                    response, gitRoot, componentName, showErrors, onComplete, onError, requestHead, pinnedAtStart, context,
                 )
             }
             "not_ready" -> {
@@ -423,19 +494,24 @@ class CoverageLoadService(private val project: Project) {
                 }
                 // The daemon waits for CI jobs: back off per reason instead of asking every second.
                 val delay = notReadyBackoff.nextDelay(response.reason, response.retryAfterMs)
+                val waitForPipeline = context?.let { refreshState.onNotReady(it, response.reason) } ?: true
                 log.info(
-                    "Coverage: not ready (${response.reason}), retrying in $delay ms " +
-                        "(step ${notReadyBackoff.currentStep()})",
+                    if (waitForPipeline) {
+                        "Coverage: not ready (${response.reason}), retrying in $delay ms " +
+                            "(step ${notReadyBackoff.currentStep()})"
+                    } else {
+                        "Coverage: no pipeline for an unpushed HEAD — waiting for its local origin ref to change"
+                    },
                 )
                 lastError = null
                 CoveragePerfLog.event(
                     "covd.notReady",
                     "reason" to (response.reason ?: "-"),
-                    "retryMs" to delay,
+                    "retryMs" to if (waitForPipeline) delay else 0,
                     "step" to notReadyBackoff.currentStep(),
                 )
                 covdRetryAlarm.cancelAllRequests()
-                covdRetryAlarm.addRequest({ loadFromGitLab(showErrors = false) }, delay)
+                if (waitForPipeline) covdRetryAlarm.addRequest({ loadFromGitLab(showErrors = false) }, delay)
                 finishLoad(onComplete)
             }
             else -> {
@@ -548,6 +624,7 @@ class CoverageLoadService(private val project: Project) {
         onError: ((String) -> Unit)?,
         requestHead: String?,
         pinnedAtStart: Boolean,
+        context: CoverageRefreshContext?,
     ) {
         val commit = response.commit
         val cov4Path = response.cov4Path
@@ -582,19 +659,39 @@ class CoverageLoadService(private val project: Project) {
 
         // An answer for an older HEAD is shown, but marked stale until the reload for the new one.
         val stale = response.stale || headMoved
+        // Pushing the same HEAD or changing credentials does not change editor coverage.
+        val identity = AppliedCoverage(
+            gitRoot.absolutePath, requestHead, context?.baselineHead,
+            commit, CoverageFileStamp(cov4Path), response.baselineCommit,
+            response.baselineCov4Path?.let(::CoverageFileStamp), stale,
+        )
+        if (!response.replaced && identity == lastApplied && dataService.coverageGeneration == lastAppliedGeneration) {
+            if (!headMoved) {
+                lastError = null
+                resetFailureState()
+                covdRetryAlarm.cancelAllRequests()
+                context?.let { refreshState.onReady(it, stale, response.baselineState == "not_ready") }
+            } else {
+                pendingReload.set(true)
+            }
+            log.info("Coverage: unchanged daemon answer — keeping readers and editor highlights")
+            finishLoad(onComplete)
+            return
+        }
         if (response.replaced) GitLabCoordinator.getInstance().evictSharedReaders(commit, componentName)
-        val reader = if (!alreadyLoaded || response.replaced) {
+        val reader = if (!alreadyLoaded || response.replaced || lastApplied?.primary != identity.primary) {
             cache.get(commit, componentName, gitRoot) ?: Cov4Reader(File(cov4Path))
         } else {
             null
         }
         reader.use { dataService.setCoverage(commit, gitRoot, stale, it) }
-        computeAndStoreWarningContext(gitRoot)
 
         val baselineCommit = response.baselineCommit
         val baselinePath = response.baselineCov4Path
         if (baselineCommit != null && baselinePath != null) {
-            if (dataService.baselineCommitHash != baselineCommit || response.replaced) {
+            if (dataService.baselineCommitHash != baselineCommit || !dataService.hasBaseline() ||
+                response.replaced || lastApplied?.baseline != identity.baseline
+            ) {
                 Cov4Reader(File(baselinePath)).use {
                     dataService.setBaselineCov4Reader(it, baselineCommit)
                 }
@@ -602,6 +699,7 @@ class CoverageLoadService(private val project: Project) {
         } else {
             dataService.clearBaseline()
         }
+        computeAndStoreWarningContext(gitRoot)
 
         if (headMoved) {
             log.info("Coverage: answer for ${commit.take(8)} arrived after HEAD moved — shown as stale, reloading")
@@ -609,7 +707,12 @@ class CoverageLoadService(private val project: Project) {
         } else {
             lastError = null
             resetFailureState()
+            covdRetryAlarm.cancelAllRequests()
+            context?.let { refreshState.onReady(it, stale, response.baselineState == "not_ready") }
         }
+
+        lastApplied = identity
+        lastAppliedGeneration = dataService.coverageGeneration
 
         CoveragePerfLog.event(
             "covd.ready",

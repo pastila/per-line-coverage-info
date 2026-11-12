@@ -298,7 +298,8 @@ class HeavyCovdLoadTest : BasePlatformTestCase() {
 
         val monitor = CoverageHeadMonitor.getInstance(project)
         monitor.reloadForTest = {}
-        assertFalse(monitor.checkHeadFromPoller())
+        // The light project may reuse a monitor that observed a previous fixture's HEAD.
+        monitor.checkHeadFromPoller()
         CovdTestBase.git(repo, "commit", "--allow-empty", "-q", "-m", "checkout after local run")
         assertTrue(monitor.checkHeadFromPoller())
         assertFalse(local.hasActiveData())
