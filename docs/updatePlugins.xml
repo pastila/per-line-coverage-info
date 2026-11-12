@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.10.2/per-line-coverage-info-2.10.2.zip" version="2.10.2">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252"/>
+        <change-notes><![CDATA[<ul><li>Cancel coverage retry timers on plugin unload and discard queued callbacks and late daemon answers from the previous plugin version, preventing cross-classloader ClassCastException after an update</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.10.1/per-line-coverage-info-2.10.1.zip" version="2.10.1">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>

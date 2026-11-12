@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.10.2] - 2026-11-12
+
 - Cancel coverage retry timers on plugin unload and discard queued callbacks and late daemon answers from the previous plugin version, preventing cross-classloader ClassCastException after an update
 ## [2.10.1] - 2026-11-12
 
