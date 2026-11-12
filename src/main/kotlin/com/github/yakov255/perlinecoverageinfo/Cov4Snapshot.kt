@@ -61,6 +61,7 @@ internal class Cov4Snapshot(file: File) : AutoCloseable {
         val input = object : InputStream() {
             private var position = offset
             private val end = offset + length
+            override fun available(): Int = minOf(end - position, Int.MAX_VALUE.toLong()).toInt()
             override fun read(): Int {
                 val byte = ByteArray(1)
                 return if (read(byte, 0, 1) < 0) -1 else byte[0].toInt() and 0xff

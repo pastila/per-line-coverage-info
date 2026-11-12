@@ -342,11 +342,11 @@ class LocalCoverageService(private val project: Project) : Disposable {
     private fun isCovt(path: String): Boolean = path.endsWith(".covt") || path.endsWith(".covt.gz")
 
     private fun resolveHead(root: File): String? =
-        CoverageResolver.runGitCommand(root, "rev-parse", "HEAD")?.trim()?.takeIf { it.isNotEmpty() }
+        GitCommand.run(root, "rev-parse", "HEAD")?.trim()?.takeIf { it.isNotEmpty() }
 
     private fun findGitRoot(): File? {
         val basePath = project.basePath ?: return null
-        val path = CoverageResolver.runGitCommand(File(basePath), "rev-parse", "--show-toplevel") ?: return null
+        val path = GitCommand.run(File(basePath), "rev-parse", "--show-toplevel") ?: return null
         return File(path.trim())
     }
 

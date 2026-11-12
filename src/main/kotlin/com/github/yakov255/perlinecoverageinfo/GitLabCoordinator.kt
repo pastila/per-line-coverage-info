@@ -2,90 +2,20 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.components.Service
-import com.intellij.openapi.components.service
-import java.io.File
-import java.util.concurrent.CompletableFuture
-import java.util.concurrent.CompletionException
-import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Application-level coordinator that owns the single, shared GitLab "worker"
- * for the whole JVM.
+ * App-level helpers shared by all project windows.
  *
- * Every project window, poller and resolver should talk to GitLab through this
- * service. Identical requests (same ref, same pipeline, same merge-base) are
- * served from a shared TTL cache, and actual API calls are serialized on a
- * single worker thread and rate-limited — so N open windows of the same repo
- * produce the same network traffic as a single window.
- *
- * Higher-level coordination that is keyed by the repository:
- * - [sharedReader]: shared [Cov4Reader] instances so windows don't re-read
- *   large coverage files.
- * - [singleFlight] / [memoize]: coalesce concurrent identical work and cache
- *   its result (e.g. pipeline resolution, artifact download).
- * - [markRefreshed] / [isWithinRefreshCooldown]: avoid re-resolving coverage
- *   that was just refreshed.
+ * Coverage work happens in the covd daemon, so the only cross-window state left here is the
+ * shared [Cov4Reader] cache: a large `.cov4` is indexed once per commit even when several
+ * windows are open. Each caller owns a retained handle; immutable snapshots survive replacement and deletion.
  */
 @Service(Service.Level.APP)
 class GitLabCoordinator : Disposable {
 
     private val log = CoverageLog.get(GitLabCoordinator::class.java)
-
-    @Volatile
-    private var api: CachedGitLabApi? = null
-    private var clientBaseUrl: String? = null
-    private var clientToken: String? = null
-
-    private val lock = Any()
-
     private val readerCache = ReaderLruCache(MAX_READER_CACHE_ENTRIES, log)
-    private val singleFlight = ConcurrentHashMap<String, CompletableFuture<*>>()
-    private val memoizedCaches = ConcurrentHashMap<String, TtlCache<String, Any>>()
-    private val refreshCooldowns = TtlCache<String, Unit>(REFRESH_COOLDOWN_MS)
 
-    /**
-     * Returns the shared, cached, rate-limited GitLab API for the current
-     * settings. Recreates the underlying client when the domain or token
-     * changes; the TTL caches are reset so stale data is not served after a
-     * configuration change.
-     */
-    fun api(): GitLabApi {
-        val settings = CoverageApiSettings.getInstance()
-        val baseUrl = settings.gitlabBaseUrl
-        val token = settings.bearerToken
-
-        api?.let { existing ->
-            if (clientBaseUrl == baseUrl && clientToken == token) return existing
-        }
-
-        synchronized(lock) {
-            api?.let { existing ->
-                if (clientBaseUrl == baseUrl && clientToken == token) return existing
-            }
-            log.info("GitLab coordinator: creating shared API client (baseUrl=$baseUrl)")
-            val previous = api
-            val cached = CachedGitLabApi(GitLabApiClient(baseUrl, token))
-            api = cached
-            clientBaseUrl = baseUrl
-            clientToken = token
-            previous?.shutdown()
-            // Settings changed — drop cached resolution results so nothing stale is served.
-            val memoizedCount = memoizedCaches.size
-            val cooldownCount = refreshCooldowns.size
-            val readerCount = readerCache.size()
-            memoizedCaches.clear()
-            refreshCooldowns.clear()
-            readerCache.clear()
-            log.info("GitLab coordinator: settings changed — cleared in-memory caches (memoized=$memoizedCount, cooldowns=$cooldownCount, readers=$readerCount)")
-            return cached
-        }
-    }
-
-    /**
-     * Returns a shared [Cov4Reader] for the given commit/component, opening it
-     * via [open] on first access. Each caller owns an independent handle and must
-     * close it; the cache and other projects retain their own handles.
-     */
     fun sharedReader(
         commitHash: String,
         component: String,
@@ -94,105 +24,24 @@ class GitLabCoordinator : Disposable {
     ): Cov4Reader? =
         readerCache.getOrOpen("$commitHash|$component|$variant", open)
 
-    /** Drops cache ownership without interrupting projects or in-flight reads. */
-    fun clearReaders() = readerCache.clear()
-
-    /**
-     * Coalesces concurrent identical work: if another thread is already running
-     * [key], this call joins that in-flight work instead of running [loader]
-     * again. On success/failure the result is shared with all waiters.
-     */
-    fun <T> singleFlight(key: String, loader: () -> T): T {
-        val existing = singleFlight[key]
-        if (existing != null) {
-            log.debug("GitLab coordinator: joining in-flight work ($key)")
-            @Suppress("UNCHECKED_CAST")
-            return (existing as CompletableFuture<T>).joinAndUnwrap()
-        }
-        val future = CompletableFuture<T>()
-        val raced = singleFlight.putIfAbsent(key, future)
-        if (raced != null) {
-            log.debug("GitLab coordinator: joining in-flight work ($key)")
-            @Suppress("UNCHECKED_CAST")
-            return (raced as CompletableFuture<T>).joinAndUnwrap()
-        }
-        log.debug("GitLab coordinator: starting work ($key)")
-        try {
-            val value = loader()
-            future.complete(value)
-            return value
-        } catch (t: Throwable) {
-            future.completeExceptionally(t)
-            throw t
-        } finally {
-            singleFlight.remove(key)
-        }
+    /** Drops cached readers for a rewritten .cov4 file so the next lookup reopens it. */
+    fun evictSharedReaders(commitHash: String, component: String) {
+        readerCache.removeAll("$commitHash|$component|")
     }
-
-    /**
-     * Single-flight + TTL memoization keyed by [name]/[key] across the whole
-     * JVM. Repeated calls within [ttlMs] hit the shared cache and cost nothing;
-     * concurrent first calls share one [loader] execution.
-     */
-    fun <T : Any> memoize(name: String, key: String, ttlMs: Long, loader: () -> T): T {
-        val cache = memoizedCaches.getOrPut(name) { TtlCache<String, Any>(ttlMs) }
-        @Suppress("UNCHECKED_CAST")
-        cache.get(key)?.let {
-            log.debug("GitLab coordinator: memoized hit ($name:$key)")
-            return it as T
-        }
-        return singleFlight("$name:$key") {
-            @Suppress("UNCHECKED_CAST")
-            cache.get(key)?.let {
-                log.debug("GitLab coordinator: memoized hit ($name:$key)")
-                return@singleFlight it as T
-            }
-            val value = loader()
-            cache.put(key, value)
-            value
-        }
-    }
-
-    /** Records a successful coverage refresh of [gitRoot] at [headSha]. */
-    fun markRefreshed(gitRoot: File, headSha: String) {
-        refreshCooldowns.put("$gitRoot|$headSha", Unit)
-    }
-
-    /** True if [gitRoot]@[headSha] was refreshed less than [REFRESH_COOLDOWN_MS] ago. */
-    fun isWithinRefreshCooldown(gitRoot: File, headSha: String): Boolean =
-        refreshCooldowns.get("$gitRoot|$headSha") != null
 
     override fun dispose() {
-        synchronized(lock) {
-            api?.shutdown()
-            api = null
-        }
-        singleFlight.clear()
-        memoizedCaches.clear()
-        refreshCooldowns.clear()
         readerCache.clear()
     }
 
     companion object {
-        private const val MAX_READER_CACHE_ENTRIES = 6
-        private const val REFRESH_COOLDOWN_MS = 60_000L
+        private const val MAX_READER_CACHE_ENTRIES = 4
 
-        fun getInstance(): GitLabCoordinator = service()
+        fun getInstance(): GitLabCoordinator =
+            com.intellij.openapi.application.ApplicationManager.getApplication()
+                .getService(GitLabCoordinator::class.java)
     }
 }
 
-private fun <T> CompletableFuture<T>.joinAndUnwrap(): T {
-    return try {
-        join()
-    } catch (e: CompletionException) {
-        throw e.cause ?: e
-    }
-}
-
-/**
- * Small LRU owning one handle per reader. Eviction closes only the cache's handle;
- * project owners and in-flight reads keep the snapshot alive independently.
- */
 private class ReaderLruCache(private val maxEntries: Int, private val log: CoverageLog) {
 
     private val map = LinkedHashMap<String, Cov4Reader>(16, 0.75f, true)
@@ -218,6 +67,13 @@ private class ReaderLruCache(private val maxEntries: Int, private val log: Cover
             }
             map[key] = reader
             return reader.retain()
+        }
+    }
+
+    fun removeAll(keyPrefix: String) {
+        synchronized(lock) {
+            val keys = map.keys.filter { it.startsWith(keyPrefix) }
+            keys.forEach { map.remove(it)?.close() }
         }
     }
 

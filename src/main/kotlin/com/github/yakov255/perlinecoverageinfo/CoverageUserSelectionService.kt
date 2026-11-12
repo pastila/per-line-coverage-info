@@ -16,9 +16,11 @@ import com.intellij.util.xmlb.XmlSerializerUtil
  * [CoverageLoadService.loadOfflineFirst] loads this artifact instead of
  * auto-resolving the best match from git history.
  *
- * The pin is cleared when the user triggers "Fetch Coverage" ([CoverageLoadService.loadFromGitLab]),
- * indicating they want fresh auto-resolved data again. It is also cleared if the
- * pinned artifact has been deleted from the cache.
+ * While a pin is set, automatic loads (poller, retry alarm, HEAD tracker, startup) neither
+ * call the daemon nor replace the data. The pin is cleared when the user triggers
+ * "Load Coverage from GitLab" or "Fetch Coverage" ([CoverageLoadService.clearPin]) and
+ * when "Clear Coverage Data" runs. A local `.covt` import sets it on the imported entry.
+ * It is also cleared if the pinned artifact has been deleted from the cache.
  */
 @Service(Service.Level.PROJECT)
 @State(

@@ -10,6 +10,7 @@ enum class CoverageErrorKind {
     ARTIFACT_PARSE,
     GIT,
     NO_DATA,
+    NO_COMPONENT_JOBS,
     PROJECT_SETUP,
 }
 

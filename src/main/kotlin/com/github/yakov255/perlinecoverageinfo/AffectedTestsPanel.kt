@@ -1,6 +1,7 @@
 package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.icons.AllIcons
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
@@ -20,9 +21,13 @@ import javax.swing.KeyStroke
  * Tool-window tab showing tests affected by the user's local changes
  * relative to the coverage commit (HEAD diff or working-tree diff).
  */
-class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) {
+class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()), Disposable {
 
     private val log = CoverageLog.get(AffectedTestsPanel::class.java)
+
+    /** True after [dispose]: a late background answer must not touch Swing. */
+    @Volatile
+    private var disposed = false
 
     private val testTree = TestTreeView(project)
     private val warningPanel = JPanel(FlowLayout(FlowLayout.LEFT, 6, 2))
@@ -55,10 +60,12 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
 
         updateWarning()
 
-        project.messageBus.connect().subscribe(
+        project.messageBus.connect(this).subscribe(
             CoverageDataService.COVERAGE_CHANGED_TOPIC,
             CoverageChangeListener {
-                ApplicationManager.getApplication().invokeLater { updateWarning() }
+                ApplicationManager.getApplication().invokeLater {
+                    if (!project.isDisposed && !disposed) updateWarning()
+                }
             },
         )
 
@@ -67,6 +74,11 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
             KeyStroke.getKeyStroke(KeyEvent.VK_F5, 0),
             JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT,
         )
+    }
+
+    /** The tool-window content registers this panel as its disposable; the bus connection ends with it. */
+    override fun dispose() {
+        disposed = true
     }
 
     private fun refreshAction() {
@@ -96,11 +108,14 @@ class AffectedTestsPanel(private val project: Project) : JPanel(BorderLayout()) 
         object : Task.Backgroundable(project, "Finding affected tests…", true) {
             override fun run(indicator: ProgressIndicator) {
                 val result = AffectedTestsService.getInstance(project).compute(mode)
-                ApplicationManager.getApplication().invokeLater { populateAffected(result) }
+                ApplicationManager.getApplication().invokeLater {
+                    if (!project.isDisposed && !disposed) populateAffected(result)
+                }
             }
 
             override fun onThrowable(error: Throwable) {
                 ApplicationManager.getApplication().invokeLater {
+                    if (project.isDisposed || disposed) return@invokeLater
                     val title = if (error is CoverageApiException) "Affected Tests" else "Error"
                     Messages.showErrorDialog(project, error.message ?: "Unknown error", title)
                 }

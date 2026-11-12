@@ -11,6 +11,25 @@ class CoveragePathNormalizerTest {
     private val suites = setOf("E2E", "FeatureTest", "Stubs", "Support")
 
     @Test
+    fun `official reporter 2 output retains scenario identities and line mappings through local import`() {
+        val bytes = javaClass.getResourceAsStream("/reporter-2.0.0/calculator.covt")!!.use { it.readBytes() }
+        val parsed = BinaryCoverageParser.parsePossiblyGzippedCovt(bytes)
+        val normalized = CoveragePathNormalizer.normalizeRaketaRun(parsed, null)
+        val adding = "app/raketa/features/calculator.feature:3"
+        val subtracting = "app/raketa/features/calculator.feature:8"
+
+        assertEquals(listOf(adding, subtracting), normalized.tests)
+        assertEquals(mapOf(
+            "app/raketa/src/Calculator.php" to mapOf(
+                11 to listOf(adding),
+                16 to listOf(subtracting),
+                21 to emptyList<String>(),
+            ),
+        ), normalized.coverage)
+        assertEquals(parsed, normalized)
+    }
+
+    @Test
     fun `discovers custom feature suites without confusing service directories`() {
         val root = Files.createTempDirectory("coverage-suites").toFile()
         try {

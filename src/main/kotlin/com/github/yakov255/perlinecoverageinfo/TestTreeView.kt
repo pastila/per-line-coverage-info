@@ -88,6 +88,14 @@ internal class TestTreeView(private val project: Project) {
                     val count = node.childCount
                     if (count > 0) r.append(" ($count)", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                 }
+                is TestNodeData.PhpUnitMethod -> {
+                    r.icon = AllIcons.Nodes.Method
+                    r.append(data.displayName, SimpleTextAttributes.REGULAR_ATTRIBUTES)
+                }
+                is TestNodeData.UnnamedCoverage -> {
+                    r.icon = AllIcons.General.Warning
+                    r.append(data.displayName, SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                }
                 else -> r.append(node.userObject?.toString() ?: "", SimpleTextAttributes.REGULAR_ATTRIBUTES)
             }
         }
@@ -347,7 +355,8 @@ internal class TestTreeView(private val project: Project) {
 
     private fun populateTreeNodes(tests: List<String>, scenarioLabels: Map<String, String>) {
         rootNode.removeAllChildren()
-        val (behatTests, phpunitTests) = tests.partition { isBehatTest(it) }
+        val namedTests = tests.filterNot(CoverageTestIdentity::isAnonymous)
+        val (behatTests, phpunitTests) = namedTests.partition { isBehatTest(it) }
 
         if (isTreeView) {
             if (behatTests.isNotEmpty()) {
@@ -393,6 +402,9 @@ internal class TestTreeView(private val project: Project) {
             }
         }
 
+        if (namedTests.size != tests.size) {
+            rootNode.add(CheckedTreeNode(TestNodeData.UnnamedCoverage))
+        }
         treeModel.reload()
         for (i in 0 until tree.rowCount) tree.expandRow(i)
         refreshCheckedCount()

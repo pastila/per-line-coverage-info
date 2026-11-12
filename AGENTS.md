@@ -2,11 +2,12 @@
 
 ## Overview
 
-PhpStorm plugin that shows per-line PHP coverage inline in the editor. CI collects coverage via a custom PHP/Behat extension (`.covt` files), uploads to GitLab pipeline artifacts; the plugin downloads, caches locally as `.cov4`, and renders via gutter icons + line backgrounds. Clicking a covered line shows the tests that execute it; tests can be re-run from the popup.
+PhpStorm plugin that shows per-line PHP coverage inline in the editor. CI collects coverage via a custom PHP/Behat extension (`.covt` files) and uploads it to GitLab pipeline artifacts; the **covd** daemon (coverage-assistant) resolves the pipeline, downloads the shards and writes a local `.cov4` cache, and the plugin renders it via gutter icons + line backgrounds. Clicking a covered line shows the tests that execute it; tests can be re-run from the popup.
 
 - **Plugin ID**: `com.github.yakov255.perlinecoverageinfo`
-- **Platform**: IntelliJ IDEA Ultimate / PhpStorm 2025.2+ and the Raketa IDE (262+); depends on `com.intellij.modules.platform`, `gherkin`, optional `com.intellij.mcpServer`, optional `com.jetbrains.php.behat` (PhpStorm), optional `ru.raketa.php.behat` (Raketa), optional `Git4Idea`. Code outside `PhpStormBehatLauncher` and `LocalCoverageRunExtension` must not use `com.jetbrains.php` classes: Raketa has no PhpStorm PHP plugin
-- **Language**: Kotlin, JVM 21 · **Build**: Gradle + IntelliJ Platform Gradle Plugin
+- **Platform**: IntelliJ IDEA Ultimate / PhpStorm 2025.2+ and Raketa IDE (262+); depends on `com.intellij.modules.platform`, `gherkin`, optional `com.intellij.mcpServer`, optional `com.jetbrains.php.behat`, optional `ru.raketa.php.behat`, optional `Git4Idea`. Only `PhpStormBehatLauncher` and `LocalCoverageRunExtension` may reference `com.jetbrains.php` classes; Raketa has no PhpStorm PHP plugin.
+- **Language**: Kotlin, JVM target 17 (`jvmToolchain(17)`; the platform itself runs on Java 21+) · **Build**: Gradle + IntelliJ Platform Gradle Plugin
+- **Coverage engine**: bundled `covd` daemon (Go, from `coverage-assistant`); the plugin is a client
 
 ## Project Layout
 
@@ -14,6 +15,7 @@ PhpStorm plugin that shows per-line PHP coverage inline in the editor. CI collec
 src/main/kotlin/com/github/yakov255/perlinecoverageinfo/   # plugin source
 src/test/kotlin/com/github/yakov255/perlinecoverageinfo/   # unit tests
 src/main/resources/META-INF/plugin.xml                     # manifest (+ behat-integration.xml, raketa-integration.xml, git-integration.xml)
+src/main/resources/bin/<platform>/covd[.exe]               # committed covd binaries (+ covd-manifest.properties)
 php-behat-coverage-extension/                              # PHP ext that emits .covt
 coverage_storage_format_v4.md                              # COV4 binary spec
 ```
@@ -23,90 +25,81 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Settings
 | File | Purpose |
 |------|---------|
-| `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel, `localCoverageDir` (default `storage/coverage`) |
-| `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; triggers `loadOfflineFirst()` for all open projects on Apply/OK if plugin enabled and configured |
+| `CoverageApiSettings.kt` | App-level settings: GitLab domain/token/project, coverage branch, `enabled` master switch, `remoteUrlAutoChecked` sentinel. The access token lives in `PasswordSafe` through `TokenStore.kt`; `State.bearerToken` is a read-only legacy field (`getState()` always returns it empty, migration happens in `loadState`), and the storage declares `roamingType = RoamingType.DISABLED` because the token is machine-local. `baseUrlFor(domain)` is the single base-URL helper (keeps an explicit `http://host:port`, adds `https://` otherwise) |
+| `CoverageApiSettingsConfigurable.kt` | Settings UI — **Settings → Tools → GitLab Coverage**; a password field for the token (the stored value is never shown, empty means "keep", "Remove the stored token when applied" clears it), Apply/OK save the settings and run `CoverageSettingsActions.afterSettingsApplied()` (clears every project's failure block and retry counter, then loads) |
+| `CoverageSettingsActions.kt` | Shared "settings applied" path used by the settings page and the bridge command `settings.apply`: reloads every open project and lifts a token or deterministic-error block |
+| `GitLabTokenDialog.kt` | First-run dialog that asks for the GitLab token when none is stored and `tokenPrompted` is false; password field, links built with `CoverageApiSettings.baseUrlFor` |
+| `TokenStore.kt` | `TokenStore` with a `PasswordSafe` implementation (single `CredentialAttributes` entry) and an in-memory one; `TokenCache` keeps the credential store off the EDT (cached get, background load, one writer thread, last-write-wins) and is used by `CoverageApiSettings.bearerToken`. `-Dcoverage.tokenStore=memory` is an inert-by-default test escape hatch |
+| `CustomRepoProvider.kt` | `updateSettingsProvider` — points the IDE updater at `docs/updatePlugins.xml` instead of JetBrains Marketplace |
 
 ### Component configuration
 | File | Purpose |
 |------|---------|
-| `ComponentConfig.kt` | Hardcoded mapping from repository service directories to CI job prefixes (e.g. `api/avia` → `test:behat:avia`). `detectComponent()` returns the component for the current project root (root → `raketa`, subpath → matching component). Coverage is published by the dedicated `test:behat:coverage:<component>` jobs (derived via `coverageJobPrefix`); `selectCoverageJobNames()` prefers those and falls back to legacy `test:behat:<component>` jobs only if no coverage job exists. |
+| `ComponentConfig.kt` | Hardcoded mapping from repository service directories to CI job prefixes (e.g. `api/avia` → `test:behat:avia`). `detectComponent()` returns the component for the current project root (root → `raketa`, subpath → matching component). Coverage is published by the dedicated `test:behat:coverage:<component>` jobs; `CoverageLoadService` sends both that prefix (`coverageJobPrefix`) and the legacy one to covd, which selects the jobs. `selectCoverageJobNames()` is a pure helper kept for tests and is no longer called at runtime. |
 
 ### MCP server
 | File | Purpose |
 |------|---------|
-| `CoverageMcpToolset.kt` | JetBrains MCP framework toolset via `com.intellij.mcpServer`; exposes `get_coverage_for_file`, `get_tests_at_line`, `get_first_tests_at_lines`, `list_files`, `get_local_coverage_status`, `set_local_coverage_collection`, `restore_stale_local_coverage` and `clear_local_coverage` tools |
+| `CoverageMcpToolset.kt` | JetBrains MCP framework toolset via `com.intellij.mcpServer`; exposes `get_coverage_for_file`, `get_tests_at_line`, `get_first_tests_at_lines`, `list_files`, `get_local_coverage_status`, `set_local_coverage_collection`, `restore_stale_local_coverage`, and `clear_local_coverage` tools |
 
-### GitLab integration
+### GitLab and git access
 | File | Purpose |
 |------|---------|
-| `GitLabApi.kt` | Interface for the GitLab REST surface (`listPipelines`, `listPipelineJobs`, `getMergeBase`, artifact download, project list). Two impls: thin HTTP client and the cached worker facade |
-| `GitLabApiClient.kt` | Thin HTTP client implementing `GitLabApi`: pipelines, jobs, artifact download, merge-base, project list. Retries 5xx/429, honours `Retry-After` |
-| `GitLabModels.kt` | `@Serializable` data classes for GitLab REST responses |
-| `CoverageResolver.kt` | Picks the best pipeline for current HEAD via three-tier merge-base resolution; `resolveDual()` returns `DualResolved(primary, baseline?)` for dual-coverage mode. Works against the shared `GitLabApi` facade |
-| `CachedGitLabApi.kt` | Shared "worker" facade implementing `GitLabApi`: serializes metadata calls (pipelines/jobs/merge-base) on one dedicated worker thread, TTL-caches results, rate-limits actual requests. Artifact downloads pass through. `invalidateJobs()` forces fresh job status for the wait-loop |
-| `GitLabCoordinator.kt` | App-level (`Service.Level.APP`) coordinator owning the single shared worker for the whole JVM: `api()` (recreates client on settings change, clears caches), `singleFlight()`/`memoize()` (cross-window coalescing + TTL memoization), `sharedReader()` (LRU of `Cov4Reader`), `markRefreshed()`/`isWithinRefreshCooldown()` (refresh cooldown) |
-| `TtlCache.kt` | Bounded thread-safe TTL cache (256 entries by default); monotonic TTL, expired entries removed on reads/writes, oldest-write capacity eviction |
-| `RateLimiter.kt` | Token-bucket rate limiter (`tryAcquire`/`acquire(timeout)`) |
+| `GitLabProjectsClient.kt` | Minimal REST client used only by the settings screen to list/search the projects the token can access. Retries timeouts/`5xx` (3 attempts, growing pause, 2-minute budget) and throws `IOException` on failure; JSON fields are mapped with `@SerialName` (`path_with_namespace`, `web_url`). Blocking: call it from a pooled thread |
+| `GitCommand.kt` | Read-only `git` wrapper: HEAD, recent commits, merge-base, `rev-list --count`, and `git show` through `runRaw` (stdout verbatim, no trim, so unchanged content compares equal to the editor text). `run` keeps the trimmed one-line behaviour. stdout and stderr are drained on their own threads and every call has a timeout (`destroyForcibly` on expiry), so a hung or noisy `git` cannot deadlock a pooled thread |
+| `GitLabCoordinator.kt` | App-level (`Service.Level.APP`) LRU of shared `Cov4Reader` instances plus `evictSharedReaders()` after a cache rewrite; each cache lookup returns an owned `retain()` handle, and eviction closes only the cache ownership |
+| `CovdClient.kt` | Client for the coverage daemon: binary extraction, handshake (daemon starts are serialized, so concurrent callers share one process and one restart), `ensure`, `import`, artifact listing/deletion. Non-2xx answers without a `state` become `error`; a non-JSON body becomes `Unavailable`. Typed `trace` (`request`, `timing`, `gitlab` calls, `decisions`, `errors`) in `EnsureResponse`; every `ensure`/`import` answer is handed to `CovdResponseRecorder` and logged as `covd.response`, each new connection as `covd.spawn`. `cacheRoot` honours `-Dcoverage.cacheRoot`; `currentConnection()`/`daemonPid()` are read by `CoverageUiTestBridge`. `internal` test seams: `binaryOverride`, `cacheRootOverride`, `extraDaemonArgs`, timeouts, `startCount`, `resetForTest()`. An `ensure`/`import` restarts the daemon and repeats the request only when the connection failed before an answer (refused, reset); a read timeout is `Unavailable` at once, so a long download is not doubled. stdout is read by a daemon thread (handshake line, then drained) and stderr by another (`{"covdStartError":{code,message}}` is included in `Unavailable`); a failed handshake destroys the process; the daemon token is masked in every log/message. `Unavailable` is an `IOException` |
 
 ### Loading pipeline
 | File | Purpose |
 |------|---------|
-| `CoverageLoadService.kt` | Central orchestrator: `loadOfflineFirst()` (cache walk → stale fallback → GitLab refresh), `loadFromGitLab()` (two-phase: silent resolve → visible download on cache miss). Resolves through `GitLabCoordinator` (memoized per git-root/HEAD, short-circuits when fresh within 60 s cooldown); coalesces identical downloads across windows via `singleFlight`. `downloadArtifacts()` filters by detected component, waits for running behat jobs (infinite, cancel via progress/branch switch), falls back to baseline pipeline on `NO_DATA`. `loadOrFetchBaseline()` accepts `preloadedReader` to avoid redundant `.cov4` opens. |
-| `CoverageHeadTracker.kt` | Triggers `loadOfflineFirst()` on every HEAD change (debounced 2 s); skipped when gutter hidden. When only `origin/<current branch>` moves (push / fetch) it restarts `CoveragePipelinePoller` |
-| `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, then `loadOfflineFirst()`; skipped when gutter hidden |
-| `CoveragePipelinePoller.kt` | Waits for the pipeline of the pushed commit and auto-refreshes coverage (every 30 s; skipped while a load is in progress). Reads the remote commit from the local `origin/<branch>` ref (no `git ls-remote`); asks GitLab (shared cached API) only when it differs from the loaded coverage; stops itself when there is nothing to wait for (coverage of the remote commit loaded, branch not pushed, pipeline of the remote commit failed, successful pipeline already loaded); stopped/blocked when gutter hidden |
+| `CoverageLoadService.kt` | Orchestrator: `loadOfflineFirst(manual)` (cache walk → stale display → daemon refresh), `loadFromGitLab(showErrors, onComplete, onError, bypassBlock)` (one `ensure` against covd; `ready`/`not_ready`/`error` handling), `loadFromLocalFile()` (daemon `import`, pins the imported artifact; retained as a separate API). `loadFromCache()` loads a pinned artifact. The user-facing "Load Coverage from File" uses `LocalCoverageService` to merge a run over CI. Applies the failure contract through `RetryPolicy`/`RetryState`: retry counter and block (`retryAttempt`, `retryMax`, `blockedReason()`), delayed retries on the shared `covdRetryAlarm`, reset on success/HEAD change/settings change, manual load bypasses both. Applies readers to `CoverageDataService` and computes the "behind by" warning context. `loading`/`pendingReload` are `AtomicBoolean`s; `isPinned()`/`clearPin()`/`onCleared()`. An answer whose request HEAD differs from the current HEAD is applied as `stale`, raises no "Coverage updated" notice, leaves the retry/block state alone and queues a reload for the new HEAD. `loadFromLocalFile` pins the imported commit |
+| `CoverageHeadTracker.kt` | Git4Idea listener: forwards repository changes to `CoverageHeadMonitor`. Skipped when the gutter is hidden |
+| `CoverageHeadMonitor.kt` / `CoverageHeadTracking.kt` | Project service owning the last known HEAD revision, shared by the Git4Idea listener and the poller; repositories outside the coverage git root (submodules) are ignored (`CoverageRepositoryFilter`). On a change it calls `CoverageLoadService.onHeadChanged()` (a token block survives it) and schedules the debounced (2 s) `loadOfflineFirst()`; the first observed revision is skipped (startup handles the initial load). `HeadRevisionTracker` is the pure last-revision logic |
+| `CoverageStartupActivity.kt` | On project open: remote-URL auto-check, the first-run token dialog (posted with `invokeLater`, shown once per IDE run through `TokenPromptGuard`, never in unit-test mode), then `loadOfflineFirst()` on a pooled thread; logged JVM arguments for the perf log. No coroutine suspension (see Conventions) |
+| `CoveragePipelinePoller.kt` | 30-second tick that asks the daemon again; no GitLab logic. Skipped while a load is in progress or while `CoverageLoadService.isBlocked()` holds, and disabled when the gutter is hidden. Also skipped while a coverage artifact is pinned. On every tick it also asks `CoverageHeadMonitor.checkHeadFromPoller()` (`git rev-parse HEAD`), so a checkout Git4Idea reports late (linked worktrees) is caught within one poll |
 | `LoadCoverageAction.kt` | Find Action: "Load Coverage from GitLab" |
-| `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz) — adds a run to the local layer |
-| `ClearLocalCoverageAction.kt` | Find Action: "Clear Local Coverage" |
-| `RestoreStaleLocalCoverageAction.kt` | Covering Line toolbar + Find Action: "Restore Stale Local Coverage" — re-stamps runs collected on another commit onto the current HEAD; visible only while some run is stale |
-| `CollectLocalCoverageToggleAction.kt` | Toggle "Collect Local Coverage" (Find Action + Covering Line toolbar) → `CoverageApiSettings.collectLocalCoverage` |
-| `LocalCoverageRunExtension.kt` | `phpRunConfigurationExtension` (registered in `behat-integration.xml`): when the toggle is on, patches Behat command lines via `LocalCoverageCommandLine` |
-| `RaketaLocalCoverageRunExtension.kt` | The same for Raketa: a platform `RunConfigurationExtensionBase` registered as `ru.raketa.php.behat.runConfigurationExtension` (`raketa-integration.xml`), applied to configurations of type `RaketaBehat` |
-| `LocalCoverageCommandLine.kt` | Shared patching of a `GeneralCommandLine` with `LocalCoverageCommand` (git root, settings, logging) |
-| `LocalCoverageCommand.kt` | Pure command-line rewrite: finds the Behat script, matches its interpreter-side service dir (`/web/core`) to the git root (`core`), picks the profile with `BehatBinaryCoverage` (prefers `coverage-clover`), adds `-d pcov.*` before the script and `--profile/--binary-coverage-*` after; skips services without the extension and command lines that already set `--profile` |
-| `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" |
+| `LoadLocalCoverageAction.kt` | Find Action: "Load Coverage from File" (.covt/.covt.gz), adds a run to the local layer without replacing CI |
+| `ClearCoverageAction.kt` | Find Action: "Clear Coverage Data" — stops the poller, lifts the pin, drops the retry alarm and the queued reload, clears the data |
 
-### Parsing & on-disk format
+### On-disk format
 | File | Purpose |
 |------|---------|
-| `BinaryCoverageParser.kt` | Parses `.covt` binary and CI artifact ZIPs → `Map<file, Map<line, List<test>>>` |
-| `Cov4Writer.kt` | Streams the COV4 random-access cache to disk, computes checksums and publishes atomically (spec: `coverage_storage_format_v4.md`) |
-| `Cov4Snapshot.kt` / `SharedLifetime.kt` | Private disk snapshots with explicit shared ownership; active reads retain the resource until they finish, Cleaner is a fallback |
-| `CoverageReportMerger.kt` | Incrementally merges CI reports, preserving shared test sets without retaining completed shards |
-| `Cov4Reader.kt` | Reads immutable disk snapshots on demand; `retain()` creates an independently owned handle, `close()` releases it |
-| `CoverageCacheService.kt` | Disk cache at `~/.cache/coverage-plugin/<projectId>/`; key = commit hash + component; files named `hash-component.cov4`; manages index, cleanup (7 days by `lastUsedMs`), last-used tracking, in-JVM-synchronized writes, shared `Cov4Reader` via coordinator. `CacheEntry` stores component and branch per artifact. |
+| `Cov4Reader.kt` / `Cov4Snapshot.kt` / `SharedLifetime.kt` | Lazy per-file decoding from an immutable private disk snapshot, with bounded lengths/counts and streaming CRC checks. Active readers survive cache replacement/deletion. `retain()` returns an independently owned handle; all callers close it with `use`. Cache identity includes the on-disk file stamp, so the next lookup after replacement opens new bytes. A damaged FILE section yields an empty map and one log line. |
+| `CoveragePathNormalizer.kt` | Normalizes raketa `.covt` keys/tests to git-root-relative paths; used when reading pre-upgrade caches (the daemon normalizes new ones) |
+| `CoverageCacheService.kt` | Read-only view of `<cacheRoot>/<projectId>/` (`-Dcoverage.cacheRoot`, default `~/.cache/coverage-plugin`): `cache-index.json` + `<hash>-<component>.cov4`, reader sharing, artifact listing. Writes and deletions go through the daemon. `cache-index.json` is decoded with `ignoreUnknownKeys = true` (a field added by a newer covd must not hide the cache) and `findCachedCommit(candidates, component)` only considers entries of the active component |
 
 ### In-memory model
 | File | Purpose |
 |------|---------|
-| `CoverageDataService.kt` | Holds active coverage: primary `Cov4Reader` + optional baseline `Cov4Reader`; tracks commit hashes, git root, stale flag |
+| `CoverageDataService.kt` | Holds active coverage as one immutable `@Volatile` `Snapshot` (primary/baseline `Cov4Reader`, commits, gitRoot, stale, headHash, mergeBase, behind-by), replaced whole under a lock; `snapshot()` gives a consistent view and the old properties are thin getters. `setCoverage(commit, gitRoot, stale, reader)` sets context and reader in one step. `coverageGeneration` is an `AtomicLong`, +1 per change. `Cov4Reader` only — no in-memory coverage map |
+| `CoverageWarningService.kt` | Per-generation cache of "coverage is from an older commit" warnings: primary vs `HEAD`, baseline vs merge-base, with behind-by counts; formats plain text and HTML for the Affected tab banner |
 | `LineMappingService.kt` | Maps old coverage line numbers to current document lines via `git show` + `ComparisonManager` diff; supports both primary and baseline commits; LRU cache of file contents |
 | `CoverageLineMapper.kt` | Pure functions: diff old/new content, build old→new line map |
-| `LocalCoverageLayer.kt` | Pure model of local runs: `LocalCoverageRun` (tests + coverage + file snapshots + the commit it was collected on), `LocalCoverageLayer` (newer run supersedes the same tests in older runs; `activeRuns`/`staleRuns`/`restampTo` split runs by commit), `LocalCoverageMerge` (CI ⊕ local), `LocalCoveragePaths` (`core/web/app/…` → `app/…`) |
-| `LocalCoverageArchive.kt` | Stores local coverage and UTF-8 source snapshots in a private disk archive; exposes lazy per-file maps |
-| `LocalCoverageService.kt` | Project service holding the local layer: loads `.covt` runs (manual or auto via IDE file watcher on `localCoverageDir`, loaded once size+mtime settle), maps each run from its snapshot onto the current document |
 | `CoverageDiff.kt` | Pure helpers: `featureOnly(primary, baseline)` (set-diff by test name) and `union(primary, baseline)` (distinct, primary first) |
 
 ### Rendering
 | File | Purpose |
 |------|---------|
-| `CoverageHighlighter.kt` | Coalesces editor requests via `LatestTaskQueue`, cancels stale CPU/disk/git work via `CoverageCancellation`, and checks document/coverage generations before applying results; classifies each line as `COVERED` (green) / `UNCOVERED` (red) / `FEATURE_ONLY` (blue) when baseline is present |
+| `CoverageHighlighter.kt` | Applies line-background highlighters and gutter renderers; classifies each line as `COVERED` (green) / `UNCOVERED` (red) / `FEATURE_ONLY` (blue) when baseline is present |
 | `CoverageGutterRenderer.kt` | Gutter strip coloured by `CoverageCategory`; tooltip shows count of feature-only tests; click opens "Covering Line" panel |
-| `CoverageEditorListener.kt` | Applies highlights on editor open; re-applies on document change (debounced 300 ms) |
+| `CoverageEditorListener.kt` | Applies highlights on editor open; installs one document listener per file-backed editor (also before coverage is loaded) and re-applies on document change (debounced 300 ms) |
 | `CoverageGutterVisibilityService.kt` | Persists gutter visible/hidden toggle across restarts; gates all loading activity when hidden |
-| `CoverageUserSelectionService.kt` | Persists pinned commit hash (user-selected artifact survives IDE restart) |
-| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Toggle coverage gutter project-wide; hide also stops pipeline poller, show triggers `loadOfflineFirst()` |
+| `CoverageUserSelectionService.kt` | Persists the pinned commit hash. While a pin is set, automatic loads (poller, retry alarm, pending reload, HEAD tracker, startup) neither call the daemon nor replace the data. Cleared by "Load Coverage from GitLab", Fetch, Clear Coverage Data, or when the pinned artifact is missing from the cache |
+| `HideCoverageGutterAction.kt` / `ShowCoverageGutterAction.kt` | Toggle coverage gutter project-wide; hide also stops pipeline poller, show triggers `loadOfflineFirst()` on a pooled thread |
 | `CoverageIcons.kt` | Green/red icon constants |
 
 ### Tests tool window
 | File | Purpose |
 |------|---------|
-| `CoverageTestsToolWindowFactory.kt` | Registers "Coverage Tests" bottom tool window (Covering Line / Affected by Changes / Artifacts / Log tabs) |
-| `CoverageTestNodeData.kt` | Sealed node-payload hierarchy for test tree: Dir, BehatGroup, BehatScenario, PhpUnitGroup, PhpUnitMethod |
+| `CoverageTestsToolWindowFactory.kt` | Registers "Coverage Tests" bottom tool window with **five** tabs: Covering Line / Affected by Changes / New Coverage / Artifacts / Log |
+| `CoverageTestNodeData.kt` | Sealed node-payload hierarchies: `TestNodeData` for the tests tree (Dir, BehatGroup, BehatScenario, PhpUnitGroup, PhpUnitMethod) and `FileNodeData` for the files trees (Dir, FileEntry) |
 | `TestTreeView.kt` | Shared test-tree widget: tree+model+renderer, double-click navigate, popup (Run / Debug / Go to), flat-vs-tree toggle, Behat/PhpUnit hierarchy builders, Run-All-bundled |
 | `CoveringLinePanel.kt` | "Covering Line" tab: per-line view — tests covering the line clicked in the editor gutter; toolbar: toggleView, Run All, Run All Debug, **Both / Master Only / New on This Branch** filter (visible only in dual-coverage mode) |
-| `AffectedTestsPanel.kt` | "Affected by Changes" tab: `AffectedFilesPane` + `TestTreeView` in splitter; toolbar: Find HEAD, Find Working Tree, Refresh, toggleView, Run All, Run All Debug, Remove Selected; F5 = Refresh |
-| `CoverageArtifactsPanel.kt` | Artifacts tab: table of cached COV4 files with Fetch / Load / Delete toolbar |
+| `AffectedTestsPanel.kt` | "Affected by Changes" tab: `AffectedFilesPane` + `TestTreeView` in splitter; warning banner from `CoverageWarningService`; toolbar: Find HEAD, Find Working Tree, Refresh, toggleView, Run All, Run All Debug, Remove Selected; F5 = Refresh |
+| `AffectedFilesPane.kt` | Left pane of the Affected tab: `CheckboxTree` of affected files with per-node test count and `(-N)` delta, toolbar (Refresh, tree/flat toggle, expand/collapse, check/uncheck all); writes the checkbox state back into `AffectedTestsModel` |
+| `NewCoveragePanel.kt` / `NewCoverageModel.kt` | "New Coverage" tab: files and lines covered only on the feature branch (primary has tests, baseline has none). Uses `git diff baseline..primary` to pick the line-mapping path for changed files and raw line comparison for unchanged ones; double-click opens the first feature-only line |
+| `CoverageArtifactsPanel.kt` | Artifacts tab: table of cached COV4 files with Fetch / Load / Delete toolbar. The index is read in the background and the table is updated on the EDT (stale refreshes are dropped by a ticket); Delete runs in the background |
 | `CoverageLogPanel.kt` | Log tab: `ConsoleView` + `CoverageLogService` subscription |
 
 ### Affected-tests analysis
@@ -121,10 +114,7 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 ### Behat runner
 | File | Purpose |
 |------|---------|
-| `BehatLauncher.kt` | EP `behatLauncher`: creates Behat run configurations of the IDE's Behat plugin. `PhpStormBehatLauncher.kt` (`behat-integration.xml`) uses `com.jetbrains.php.behat`; `RaketaBehatLauncher.kt` (`raketa-integration.xml`) finds the `RaketaBehat` type by ID and sets its options (`testPath`, `testLine`, `workingDirectory`, `configFile`, `arguments`) through `readExternal`, so it compiles without Raketa classes |
-| `PhpFileIcon.kt` | PHP file icon from the IDE's PHP file type (no `PhpIcons`) |
-| `BehatTestRunner.kt` | Platform-only runner over `BehatLauncher`: runs scenarios via Behat run-configuration template; single or bundled multi-path launch; pins every launch to the Behat config that owns the feature files and passes paths relative to it as separate positional arguments (e.g. `file:1 file:2`); paths from several services produce one launch per service, started sequentially |
-| `BehatConfigLocator.kt` | Pure lookup of the Behat project owning a feature file: nearest ancestor directory with `behat.yml` / `behat.php` / `*.dist` (also `config/` subdir), searched up to the project root |
+| `BehatTestRunner.kt` / `BehatLauncher.kt` | Platform-only runner using optional `PhpStormBehatLauncher` or `RaketaBehatLauncher`. Pins each launch to the owning Behat config (`BehatConfigLocator`), passes separate relative paths (`file:1 file:2`), and launches services sequentially. |
 | `CoverageTestNavigator.kt` | PSI navigation to scenario; converts git-root-relative feature paths to project-relative |
 
 ### Errors & logging
@@ -134,6 +124,15 @@ coverage_storage_format_v4.md                              # COV4 binary spec
 | `CoverageErrorReporter.kt` | IDE "Submit" error reporter |
 | `CoverageLog.kt` | Logger wrapper — writes to `idea.log` **and** `CoverageLogService` |
 | `CoverageLogService.kt` | Ring buffer (2000 entries) with thread-safe subscribe/backfill |
+| `OpenCoveragePerfLogAction.kt` | Find Action: "Open Coverage Performance Log Folder" |
+| `CoverageUiTestBridge.kt` | Test-only project service, inert unless `-Dcoverage.uiTestBridge=true`. Writes a JSON snapshot (state, commit, `baselineCommit`, `loading`, `stale`, `headHash`, `coverageGeneration`, `dumb` (indexing), `covdInstanceId`, `covdPid`, `gutterVisible`, `retryAttempt`, `retryMax`, `blocked`, `notifications`, `lastCommand`, per-line classification of `-Dcoverage.uiTestFiles`, `updatedAt`) atomically to `-Dcoverage.uiTestState=<file>` (default `~/.cache/coverage-plugin/ui-test-state.json`) so an out-of-process UI test can see what RemoteRobot cannot. Polls `-Dcoverage.uiTestCommands` every 250 ms and runs each new line once (`reload`, `settings.token=<value>` stored but never logged, `settings.apply`). Line numbers are the coverage commit's, **without** line mapping |
+| `RetryPolicy.kt` | Pure failure contract (`RetryPolicy`, `RetryState`): default 5/15/45 s ladder overridable by `-Dcoverage.retry.delaysMs`, a single wait capped at 60 s, `retryAfterMs` as a floor, and the decision per daemon code (`RETRY` / `BLOCK_AUTH` / `STOP_UNTIL_CHANGE` / `NONE`). No IDE types, unit-tested directly |
+| `NotReadyBackoff.kt` | Pure `not_ready` backoff: 5/10/20/40 s then the 60 s ceiling per reason, a daemon `retryAfterMs` as a floor. A different reason, `ready`, a HEAD change, a settings change or a manual load resets it. No IDE types, unit-tested directly |
+| `CoverageNotifier.kt` | Project notifications in the `Coverage Notifications` group: one balloon per kind (`retry`, `auth`), actions *Retry now* / *Show log* / *Update token…*; keeps the last 20 records (title, content, type, action labels, time) for the bridge and tests |
+| `CoverageUiTestCommands.kt` | Parser and offset reader for the UI-test command file: complete lines only, each run once, token values masked in `lastCommand` and the log |
+| `CoveragePaths.kt` | Resolves `-Dcoverage.cacheRoot` (default `~/.cache/coverage-plugin`), `-Dcoverage.perf.dir` (default `<cacheRoot>/perf`) and `-Dcoverage.covdResponses` (off by default); the test seams of `CovdClient`/`CoverageCacheService` still win |
+| `CovdResponseRecorder.kt` | Saves every `ensure`/`import` answer to `-Dcoverage.covdResponses=<dir>` as `<seq:04d>-<yyyyMMdd-HHmmss-SSS>-<kind>-<state>.json`: request fields (never the GitLab token, which is also scrubbed), HTTP status, elapsed ms and the daemon's body unmodified. Off by default; write errors only go to the log |
+| `CovdProcessSampler.kt` | 1 Hz `ev=covdsample` samples (pid, RSS, CPU %, threads, VSZ) of the covd process. The daemon may belong to another IDE, so the PID comes from the handshake port via `/proc/net/tcp(6)` → socket inode → `/proc/*/fd`; Linux only, daemon thread, stopped by `CovdClient.resetForTest()` |
 
 ## Dual-coverage mode
 
@@ -142,14 +141,13 @@ When the current branch has its own pipeline **and** the coverage branch (master
 - **Primary** = current-branch pipeline (feature or coverage-branch fallback).
 - **Baseline** = coverage-branch (master) pipeline. `null` when commits are equal (single-coverage mode) or when resolution fails.
 
-`CoverageLoadService.loadFromGitLab()` calls `CoverageResolver.resolveDual()`, writes two `.cov4` files to the disk cache, and attaches two `Cov4Reader`s to `CoverageDataService`.
+`covd` resolves both pipelines and writes two `.cov4` files; `CoverageLoadService` attaches the returned paths to `CoverageDataService` as primary and baseline readers.
 
 **Gutter colours** (set by `CoverageHighlighter.categorizeLine`):
 | Colour | Meaning |
 |--------|---------|
 | 🟢 Green | Line covered; all tests also exist on master |
 | 🔵 Blue | Line covered; at least one test is new on this branch (`FEATURE_ONLY`) |
-| 🔵 Dark blue | Line covered by at least one test from a local run (`LOCAL`, takes precedence; see "Local coverage layer") |
 | 🔴 Red | Line not covered by any test |
 
 **Test filter** (bottom "Covering Line" panel, visible only in dual mode):
@@ -161,29 +159,34 @@ When the current branch has its own pipeline **and** the coverage branch (master
 
 `CoverageDiff` provides the set-diff / union helpers used by both the highlighter and the panel.
 
-## Local coverage layer
-
-Coverage from local Behat runs is kept apart from the CI readers in `LocalCoverageService`, so CI reloads (poller, HEAD change) never drop it. Per line of the current document:
-
-```
-effective = (ci − localTests) ∪ local
-```
-
-`localTests` is the full test list from the `.covt` headers: a scenario re-run locally replaces its CI data everywhere, including files the local run no longer reaches; scenarios not run locally keep their CI data. Line numbers: CI is mapped from `git show <commit>:path`, each local run from the file snapshot taken when the run was loaded (the run executed the on-disk files, which may be uncommitted). `CoverageHighlighter` merges via `LocalCoverageMerge.merge` before rendering, so dual-mode classification works unchanged — local tests missing on master show as blue.
-
-**Staleness on checkout.** Every run remembers the HEAD it was collected on. `CoverageHeadTracker` calls `LocalCoverageService.onHeadChanged()` on each HEAD move (before the gutter-visibility gate): runs of another commit become **stale** — kept in the local layer with payloads on disk, but excluded from the merge, because their file snapshots and the CI coverage they supersede describe the previous checkout. A balloon reports it, and the "Restore Stale Local Coverage" button appears in the Covering Line toolbar (`restoreStale()` re-stamps them onto the current HEAD). `hasActiveData()` / `tests()` / `getMappedCoverage()` see only non-stale runs; `hasData()` / `runCount()` still count everything, so "Clear Local Coverage" stays available.
-
-Auto-load: `LocalFileSystem.addRootToWatch(<git root>/<localCoverageDir>)` + `VFS_CHANGES` listener; the directory and its parent get their VFS children loaded so events arrive even when it is excluded from the project. Files already present at startup are not loaded (their snapshots are unknown). Collecting: with `collectLocalCoverage` on, `LocalCoverageRunExtension` rewrites every Behat launch from the IDE to write `<git root>/<localCoverageDir>/local.covt` (interpreter-side path), which the watcher then loads. Not yet merged: MCP tools, "Affected by Changes".
+The **New Coverage** tab needs a baseline: without one it shows "Dual-coverage mode is not active" and lists nothing. It compares by line, not by test name: a line is "new coverage" when primary has covering tests and baseline has none. Files changed between the two commits are compared after line mapping, unchanged files by raw line numbers.
 
 ## Flow
 
-On startup, HEAD change, or settings save (Apply/OK): `loadOfflineFirst()` walks recent commits for a cache hit and shows stale coverage immediately, then `loadFromGitLab()` refreshes in the background (resolve dual → download primary + baseline → write COV4 → swap readers). **All auto-loading is skipped when gutter visibility is off** (see below). GitLab requests are also skipped when the gutter is hidden.
+On startup, HEAD change, settings save, or the 30-second poll: `loadOfflineFirst()` shows any cached artifact immediately (stale), then `loadFromGitLab()` sends one `ensure` to covd. The daemon resolves the primary pipeline from the branch / HEAD SHA and, when a coverage branch is set, the baseline from that branch (merge-base first, then its ancestors; a baseline never replaces a missing primary), waits for coverage jobs, downloads the COVT shards, merges them, writes the `.cov4` files and updates the index; the plugin attaches readers to the returned paths. `not_ready` answers are retried after `retryAfterMs`; `error` answers go through `RetryPolicy`: retryable errors (including an unreachable daemon) three times, auth errors block until the settings change, deterministic errors block until HEAD or the settings change (see "Failure handling").
 
-All GitLab traffic goes through the app-level `GitLabCoordinator`: pipeline resolution is memoized per git-root/HEAD (TTL 60 s) and skipped entirely when the loaded coverage is already fresh within the 60 s refresh cooldown; identical downloads across project windows are coalesced via `singleFlight`; metadata calls (pipelines/jobs/merge-base) are serialized on one worker thread, TTL-cached (120 s / 600 s / 300 s) and rate-limited (12-token bucket, 1 token / 3 s) — so N open windows of the same repo cost the same as one.
+The daemon is shared by every IDE instance and keyed by `--cache-dir`; identical concurrent `ensure` calls are coalesced inside it. The plugin never writes the cache index and never downloads artifacts itself. All auto-loading is skipped when gutter visibility is off.
 
-`CoverageLoadService` auto-detects the current component via `ComponentConfig.detectComponent()` (root → `raketa`, subpath → matching component, unknown → error). During download, the plugin filters CI jobs to only the detected component, waits for running jobs (infinite — cancelled only via progress bar or branch switch), and falls back to the baseline (master) pipeline when the current branch has no jobs for the component.
+- `CovdClient` treats `connection refused` as "daemon exited after idle timeout": it starts a new process and retries the request once. The daemon is never shut down by the plugin.
+- `ensure` and `import` use an 11-minute read timeout; `ping`/artifact calls use 3 seconds.
 
-Cache is stored per component (`~/.cache/coverage-plugin/<projectId>/<hash>-<component>.cov4`), shared across IDE instances via the shared project id. Each artifact tracks which branch it was downloaded from. On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
+Cache layout is per component (`<cacheRoot>/<projectId>/<hash>-<component>.cov4`, cache root `~/.cache/coverage-plugin` or `-Dcoverage.cacheRoot`). On each editor open, `CoverageHighlighter` maps old line numbers to current positions via `LineMappingService` for both primary and baseline, then classifies each line.
+
+## Failure handling (F1, F2 contract)
+
+`RetryPolicy` classifies one daemon answer; `RetryState` holds the per-project counter and block. The contract is fixed in `docs/real-project-testing.md`.
+
+| Answer | Behaviour |
+|--------|-----------|
+| `error` with `retryable=true` (`CONNECTION`, `GITLAB_API`) or an unreachable daemon | Silent retries, 3 by default, after 5 / 15 / 45 s (`-Dcoverage.retry.delaysMs` replaces them), never sooner than `retryAfterMs`, never later than 60 s. After the last one: balloon *Retry now* / *Show log* |
+| `AUTH_INVALID`, `ACCESS_DENIED` | No retries. `blocked="AUTH"` for the current settings (a HEAD change does **not** lift it: the next commit gets the same 401); sticky balloon *Update token…*. Applying settings clears the block and loads again |
+| `NO_COMPONENT_JOBS`, `NO_DATA`, `PROJECT_SETUP`, `GIT` | No retries, no balloon. `blocked="NON_RETRYABLE:<code>"`; the poller and HEAD tracker stay quiet until HEAD or the settings change |
+| `ready` | Counter and block reset |
+
+- A token block is tied to a SHA-256 fingerprint of the settings (token included in the hash, never logged); a deterministic-error block is also tied to the HEAD. `CoverageLoadService.isBlocked()` lifts it when what it is tied to changed.
+- One balloon per kind: `CoverageNotifier` expires the previous one before showing the new one and keeps the last 20 records for the bridge.
+- A manual load (`LoadCoverageAction`, `showErrors=true`, the balloon's *Retry now*) always bypasses the block and restarts the retry budget.
+- Perf events: `covd.retry attempt delayMs code`, `covd.blocked reason code`, `notify.shown kind`.
 
 ## MCP
 
@@ -199,23 +202,172 @@ Tool: `get_first_tests_at_lines` — returns the first covering test name for ea
 
 Tool: `list_files` — lists files with coverage data under a directory.
 
-Tool: `get_local_coverage_status` — collection switch, watched directory, how many local runs/tests/files are merged over CI, and how many runs are stale after a checkout.
+MCP calls need **two** project arguments when several projects are open: `project` (our tool resolves the IDE project from it) and `projectPath` (the IDE MCP framework routes the call with it). Without `projectPath` the framework answers "Unable to determine the target project". Endpoint in the licensed IDE is `http://127.0.0.1:64343` (`/sse` + `/message`).
 
-Tool: `set_local_coverage_collection` — flips `CoverageApiSettings.collectLocalCoverage` (IDE-wide, same switch as the toolbar toggle); returns the new status.
+## Coverage daemon (covd)
 
-Tool: `restore_stale_local_coverage` — re-stamps the runs of another commit onto the current HEAD (same as the toolbar button); errors when nothing is stale; returns the new status.
+Artifact processing runs in the `covd` daemon from the coverage-assistant repository:
+it resolves the pipeline in GitLab, downloads the COVT shards, merges them and writes the
+`.cov4` cache, so none of that work touches the IDE JVM.
 
-Tool: `clear_local_coverage` — drops all local runs, stale ones included (same as the "Clear Local Coverage" action); returns the new status.
+- Binaries are built there with `make build-covd-all` (`dist/covd/covd-<os>-<arch>[.exe]`) and
+  **committed here** under `src/main/resources/bin/<platform>/covd[.exe]` (platforms `linux-x64`,
+  `linux-arm64`, `mac-x64`, `mac-arm64`, `win-x64`, ~37 MB together), so every build, CI included,
+  ships a daemon. Refresh them with `scripts/update-covd.sh [dist-dir]` (it checks the dist
+  `SHA256SUMS`, renames the files and rewrites `covd-manifest.properties` with the covd version and the
+  SHA-256 of each binary) and commit the result alone as `Update covd to <version>`: every update adds
+  ~37 MB to the history. The `verifyCovdBinaries` task (a dependency of `buildPlugin`, `prepareSandbox`
+  and `check`) fails the build when a binary is missing, too small, not an executable of its platform or
+  does not match the manifest; `BundledCovdTest` checks the same on the classpath.
+  `-PcovdDist=/path/to/dist/covd` (or `COVD_DIST`) overrides the committed binaries for a local
+  experiment with an unreleased covd (the manifest check is skipped then).
+- `CovdClient` extracts the binary to `~/.cache/coverage-plugin/bin-covd-<sha256 prefix>/` (named after the
+  content, so an updated plugin never reuses an older covd; written through a temp file and an atomic move,
+  a file of the wrong size is replaced), starts it
+  with `--cache-dir ~/.cache/coverage-plugin` (`-Dcoverage.cacheRoot` replaces both paths), and reads the single stdout handshake line
+  (`{"covdReady":{port,token,instanceId}}`). It never calls `/v1/shutdown`: the daemon is
+  shared by all IDE instances and exits on its idle timeout.
+- `loadWithCovd` posts `/v1/ensure` with `gitRoot`, `component`, `pathMode`, `jobPrefixes`
+  (from `ComponentConfig`) and the GitLab settings; the token travels in the request body and
+  is never stored. `ready` → attach `Cov4Reader` to the returned `cov4Path`; `not_ready` →
+  retry after `retryAfterMs`; `error` → report `code`/`hint`.
+- The daemon owns `<cache>/<projectId>/cache-index.json` and the `.cov4` files:
+  `CoverageCacheService` is read-only and deletions go through `DELETE /v1/artifacts`.
+- The daemon is a hard dependency: without a working binary the plugin reports "coverage
+  daemon unavailable" and loads nothing. There is no in-process fallback any more.
+- Local `.covt` import: `POST /v1/import` with `{covtPath, projectId, component, pathMode,
+  gitRoot}`; the commit key is the SHA-256 of the file content, so re-importing the same file
+  reuses one cache entry.
 
 ## Build & Run
 
 ```bash
 ./gradlew compileKotlin            # compile
-./gradlew test                     # unit tests
+./gradlew test                     # unit tests (excludes the heavy package)
+./gradlew heavyTest                # heavy integration tests inside a full IDE process
+GITLAB_TOKEN_FROM_IDE=1 ./scripts/ui-test.sh   # real-IDE UI scenario (see "UI tests" below)
 ./gradlew buildPlugin              # distributable zip
 ./gradlew runIde                   # sandbox IDE
 ./gradlew generateUpdatePluginsXml # regenerate docs/updatePlugins.xml
 ```
+
+- `heavyTest` is an `intellijPlatformTesting.testIde` task: it launches the real IDE
+  ($platformVersion) with the plugin installed and runs
+  `com.github.yakov255.perlinecoverageinfo.heavy.*` (`BasePlatformTestCase`).
+  `test` filters that package out, so the default suite stays fast.
+- **covd integration tests** (`src/test/kotlin/.../covd/`, run by plain `./gradlew test`): the real
+  `covd` binary against `FakeGitLab` (a JDK `HttpServer` serving pipelines, jobs, the artifact and
+  `merge_base`) with a temporary git repository and `--cache-dir`. `CovdTestBase` finds the binary
+  in `-Dcovd.dist` / `COVD_DIST` / the sibling `coverage-assistant/dist/covd`, then falls back to the
+  committed `src/main/resources/bin/<platform>/covd`, so these tests do not skip. `CovdFakeDaemonContractTest` needs no binary: a fake daemon behind a shell
+  wrapper checks handshake, auth header, restart and status handling. Fixtures:
+  `src/test/resources/covd/`. `heavy.HeavyCovdLoadTest` drives `CoverageLoadService` end to end
+  through the same pieces inside the IDE (the heavyTest classpath has no test resources, so its
+  COVT fixtures are embedded as base64). `CoverageApiSettings.gitlabDomain` accepts an explicit
+  `http://host:port` for such tests.
+- `heavy.HeavyCovdFailureTest` covers the failure contract inside the IDE: `AUTH_INVALID` blocks
+  without retries and a new token loads through the shared Apply path; `NO_COMPONENT_JOBS` stops the
+  poller until HEAD moves; a retryable error runs the 1+3 ladder (short delays from
+  `-Dcoverage.retry.delaysMs`), shows the balloon and succeeds after *Retry now*. Token and
+  deterministic codes use the real daemon + `FakeGitLab`; the retry ladder uses a fake daemon behind
+  a shell wrapper.
+- `testIde` has its own platform configuration: it does not inherit the project-level
+  `platformBundledPlugins`. `heavyTest` therefore declares them again, plus the plugins and
+  modules PHP/Gherkin depend on (`org.intellij.intelliLang`, `com.intellij.modules.json`,
+  `com.intellij.modules.ultimate`). These dependencies enable the optional PhpStorm launcher in the test IDE; the coverage plugin itself also works without PHP in Raketa IDE.
+- `heavyTest` sets `-Didea.home.path` to the resolved platform, otherwise the platform treats
+  itself as Community. The path is resolved lazily through a serializable `Provider` passed to the JVM argument provider (configuration cache).
+- Do not assert `ToolWindowManager.getToolWindow(...)` in these tests: a light fixture project
+  has no registered tool windows. Assert the plugin is loaded and the `ToolWindowEP` is
+  registered instead.
+- A manual `runIde` uses `.intellijPlatform/sandbox/per-line-coverage-info/<version>/`. If
+  `config/disabled_plugins.txt` lists `com.intellij.modules.ultimate`, PHP and the optional PhpStorm launcher are disabled; `syncIdeLicense` removes that line. The coverage plugin itself has no required PHP dependency.
+- `runIde` keeps the IDE window open until it is closed, so a scripted check must stop the
+  process itself. `scripts/smoke-ide.sh` does that: it runs `./gradlew runIde`, waits for
+  `Loaded custom plugins: ... per-line-coverage-info`, then kills the sandbox IDE JVM and
+  returns 0/1.
+- The sandbox IDE has no license, and without one JetBrains Ultimate (and therefore PHP) is
+  disabled. `syncIdeLicense` copies `idea.key`/`phpstorm.key`/`plugin_PCWMP.license` from the
+  newest local `~/.config/JetBrains/IntelliJIdea*` into the sandbox config before `runIde` and
+  `runIdeForUiTests`. The license is never committed; without a local key the task only logs
+  and the IDE starts unlicensed.
+- Machine-local extra JVM arguments for the sandbox IDE (a javaagent, `--add-opens`) live in
+  `~/.gradle/gradle.properties` as `ideaSandboxJvmArgs=...` (space-separated) or in the
+  `IDEA_SANDBOX_JVM_ARGS` environment variable — never in the repository. `runIde`,
+  `runIdeForUiTests` and `heavyTest` append them to the forked IDE JVM. An agent that hides
+  itself from `RuntimeMXBean.getInputArguments()` (e.g. ja-netfilter) never shows up in the
+  `JVM options:` line of `idea.log`; verify it in the IDE process command line
+  (`/proc/<pid>/cmdline`) or by its banner in the Gradle output instead. Full guide:
+  `docs/local-java-agent.md`.
+- **UI tests** (`src/uiTest`, RemoteRobot 0.11.23, JUnit 5): the scenario drives a real sandbox IDE
+  (`runIdeForUiTests`) against real GitLab: first-run token dialog → Settings → Tools → GitLab
+  Coverage → project search → Apply → coverage loaded (checked through `CoverageUiTestBridge`:
+  fresh, not stale) → "Coverage Tests" window with five tabs → Artifacts table → open the PHP
+  fixture → click the gutter → "Covering Line". `scripts/ui-test.sh` starts the IDE, waits for the
+  plugin log line **and** the robot port, runs `./gradlew uiTest`, and stops only its own IDE.
+  - Token: `GITLAB_TOKEN_FILE`, `GITLAB_TOKEN` (copied to a mode-600 temp file) or the explicit
+    opt-in `GITLAB_TOKEN_FROM_IDE=1`. The test reads it from the file, so it is not in the
+    environment. The token is typed into plain text fields: the saved hierarchy is masked, but a
+    failure screenshot (`build/uiTest-artifacts/*.png`) may show it, so do not publish artifacts.
+  - Knobs: `-PuiTestRobotPort` (`ROBOT_PORT`, default 8082), `-PuiTestPhpFile` (`UI_TEST_PHP_FILE`),
+    `UI_TEST_PROJECT` (default `$HOME/projects/raketa`). The IDE runs with `-Xmx4g` and
+    `-XX:-HeapDumpOnOutOfMemoryError` (a heap dump written into the unpacked platform makes Gradle
+    reject that immutable directory) and `-Didea.log.path` pointing at the sandbox
+    `log_runIdeForUiTests`, which is also how the script finds and stops that IDE.
+  - The scenario requires a **fresh** (non-stale) load. If HEAD of the opened project has no pipeline
+    yet, covd answers `not_ready (no_pipeline_yet)` and only the cached artifact is shown (`stale`):
+    the test then fails with an explanation. `UI_TEST_ALLOW_STALE=1` accepts the cache knowingly (the
+    GitLab download itself is then not exercised).
+  - `uiTestSandbox` wipes the sandbox config/system/log and the snapshot file before each run.
+  - The fixture must be unchanged between the coverage commit and the working tree (the bridge
+    does no line mapping); the scenario checks that with `git diff`.
+  - Failures save `build/uiTest-artifacts/` (screenshot, masked Swing hierarchy, idea.log, state),
+    including failures in the `@BeforeAll` setup. Look locators up in that hierarchy dump
+    (`accessiblename` carries labels; dialogs are `MyDialog`; the new UI tool window stripe has
+    icons only, so open windows by action id).
+  - Not covered: Affected / New Coverage tabs beyond their presence, dual-coverage filters.
+  - `uiTest` is a plain `Test` task and uses `--add-opens java.base/java.lang` so RemoteRobot's
+    Gson can report the IDE-side error instead of `InaccessibleObjectException`.
+- `covd` binaries are committed (see "Coverage daemon (covd)"); the plugin zip carries all five.
+  Release zips up to 2.7.1 were built without them (611 KB) and could load nothing.
+- Real end-to-end check against `gitlab.raketa.in` (project 335): install `buildPlugin`'s zip
+  into a licensed IDE's user plugins directory (`~/.local/share/JetBrains/PhpStorm2026.2/per-line-coverage-info`),
+  open `~/projects/raketa` and query MCP on `http://127.0.0.1:64343`. Alternatively run
+  `build/covd-resources/bin/linux-x64/covd --cache-dir /tmp/covd` and `POST /v1/ensure` with
+  `baseUrl=https://gitlab.raketa.in`, `projectId=335`, `component=raketa`, `pathMode=raketa`,
+  `jobPrefixes` from `ComponentConfig`: the branch pipeline (primary) and master (baseline)
+  resolve in about 72 s, ~21.7k files / 428k lines.
+
+## Performance diagnostics
+
+`CoveragePerfLog` writes structured `key=value` lines to
+`~/.cache/coverage-plugin/perf/run-<timestamp>-<pid>.log` (separate from `idea.log` and the
+Log tab):
+
+- `ev=span` — wall time, current-thread CPU, bytes allocated by the thread, heap before/after,
+  GC count/ms delta, plus caller-provided details, with a `ph=start`/`ph=end` pair and nesting depth.
+- `ev=counter` — aggregated count/avg/max/total for high-frequency work, flushed once per second.
+- `ev=sample` — 1 Hz samples: heap used/committed/max, non-heap, threads, process CPU %, load
+  average, GC deltas, JVM uptime.
+- `ev=covdsample` — 1 Hz while a daemon is known: `pid rssMb cpuPct threads vszMb` of the covd
+  process (another IDE's child included; resolved through `/proc` by the handshake port).
+- `covd.response` events — per `ensure`/`import` answer: `kind seq state code commit cached
+  replaced stale joinedFlight requestId httpStatus elapsedMs` plus the daemon's `totalMs
+  resolveMs downloadMs parseMs mergeMs writeMs baselineMs gitlabCalls gitlabBytes gitlabErrors`.
+- `covd.spawn` events — how the connection was obtained (`how=spawn|reuse|restart`), `pid port
+  instance startMs`.
+
+Enabled by default; `-Dcoverage.perf.log=false` disables it and Gradle sets it for unit tests.
+Find Action **Open Coverage Performance Log Folder** reveals the directory. Instrumented:
+`load.offlineFirst`, `covd.ensure`/`covd.ready`/`covd.notReady`/`covd.error`, `covd.retry` (attempt, delayMs, code), `covd.blocked` (reason), `notify.shown` (kind), `poll.tick`, `cov4.open`, `highlight.*`, `linemap.gitShow`, and `plugin.start` (JVM args, `-Xmx`).
+Artifact parsing, merging and writing are measured by covd's own trace, not here.
+
+Diagnostics properties (contract: `docs/real-project-testing.md`): `-Dcoverage.cacheRoot=<dir>`
+moves the covd cache and the extracted binary (the daemon is shared per cache root),
+`-Dcoverage.perf.dir=<dir>` moves the perf log, `-Dcoverage.covdResponses=<dir>` saves the raw
+daemon answers, `-Dcoverage.retry.delaysMs=500,1500,4500` replaces the retry ladder (test hook)
+and `-Dcoverage.uiTestCommands=<file>` feeds `reload` / `settings.token=` / `settings.apply` to the
+bridge (test hook), `-Dcoverage.tokenStore=memory` keeps the GitLab token in the process instead of `PasswordSafe` (test escape hatch). All are off by default; a normal run never sets them.
 
 ## Release
 
@@ -239,21 +391,65 @@ Rules:
 
 - **Logging**: `private val log = CoverageLog.get(Foo::class.java)` — never `Logger.getInstance` directly.
 - **Paths**: canonical key is git-root-relative (e.g. `api/hotels/src/Foo.php`). `LineMappingService.toGitRelativePath` converts project-relative → git-relative. Feature paths in test names are also git-root-relative; strip with `CoverageTestNavigator.toProjectRelativeFeaturePath`.
-- **Line numbers**: 1-based throughout.
-- **Cache key**: commit hash + component (not pipeline ID). Files: `<hash>-<component>.cov4` under `~/.cache/coverage-plugin/<projectId>/`.
-- **Shared GitLab access**: always go through `GitLabCoordinator.getInstance().api()` (cached/rate-limited worker) — never construct a raw `GitLabApiClient` for the loading flow. `CoverageResolver`, `CoverageLoadService`, `CoveragePipelinePoller` take the `GitLabApi` facade.
-- **Component**: `ComponentConfig.detectComponent()` maps project root → `raketa`, subdirectory → matching component. Only behat jobs for the detected component are downloaded.
-- **Coverage CI jobs**: coverage archives (`coverage-reports/coverage.covt.gz`) are published by the dedicated `test:behat:coverage:<component>` jobs (`coverage-test` stage). The legacy `test:behat:<component>` jobs (`test` stage) keep only trace/junit artifacts — never select them for coverage downloads. `ComponentEntry.jobName` is the component token; both job prefixes derive from it.
-- **Waiting**: `downloadArtifacts()` waits indefinitely for running behat jobs; cancelled via progress bar (`indicator.isCanceled`) or branch switch (`pendingReload`). The wait-loop calls `invalidateJobs()` to bypass the jobs TTL cache.
-- **Fallback**: when the primary pipeline has no jobs for the component, `startDownloadTask()` falls back to the baseline (master) pipeline and clears the baseline reader.
+- **Line numbers**: 1-based throughout. `git show` is read raw (`GitCommand.runRaw`); content comparison in `CoverageLineMapper` ignores line separators (CRLF/CR vs LF).
+- **Cache key**: commit hash + component (not pipeline ID). Files: `<hash>-<component>.cov4` under `<cacheRoot>/<projectId>/` (`~/.cache/coverage-plugin` unless `-Dcoverage.cacheRoot`).
+- **Daemon-only pipeline**: the plugin never talks to GitLab pipelines or artifacts; every load goes through `CovdClient.ensure()`. `ComponentConfig.detectComponent()` supplies `component` and `jobPrefixes` for that request.
+- **Coverage CI job prefixes**: coverage archives are published by `test:behat:coverage:<jobName>` jobs; the daemon gets both prefixes (`coverageJobPrefix` and the legacy `jobPrefix`) and prefers the dedicated one. `ComponentEntry.jobName` (`hotels`) only builds these prefixes.
+- **Component key**: use `ComponentEntry.coverageKey` for covd, cache metadata and filenames. It is `serviceDir` for services (`api/hotels`), except raketa keeps `raketa` after its move to `app/raketa`. `jobName` only builds CI job prefixes. The cache reader accepts legacy job-token keys (`hotels`) and opens their original files; new daemon writes use the canonical key.
+- **Raketa coverage paths**: the daemon normalizes them (`pathMode: "raketa"`); the plugin still normalizes while reading pre-upgrade caches. If `SERVICE_DIR` changes in the raketa CI, update both `coverage-assistant/internal/linecov/normalize.go` and `CoveragePathNormalizer`.
+- **Waiting and fallback** live in covd: it waits for running coverage jobs, serves the newest older ready pipeline as `stale` while the latest is unfinished, and reports `not_ready` with `reason`/`retryAfterMs` (the plugin retries with `NotReadyBackoff`, 5 s → 60 s per reason; `retryAfterMs` is a floor).
 - **Artifact metadata**: each cache entry stores `component` (String) and `branch` (String?) for display in the Artifacts table.
-- **Threading**: pipeline resolve on pooled thread (silent); download in `Task.Backgroundable` (visible progress); UI updates via `invokeLater`. Metadata API calls are serialized on the coordinator worker thread.
-- **Errors**: throw `CoverageApiException(CoverageErrorKind.*)`. Auto-triggered callers only log (silent mode).
+- **No coroutine suspension**: the plugin is compiled with Kotlin 2.3 (coroutine debug metadata version 2) but the platform stdlib (2025.2) checks for version 1, and the IDE installs coroutine debug probes. The first time a plugin coroutine is *resumed* (`withContext`, `launch`, `async`, `delay`, `Dispatchers.*`) the probes throw `Debug metadata version mismatch` and the work silently never happens (the startup load did not start at all). A `suspend fun` without a real suspension point is harmless (`ProjectActivity.execute`, the MCP tools); use `invokeLater`, `executeOnPooledThread` and callbacks. `NoCoroutineSuspensionTest` fails when the compiled plugin contains a coroutine state machine.
+- **Threading**: `ensure` runs on a pooled thread; daemon answers are applied to data services there and UI updates go through `invokeLater`. Nothing that blocks (git, the cache index, opening a COV4 reader, `CovdClient`, `PasswordSafe`) runs on the EDT, actions and panel handlers included; subscribe to the message bus with a parent disposable.
+- **Errors**: daemon `code`/`cause`/`hint` drive the user-facing message in `CoverageLoadService`; auto-triggered callers only log. Retry/block decisions live in `RetryPolicy` only — do not branch on codes elsewhere.
+- **Failure state**: `RetryState` is keyed by a settings fingerprint (and by HEAD for deterministic errors); `CoverageHeadTracker.onHeadChanged()` resets everything except a token block, `CoverageSettingsActions.afterSettingsApplied()` resets all of it. The poller and auto-loads must call `CoverageLoadService.isBlocked()`; a manual load passes `bypassBlock = true`.
+- **Pin**: the pin protects the shown artifact from every automatic path. Automatic callers use `CoverageLoadService.isPinned()` together with `isBlocked()`. Only explicit user actions (`LoadCoverageAction`, Fetch, Clear) call `clearPin()`; a local `.covt` import and "Load" of an artifact set the pin.
+- **Stale answers**: `CoverageLoadService` remembers `currentHead()` before `ensure`. Never treat a response as fresh, and never reset `RetryState` for it, when HEAD moved meanwhile.
+- **Data service**: change `CoverageDataService` state only through its snapshot update (`update { }` / `setCoverage`); do not add separate `@Volatile` fields.
+- **Token**: read and write it only through `CoverageApiSettings.bearerToken`; `TokenStore`/`TokenCache` own the credential store and keep every `PasswordSafe` call off the EDT. Never log or display a token, and never add a second plain-text copy to `State`.
 - **Enabled flag**: `CoverageApiSettings.enabled` — checked in `validateSettings()` before every load.
 - **Gutter visibility gating**: when `CoverageGutterVisibilityService.visible` is `false`, all loading activity is suppressed — `loadOfflineFirst()`, `loadFromGitLab()`, `CoverageHeadTracker`, `CoverageStartupActivity`, `CoveragePipelinePoller` all skip/stop. Showing the gutter resumes normal behavior via `loadOfflineFirst()`.
-- **Reader ownership**: `CoverageCacheService.get()` / `GitLabCoordinator.sharedReader()` return owned handles: close them with `use`. `CoverageDataService` retains its own handle; eviction/clear closes cache ownership without breaking other readers.
-- **Local archive ownership**: `LocalCoverageLayer.add()` takes ownership of the run; supersession and clear release archives. Use `withActiveRuns(head) { ... }` for coverage/snapshot reads so concurrent clear cannot interrupt an active reader.
-- **Local runs are per-commit**: `LocalCoverageRun.commit` is the HEAD at load time; anything that reads the layer for rendering must go through `activeRuns`/`activeTests` (the `head`-aware API), never the raw `runs()`/`tests()`.
 - **Dual coverage**: `CoverageDataService` holds primary + baseline `Cov4Reader`. Baseline is `null` in single-coverage mode. `CoverageDiff.featureOnly(primary, baseline)` computes the per-line blue set. `CoverageHighlighter.categorizeLine(primary, baseline, hasBaseline)` is the authoritative classifier for gutter colour.
 - **HEAD tracker**: `CoverageHeadTracker` skits the initial `null → revision` event to avoid duplicating `CoverageStartupActivity`.
-- **Behat paths**: `BehatTestRunner.runMultiplePaths()` passes feature file paths as separate positional arguments (e.g. `file:1 file:2 file:3`), not as comma-separated lines with `--paths` option. Paths are relative to the directory of the Behat config found by `BehatConfigLocator` (that config is also forced onto the run configuration via `setUseAlternativeConfigurationFile`) — Behat resolves relative specification paths against its config directory, so anything else gives "No specifications found".
+- **Behat paths**: `BehatTestRunner.runMultiplePaths()` passes feature file paths as separate positional arguments (e.g. `file:1 file:2 file:3`), not as comma-separated lines with `--paths` option.
+
+## Local coverage layer
+
+Coverage from local Behat runs is kept apart from the CI readers in `LocalCoverageService`, so CI reloads (poller, HEAD change) never drop it. Per line of the current document:
+
+```
+effective = (ci − localTests) ∪ local
+```
+
+`localTests` is the full test list from the `.covt` headers: a scenario re-run locally replaces its CI data everywhere, including files the local run no longer reaches; scenarios not run locally keep their CI data. Line numbers: CI is mapped from `git show <commit>:path`, each local run from the file snapshot taken when the run was loaded (the run executed the on-disk files, which may be uncommitted). `CoverageHighlighter` merges via `LocalCoverageMerge.merge` before rendering, so dual-mode classification works unchanged — lines covered by local runs use the dark-blue `LOCAL` category with precedence over CI classification.
+
+**Staleness on checkout.** Every run remembers the HEAD it was collected on. `CoverageHeadTracker` delegates to `CoverageHeadMonitor`, which calls `LocalCoverageService.onHeadChanged()` on each HEAD move (before the gutter-visibility gate): runs of another commit become **stale** — kept in the local layer with payloads on disk, but excluded from the merge, because their file snapshots and the CI coverage they supersede describe the previous checkout. A balloon reports it, and the "Restore Stale Local Coverage" button appears in the Covering Line toolbar (`restoreStale()` re-stamps them onto the current HEAD). `hasActiveData()` / `tests()` / `getMappedCoverage()` see only non-stale runs; `hasData()` / `runCount()` still count everything, so "Clear Local Coverage" stays available.
+
+Auto-load: `LocalFileSystem.addRootToWatch(<git root>/<localCoverageDir>)` + `VFS_CHANGES` listener; the directory and its parent get their VFS children loaded so events arrive even when it is excluded from the project. Files already present at startup are not loaded (their snapshots are unknown). Collecting: with `collectLocalCoverage` on, `LocalCoverageRunExtension` rewrites every Behat launch from the IDE to write `<git root>/<localCoverageDir>/local.covt` (interpreter-side path), which the watcher then loads. Not yet merged: MCP tools, "Affected by Changes".
+
+
+| File | Purpose |
+|------|---------|
+| `LocalCoverageLayer.kt` | Pure model of local runs: `LocalCoverageRun` (tests + coverage + file snapshots + the commit it was collected on), `LocalCoverageLayer` (newer run supersedes the same tests in older runs; `activeRuns`/`staleRuns`/`restampTo` split runs by commit), `LocalCoverageMerge` (CI ⊕ local), `LocalCoveragePaths` (`core/web/app/…` → `app/…`) |
+| `LocalCoverageArchive.kt` | Stores local coverage and UTF-8 source snapshots in a private disk archive; exposes lazy per-file maps |
+| `LocalCoverageService.kt` | Project service holding the local layer: loads `.covt` runs (manual or auto via IDE file watcher on `localCoverageDir`, loaded once size+mtime settle), maps each run from its snapshot onto the current document |
+| `LocalCoverageCommand.kt` | Pure command-line rewrite: finds the Behat script, matches its interpreter-side service dir (`/web/core`) to the git root (`core`), picks the profile with `BehatBinaryCoverage` (prefers `coverage-clover`), adds `-d pcov.*` before the script and `--profile/--binary-coverage-*` after; skips services without the extension and command lines that already set `--profile` |
+| `LocalCoverageCommandLine.kt` | Shared patching of a `GeneralCommandLine` with `LocalCoverageCommand` (git root, settings, logging) |
+| `LocalCoverageRunExtension.kt` | `phpRunConfigurationExtension` (registered in `behat-integration.xml`): when the toggle is on, patches Behat command lines via `LocalCoverageCommandLine` |
+| `RaketaLocalCoverageRunExtension.kt` | The same for Raketa: a platform `RunConfigurationExtensionBase` registered as `ru.raketa.php.behat.runConfigurationExtension` (`raketa-integration.xml`), applied to configurations of type `RaketaBehat` |
+| `RestoreStaleLocalCoverageAction.kt` | Covering Line toolbar + Find Action: "Restore Stale Local Coverage" — re-stamps runs collected on another commit onto the current HEAD; visible only while some run is stale |
+| `CollectLocalCoverageToggleAction.kt` | Toggle "Collect Local Coverage" (Find Action + Covering Line toolbar) → `CoverageApiSettings.collectLocalCoverage` |
+| `ClearLocalCoverageAction.kt` | Find Action: "Clear Local Coverage" |
+
+Local run parsing/writing stays in-process (`BinaryCoverageParser`, `Cov4Writer`) solely for the local overlay and immutable source archives. The CI pipeline uses covd exclusively.
+
+`CoverageTestIdentity.isAnonymous()` recognizes numeric coverage-session IDs such as `app/raketa/1`.
+They mean the producer supplied coverage without scenario identities, not a PHPUnit method. Preserve
+line coverage, show `TestNodeData.UnnamedCoverage` in the tests tree and exclude these IDs from
+test counts and Run / Go to Test actions. Valid Behat and PHPUnit identities keep their original
+navigation targets. `HeavyTestTreeNavigationTest` covers renderer labels and actual Behat navigation.
+
+- **Reader ownership**: `CoverageCacheService.get()` / `GitLabCoordinator.sharedReader()` return owned handles. `CoverageDataService` retains its own handles and leases reads under its snapshot lock; setters do not consume the caller's handle. Close callers with `use`.
+- **Local archive ownership**: `LocalCoverageLayer.add()` takes ownership; supersession/clear releases archives. Read via `withActiveRuns(head) { ... }`, never raw stale runs.
+- **HEAD tracking and local runs**: filter to the coverage git root first, then notify `LocalCoverageService.onHeadChanged()` before the gutter visibility gate. The poller also updates local staleness while a CI artifact is pinned or a request is blocked. Hiding the gutter suppresses CI loads, not local bookkeeping.
+- **Highlighting**: preserve `LatestTaskQueue` coalescing, `CoverageCancellation`, document and coverage generation checks, and the dark-blue `LOCAL` category. Document listeners are parented to `CoveragePluginDisposable` for dynamic unload.
