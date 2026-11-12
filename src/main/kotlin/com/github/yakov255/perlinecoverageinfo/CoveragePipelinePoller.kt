@@ -18,8 +18,11 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
 
     @Volatile
     private var started = false
+    @Volatile
+    private var disposed = false
 
     fun start() {
+        if (disposed || project.isDisposed) return
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
             log.info("Coverage: poll skipped — gutter visibility off")
             return
@@ -34,16 +37,19 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
         started = false
     }
 
-    override fun dispose() = stop()
+    override fun dispose() {
+        disposed = true
+        stop()
+    }
 
     private fun scheduleNext() {
-        if (!started || project.isDisposed) return
+        if (disposed || !started || project.isDisposed) return
         alarm.cancelAllRequests()
         alarm.addRequest({ onPoll() }, POLL_INTERVAL_MS)
     }
 
     private fun onPoll() {
-        if (project.isDisposed || !started) return
+        if (disposed || project.isDisposed || !started) return
 
         val loadService = CoverageLoadService.getInstance(project)
         if (!CoverageGutterVisibilityService.getInstance(project).visible || !CoverageApiSettings.getInstance().enabled) {
@@ -58,6 +64,7 @@ class CoveragePipelinePoller(private val project: Project) : Disposable {
             scheduleNext()
             return
         }
+        if (disposed || project.isDisposed) return
         if (loadService.isPinned()) {
             log.info("Coverage: poll skipped — a pinned artifact is shown")
             scheduleNext()

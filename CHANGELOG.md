@@ -4,6 +4,7 @@
 
 ## [Unreleased]
 
+- Cancel coverage retry timers on plugin unload and discard queued callbacks and late daemon answers from the previous plugin version, preventing cross-classloader ClassCastException after an update
 ## [2.10.1] - 2026-11-12
 
 - Stop idle coverage requests after a successful refresh; inspect only local HEAD and origin refs until checkout, push/fetch, settings change or manual refresh, retain the 60-second automatic-refresh cooldown, and keep waiting for unfinished CI coverage

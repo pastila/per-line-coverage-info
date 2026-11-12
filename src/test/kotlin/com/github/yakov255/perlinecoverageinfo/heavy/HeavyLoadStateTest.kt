@@ -18,6 +18,7 @@ import com.github.yakov255.perlinecoverageinfo.covd.CovdTestBase
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.impl.SimpleDataContext
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.util.Disposer
 import com.intellij.testFramework.PlatformTestUtil
 import com.intellij.testFramework.TestActionEvent
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
@@ -457,6 +458,90 @@ class HeavyLoadStateTest : BasePlatformTestCase() {
     }
 
     private fun remoteRef() = "refs/remotes/origin/" + CovdTestBase.git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+
+    fun testPluginUnloadCancelsRetriesWithoutClosingTheProject() {
+        val owner = Disposer.newDisposable("coverage-unload")
+        val service = CoverageLoadService(project)
+        Disposer.register(owner, service)
+        try {
+            daemon.ensureScript = { """{"state":"not_ready","reason":"jobs_running","retryAfterMs":60000}""" }
+            service.loadFromGitLab(showErrors = false)
+            waitUntil("a retry is scheduled") { service.hasScheduledRetryForTest() && !service.isLoadInProgress() }
+            val alarm = CoverageLoadService::class.java.getDeclaredField("covdRetryAlarm").apply { isAccessible = true }
+                .get(service) as com.intellij.openapi.Disposable
+            val count = daemon.ensureCount.get()
+
+            Disposer.dispose(owner)
+
+            assertFalse("updating the plugin leaves the project open", project.isDisposed)
+            assertTrue("the timer belongs to the plugin service, not the project", Disposer.isDisposed(alarm))
+            assertFalse(service.hasScheduledRetryForTest())
+            val callbacks = AtomicInteger()
+            // Simulate an old timer that already started before cancellation.
+            service.loadFromGitLab(showErrors = false, onComplete = { callbacks.incrementAndGet() })
+            service.loadOfflineFirst()
+            service.pollForUpdates()
+            PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+            assertEquals(count, daemon.ensureCount.get())
+            assertEquals(0, callbacks.get())
+        } finally {
+            if (!Disposer.isDisposed(owner)) Disposer.dispose(owner)
+        }
+    }
+
+    fun testDaemonAnswerAfterPluginUnloadCannotPublishOrRestartThePoller() {
+        val owner = Disposer.newDisposable("coverage-inflight-unload")
+        val service = CoverageLoadService(project)
+        Disposer.register(owner, service)
+        try {
+            val file = cov4("unloaded.cov4", "src/Unloaded.php")
+            val head = head()
+            daemon.ensureScript = { ready(head, file) }
+            daemon.holdEnsure(1)
+            val callbacks = AtomicInteger()
+            val data = CoverageDataService.getInstance(project)
+            val generation = data.coverageGeneration
+            service.loadFromGitLab(showErrors = false, onComplete = { callbacks.incrementAndGet() })
+            waitUntil("the request is in flight") { daemon.ensureCount.get() == 1 }
+
+            Disposer.dispose(owner)
+            daemon.release(1)
+            waitUntil("the old worker finishes") { !service.isLoadInProgress() }
+
+            assertEquals(generation, data.coverageGeneration)
+            assertFalse(data.hasData())
+            assertFalse(pollerStarted())
+            assertEquals(0, callbacks.get())
+        } finally {
+            daemon.releaseAll()
+            if (!Disposer.isDisposed(owner)) Disposer.dispose(owner)
+        }
+    }
+
+    fun testQueuedUiCompletionIsDroppedWhenThePluginUnloads() {
+        val owner = Disposer.newDisposable("coverage-ui-unload")
+        val service = CoverageLoadService(project)
+        Disposer.register(owner, service)
+        try {
+            val file = cov4("queued-ui.cov4", "src/Queued.php")
+            val head = head()
+            daemon.ensureScript = { ready(head, file) }
+            val callbacks = AtomicInteger()
+            service.loadFromGitLab(showErrors = false, onComplete = { callbacks.incrementAndGet() })
+            // Keep the EDT occupied until the worker has queued its UI completion.
+            val deadline = System.currentTimeMillis() + 20_000
+            while (service.isLoadInProgress() && System.currentTimeMillis() < deadline) Thread.sleep(10)
+            assertFalse("the worker must finish", service.isLoadInProgress())
+            assertEquals(0, callbacks.get())
+
+            Disposer.dispose(owner)
+            PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue()
+
+            assertEquals("a queued old-version UI callback must not run", 0, callbacks.get())
+        } finally {
+            if (!Disposer.isDisposed(owner)) Disposer.dispose(owner)
+        }
+    }
 
     private fun loadAndWait() {
         val done = AtomicInteger()

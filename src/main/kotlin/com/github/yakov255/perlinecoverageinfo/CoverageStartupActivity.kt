@@ -49,8 +49,9 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
      * blocking and must never run on the EDT.
      */
     private fun startLoad(project: Project) {
+        val lifetime = CoveragePluginDisposable.getInstance(project)
         ApplicationManager.getApplication().executeOnPooledThread {
-            if (project.isDisposed) return@executeOnPooledThread
+            if (lifetime.isDisposed || project.isDisposed) return@executeOnPooledThread
             try {
                 LocalCoverageService.getInstance(project).startWatching()
                 val loadService = CoverageLoadService.getInstance(project)
@@ -63,7 +64,7 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
                     loadService.loadOfflineFirst()
                 }
             } catch (ex: Exception) {
-                log.warn("Coverage: unexpected error in the first load", ex)
+                if (!lifetime.isDisposed) log.warn("Coverage: unexpected error in the first load", ex)
             }
         }
     }
@@ -76,9 +77,13 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
      * same moment only logs and continues. The dialog runs on the EDT without blocking the caller.
      */
     internal fun promptForTokenIfNeeded(project: Project, onDone: () -> Unit = {}) {
+        val lifetime = CoveragePluginDisposable.getInstance(project)
+        fun done() {
+            if (!lifetime.isDisposed && !project.isDisposed) onDone()
+        }
         val settings = CoverageApiSettings.getInstance()
         if (settings.bearerToken.isNotBlank() || settings.tokenPrompted) {
-            onDone()
+            done()
             return
         }
 
@@ -86,24 +91,24 @@ class CoverageStartupActivity : ProjectActivity, DumbAware {
         // A modal dialog cannot be shown in the IDE's unit-test mode; tests that exercise the
         // prompt install tokenPromptForTest, every other test must not be disturbed by it.
         if (app.isUnitTestMode && tokenPromptForTest == null) {
-            onDone()
+            done()
             return
         }
 
         if (!TokenPromptGuard.getInstance().tryClaim()) {
             log.info("Coverage: first-run token dialog already claimed by another project — not asking again")
-            onDone()
+            done()
             return
         }
 
         val show = {
             try {
-                if (!project.isDisposed) applyPromptResult(settings, showTokenPrompt(project))
+                if (!lifetime.isDisposed && !project.isDisposed) applyPromptResult(settings, showTokenPrompt(project))
             } catch (ex: Exception) {
                 // This runs on the EDT: a failing dialog must not surface as an IDE error.
                 log.warn("Coverage: the first-run token dialog failed", ex)
             } finally {
-                onDone()
+                done()
             }
         }
         if (app.isDispatchThread) show() else app.invokeLater(show, ModalityState.nonModal())

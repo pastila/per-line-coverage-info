@@ -27,6 +27,8 @@ class CoverageHeadMonitor(private val project: Project) : Disposable {
     private var revisions = HeadRevisionTracker()
     private var trackedRoot: File? = null
     private val observationLock = Any()
+    @Volatile
+    private var disposed = false
 
     /** The loaded context can change repositories (for example after importing an artifact). */
     private fun observe(root: File, revision: String?): Pair<String?, HeadChange> = synchronized(observationLock) {
@@ -37,7 +39,10 @@ class CoverageHeadMonitor(private val project: Project) : Disposable {
         revisions.lastKnown to revisions.observe(revision)
     }
 
-    override fun dispose() { alarm.cancelAllRequests() }
+    override fun dispose() {
+        disposed = true
+        alarm.cancelAllRequests()
+    }
 
     /**
      * Test seam: replaces the debounced reload and is called right away instead.
@@ -48,6 +53,7 @@ class CoverageHeadMonitor(private val project: Project) : Disposable {
 
     /** Called by [CoverageHeadTracker] for every repository change Git4Idea reports. */
     fun onRepositoryChanged(repository: GitRepository) {
+        if (disposed || project.isDisposed) return
         val coverageRoot = coverageGitRoot()
         val repositoryRoot = File(repository.root.path)
         if (!CoverageRepositoryFilter.accepts(repositoryRoot, coverageRoot)) {
@@ -86,11 +92,12 @@ class CoverageHeadMonitor(private val project: Project) : Disposable {
      * @return true when the HEAD moved, which means the caller must not start its own load.
      */
     fun checkHeadFromPoller(): Boolean {
-        if (project.isDisposed) return false
+        if (disposed || project.isDisposed) return false
         if (!CoverageGutterVisibilityService.getInstance(project).visible) return false
 
         val root = coverageGitRoot() ?: return false
         val head = GitCommand.run(root, "rev-parse", "HEAD") ?: return false
+        if (disposed || project.isDisposed) return false
 
         val (previousRevision, change) = observe(root, head)
         if (change != HeadChange.CHANGED) return false
@@ -101,6 +108,7 @@ class CoverageHeadMonitor(private val project: Project) : Disposable {
     }
 
     private fun onHeadMoved(head: String?) {
+        if (disposed || project.isDisposed) return
         head?.let { LocalCoverageService.getInstance(project).onHeadChanged(it) }
         // A block or a retry budget belongs to the old commit.
         CoverageLoadService.getInstance(project).onHeadChanged(head)
@@ -110,6 +118,7 @@ class CoverageHeadMonitor(private val project: Project) : Disposable {
     }
 
     private fun scheduleReload() {
+        if (disposed || project.isDisposed) return
         val testReload = reloadForTest
         if (testReload != null) {
             testReload()
@@ -118,7 +127,7 @@ class CoverageHeadMonitor(private val project: Project) : Disposable {
 
         alarm.cancelAllRequests()
         alarm.addRequest({
-            if (project.isDisposed) return@addRequest
+            if (disposed || project.isDisposed) return@addRequest
             val dataService = CoverageDataService.getInstance(project)
             val revision = revisions.lastKnown ?: return@addRequest
 

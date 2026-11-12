@@ -17,7 +17,11 @@ import com.intellij.openapi.project.Project
 @Service(Service.Level.PROJECT)
 class CoveragePluginDisposable : Disposable {
 
-    override fun dispose() {}
+    @Volatile
+    var isDisposed: Boolean = false
+        private set
+
+    override fun dispose() { isDisposed = true }
 
     companion object {
         fun getInstance(project: Project): CoveragePluginDisposable = project.service()

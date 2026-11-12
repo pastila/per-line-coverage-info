@@ -2,6 +2,7 @@ package com.github.yakov255.perlinecoverageinfo
 
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.service
@@ -25,9 +26,12 @@ import java.util.zip.GZIPInputStream
  * daemon answers.
  */
 @Service(Service.Level.PROJECT)
-class CoverageLoadService(private val project: Project) {
+class CoverageLoadService(private val project: Project) : Disposable {
 
     private val log = CoverageLog.get(CoverageLoadService::class.java)
+    private val disposed = AtomicBoolean(false)
+
+    private fun isActive(): Boolean = !disposed.get() && !project.isDisposed
 
     /** True while a daemon load runs; taken with compareAndSet so two callers never both start one. */
     private val loading = AtomicBoolean(false)
@@ -41,7 +45,7 @@ class CoverageLoadService(private val project: Project) {
         private set
 
     /** Retry timer for `not_ready` answers and for retryable daemon errors. */
-    private val covdRetryAlarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, project)
+    private val covdRetryAlarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, this)
 
     private val retryPolicy = RetryPolicy()
     private val retryState = RetryState()
@@ -68,6 +72,36 @@ class CoverageLoadService(private val project: Project) {
     private var lastApplied: AppliedCoverage? = null
     private var lastAppliedGeneration = -1L
 
+    override fun dispose() {
+        disposed.set(true)
+        covdRetryAlarm.cancelAllRequests()
+        pendingReload.set(false)
+        refreshState.clear()
+        lastApplied = null
+    }
+
+    /** Queued callbacks must not resolve services from the next plugin classloader. */
+    private fun invokeIfActive(action: () -> Unit) {
+        if (!isActive()) return
+        ApplicationManager.getApplication().invokeLater {
+            if (isActive()) action()
+        }
+    }
+
+    private fun executeIfActive(action: () -> Unit) {
+        if (!isActive()) {
+            loading.set(false)
+            return
+        }
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                if (isActive()) action()
+            } finally {
+                if (!isActive()) loading.set(false)
+            }
+        }
+    }
+
     /** A balloon is shown once per retry cycle; the next poll stays silent. */
     @Volatile
     private var exhaustedNotified = false
@@ -85,10 +119,11 @@ class CoverageLoadService(private val project: Project) {
      * alarm, pending reload) must not reach the daemon or replace the data then; a manual
      * "Load Coverage from GitLab" / Fetch lifts the pin via [clearPin].
      */
-    fun isPinned(): Boolean = CoverageUserSelectionService.getInstance(project).pinnedCommitHash != null
+    fun isPinned(): Boolean = isActive() && CoverageUserSelectionService.getInstance(project).pinnedCommitHash != null
 
     /** Removes the pin and cancels a scheduled automatic retry that was waiting for it. */
     fun clearPin() {
+        if (!isActive()) return
         val selection = CoverageUserSelectionService.getInstance(project)
         if (selection.pinnedCommitHash != null) {
             log.info("Coverage: pin ${selection.pinnedCommitHash?.take(8)} cleared")
@@ -98,6 +133,7 @@ class CoverageLoadService(private val project: Project) {
 
     /** "Clear Coverage Data": drop the pin, any scheduled retry and a queued reload. */
     fun onCleared() {
+        if (!isActive()) return
         clearPin()
         covdRetryAlarm.cancelAllRequests()
         pendingReload.set(false)
@@ -106,6 +142,7 @@ class CoverageLoadService(private val project: Project) {
     }
 
     private fun setPin(commit: String) {
+        if (!isActive()) return
         CoverageUserSelectionService.getInstance(project).pinnedCommitHash = commit
         covdRetryAlarm.cancelAllRequests()
     }
@@ -128,6 +165,7 @@ class CoverageLoadService(private val project: Project) {
      * deterministic error for this HEAD and these settings is still active.
      */
     fun isBlocked(): Boolean {
+        if (!isActive()) return false
         if (retryState.blocked == null) return false
         if (retryState.isBlockedFor(currentHead(), settingsFingerprint())) return true
         log.info("Coverage: block ${retryState.blocked} cleared — HEAD or settings changed")
@@ -137,6 +175,7 @@ class CoverageLoadService(private val project: Project) {
 
     /** HEAD moved: the block and the retry budget belong to the old commit. */
     fun onHeadChanged(head: String? = null) {
+        if (!isActive()) return
         if (retryState.blocked == RetryPolicy.AUTH_BLOCK) {
             // The token problem outlives the commit: only new settings lift it.
             log.info("Coverage: HEAD changed${head?.let { " to ${it.take(8)}" } ?: ""}, the token block stays")
@@ -152,6 +191,7 @@ class CoverageLoadService(private val project: Project) {
 
     /** Settings were applied: clear the block and the counter, then the caller loads again. */
     fun onSettingsApplied() {
+        if (!isActive()) return
         refreshState.clear()
         resetFailureState()
         covdRetryAlarm.cancelAllRequests()
@@ -177,6 +217,7 @@ class CoverageLoadService(private val project: Project) {
 
     /** Called off the EDT. Idle ticks inspect local refs only, never GitLab or covd. */
     internal fun pollForUpdates() {
+        if (!isActive()) return
         if (!covdRetryAlarm.isEmpty || (exhaustedNotified && retryAttempt >= retryMax)) return
         val root = findGitRoot() ?: return
         val context = refreshContext(root) ?: return
@@ -188,6 +229,7 @@ class CoverageLoadService(private val project: Project) {
 
     private fun refreshContext(root: File): CoverageRefreshContext? {
         val revision = GitCommand.run(root, "rev-parse", "HEAD", "--abbrev-ref", "HEAD")?.lines() ?: return null
+        if (!isActive()) return null
         val head = revision.firstOrNull() ?: return null
         val branch = revision.getOrNull(1)?.takeUnless { it == "HEAD" }
         val coverageBranch = CoverageApiSettings.getInstance().coverageBranch.trim()
@@ -206,11 +248,13 @@ class CoverageLoadService(private val project: Project) {
         }
         val remote = branch?.let { refs["refs/remotes/origin/$it"] }
         val baseline = refs["refs/remotes/origin/$coverageBranch"] ?: refs["refs/heads/$coverageBranch"]
+        if (!isActive()) return null
         return CoverageRefreshContext(root.absolutePath, head, branch, remote, baseline, settingsFingerprint())
     }
 
     /** Validates that the plugin is enabled and GitLab settings are configured. */
     fun validateSettings(): String? {
+        if (!isActive()) return "Coverage plugin is unloaded."
         val settings = CoverageApiSettings.getInstance()
         if (!settings.enabled) return "Coverage plugin is disabled. Enable it in Settings > Tools > GitLab Coverage."
         return when {
@@ -229,6 +273,7 @@ class CoverageLoadService(private val project: Project) {
      *   restart the retry budget.
      */
     fun loadOfflineFirst(manual: Boolean = false) {
+        if (!isActive()) return
         CoveragePerfLog.span("load.offlineFirst") { loadOfflineFirstInner(manual) }
     }
 
@@ -262,7 +307,7 @@ class CoverageLoadService(private val project: Project) {
                     } else {
                         dataService.setCov4Reader(reader)
                     }
-                    ApplicationManager.getApplication().invokeLater {
+                    invokeIfActive {
                         CoverageHighlighter.applyToOpenEditors(project)
                     }
                 }
@@ -314,10 +359,11 @@ class CoverageLoadService(private val project: Project) {
 
     /** Shows a cached reader immediately, marked stale until the daemon confirms it. */
     private fun showCached(commit: String, gitRoot: File, reader: Cov4Reader) {
+        if (!isActive()) return
         val dataService = CoverageDataService.getInstance(project)
         dataService.setCoverage(commit, gitRoot, stale = true, reader = reader)
         computeAndStoreWarningContext(gitRoot)
-        ApplicationManager.getApplication().invokeLater {
+        invokeIfActive {
             CoverageHighlighter.applyToOpenEditors(project)
         }
     }
@@ -337,19 +383,20 @@ class CoverageLoadService(private val project: Project) {
         bypassBlock: Boolean = false,
     ) {
         val validationError = validateSettings()
+        if (!isActive()) return
         if (validationError != null) {
             if (showErrors) {
                 Messages.showErrorDialog(project, validationError, "Configuration Error")
             } else {
                 log.info("Coverage auto-load skipped: $validationError")
             }
-            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            onComplete?.let { cb -> invokeIfActive(cb) }
             return
         }
 
         if (!CoverageGutterVisibilityService.getInstance(project).visible) {
             log.info("Coverage: load skipped — gutter visibility is off")
-            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            onComplete?.let { cb -> invokeIfActive(cb) }
             return
         }
 
@@ -361,29 +408,30 @@ class CoverageLoadService(private val project: Project) {
             log.info("Coverage: manual load bypasses the failure block")
         } else if (isPinned()) {
             log.info("Coverage: automatic load skipped — a pinned artifact is shown")
-            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            onComplete?.let { cb -> invokeIfActive(cb) }
             return
         } else if (isBlocked()) {
             log.info("Coverage: load skipped — blocked by ${retryState.blocked}")
-            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            onComplete?.let { cb -> invokeIfActive(cb) }
             return
         }
 
         if (!loading.compareAndSet(false, true)) {
             pendingReload.set(true)
             log.info("Coverage: load already in progress, will reload after completion")
-            onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+            onComplete?.let { cb -> invokeIfActive(cb) }
             return
         }
         lastError = null
 
-        ApplicationManager.getApplication().executeOnPooledThread {
+        executeIfActive {
             try {
                 loadViaCovd(showErrors, onComplete, onError, bypassBlock || showErrors)
             } catch (ex: Throwable) {
+                if (!isActive()) return@executeIfActive
                 log.warn("Coverage: unexpected error while loading coverage: ${ex.message}", ex)
                 if (showErrors) {
-                    ApplicationManager.getApplication().invokeLater {
+                    invokeIfActive {
                         Messages.showErrorDialog(project, "Failed to load coverage:\n${ex.message}", "Coverage Error")
                     }
                 }
@@ -405,11 +453,11 @@ class CoverageLoadService(private val project: Project) {
             val message = "Coverage is not available for this project: open the repository root or a recognized component directory."
             log.warn(message)
             if (showErrors) {
-                ApplicationManager.getApplication().invokeLater {
+                invokeIfActive {
                     Messages.showErrorDialog(project, message, "Coverage Error")
                 }
             }
-            onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
+            onError?.let { callback -> invokeIfActive { callback(message) } }
             finishLoad(onComplete)
             return
         }
@@ -418,11 +466,11 @@ class CoverageLoadService(private val project: Project) {
         if (entry == null) {
             val message = "Unknown coverage component '$componentName'."
             if (showErrors) {
-                ApplicationManager.getApplication().invokeLater {
+                invokeIfActive {
                     Messages.showErrorDialog(project, message, "Coverage Error")
                 }
             }
-            onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
+            onError?.let { callback -> invokeIfActive { callback(message) } }
             finishLoad(onComplete)
             return
         }
@@ -442,6 +490,7 @@ class CoverageLoadService(private val project: Project) {
 
         // HEAD at send time: an answer for another commit must not pass as fresh.
         val context = refreshContext(gitRoot)
+        if (!isActive()) return
         val requestHead = context?.head ?: currentHead()
         val pinnedAtStart = isPinned()
         val data = CoverageDataService.getInstance(project)
@@ -460,6 +509,9 @@ class CoverageLoadService(private val project: Project) {
                 null
             }
         }
+
+        // The daemon is shared and may finish long after this plugin version was unloaded.
+        if (!isActive()) return
 
         if (response == null) {
             val message = "Coverage daemon (covd) is unavailable. The plugin needs it to load coverage."
@@ -549,6 +601,7 @@ class CoverageLoadService(private val project: Project) {
         title: String,
         requestHead: String?,
     ) {
+        if (!isActive()) return
         if (headMoved(requestHead)) {
             // The error belongs to a commit nobody looks at any more: no block, no retry
             // budget for the new HEAD, just load again for it.
@@ -559,11 +612,11 @@ class CoverageLoadService(private val project: Project) {
         }
         lastError = message
         if (showErrors) {
-            ApplicationManager.getApplication().invokeLater {
+            invokeIfActive {
                 Messages.showErrorDialog(project, message, title)
             }
         }
-        onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
+        onError?.let { callback -> invokeIfActive { callback(message) } }
 
         val decision = retryPolicy.decide("error", code, retryable, retryAfterMs, retryState.attempt)
         when (decision.verdict) {
@@ -626,6 +679,7 @@ class CoverageLoadService(private val project: Project) {
         pinnedAtStart: Boolean,
         context: CoverageRefreshContext?,
     ) {
+        if (!isActive()) return
         val commit = response.commit
         val cov4Path = response.cov4Path
         if (commit == null || cov4Path == null) {
@@ -633,11 +687,11 @@ class CoverageLoadService(private val project: Project) {
             log.warn(message)
             lastError = message
             if (showErrors) {
-                ApplicationManager.getApplication().invokeLater {
+                invokeIfActive {
                     Messages.showErrorDialog(project, message, "Coverage Error")
                 }
             }
-            onError?.let { callback -> ApplicationManager.getApplication().invokeLater { callback(message) } }
+            onError?.let { callback -> invokeIfActive { callback(message) } }
             finishLoad(onComplete)
             return
         }
@@ -684,7 +738,10 @@ class CoverageLoadService(private val project: Project) {
         } else {
             null
         }
-        reader.use { dataService.setCoverage(commit, gitRoot, stale, it) }
+        reader.use {
+            if (!isActive()) return
+            dataService.setCoverage(commit, gitRoot, stale, it)
+        }
 
         val baselineCommit = response.baselineCommit
         val baselinePath = response.baselineCov4Path
@@ -693,6 +750,7 @@ class CoverageLoadService(private val project: Project) {
                 response.replaced || lastApplied?.baseline != identity.baseline
             ) {
                 Cov4Reader(File(baselinePath)).use {
+                    if (!isActive()) return
                     dataService.setBaselineCov4Reader(it, baselineCommit)
                 }
             }
@@ -700,6 +758,7 @@ class CoverageLoadService(private val project: Project) {
             dataService.clearBaseline()
         }
         computeAndStoreWarningContext(gitRoot)
+        if (!isActive()) return
 
         if (headMoved) {
             log.info("Coverage: answer for ${commit.take(8)} arrived after HEAD moved — shown as stale, reloading")
@@ -730,7 +789,7 @@ class CoverageLoadService(private val project: Project) {
                 "cached=${response.cached}, stale=${response.stale}, files=${response.stats?.files}",
         )
 
-        ApplicationManager.getApplication().invokeLater {
+        invokeIfActive {
             CoverageHighlighter.applyToOpenEditors(project)
             if (!headMoved && wasStale && previousCommit != commit) {
                 NotificationGroupManager.getInstance()
@@ -767,21 +826,23 @@ class CoverageLoadService(private val project: Project) {
 
     /** Loads coverage from a locally cached `.cov4` chosen by the user. */
     fun loadFromCache(commitHash: String, onComplete: (() -> Unit)? = null) {
+        if (!isActive()) return
         val cache = CoverageCacheService.getInstance(project)
         val dataService = CoverageDataService.getInstance(project)
         setPin(commitHash)
 
-        ApplicationManager.getApplication().executeOnPooledThread {
-            if (project.isDisposed) return@executeOnPooledThread
+        executeIfActive {
+            if (!isActive()) return@executeIfActive
             val gitRoot = findGitRoot()
             val component = if (gitRoot != null) detectComponent(gitRoot) ?: "raketa" else "raketa"
             val reader = cache.get(commitHash, component, gitRoot)
             if (reader == null) {
                 log.warn("Coverage: loadFromCache — no .cov4 found for commit $commitHash (component=$component)")
-                onComplete?.let { ApplicationManager.getApplication().invokeLater(it) }
-                return@executeOnPooledThread
+                onComplete?.let { invokeIfActive(it) }
+                return@executeIfActive
             }
             reader.use {
+                if (!isActive()) return@executeIfActive
                 if (gitRoot != null) {
                     dataService.setCoverage(commitHash, gitRoot, stale = false, reader = reader)
                     computeAndStoreWarningContext(gitRoot)
@@ -793,7 +854,7 @@ class CoverageLoadService(private val project: Project) {
             lastError = null
             resetFailureState()
 
-            ApplicationManager.getApplication().invokeLater {
+            invokeIfActive {
                 CoverageHighlighter.applyToOpenEditors(project)
                 onComplete?.invoke()
             }
@@ -805,8 +866,10 @@ class CoverageLoadService(private val project: Project) {
      * cache like a downloaded artifact, then activates the resulting COV4.
      */
     fun loadFromLocalFile(file: File, onComplete: (() -> Unit)? = null) {
+        if (!isActive()) return
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, "Loading Local Coverage File", false) {
             override fun run(indicator: ProgressIndicator) {
+                if (!isActive()) return
                 try {
                     indicator.text = "Importing ${file.name}…"
                     val gitRoot = findGitRootFromFile(file.parentFile) ?: findGitRoot()
@@ -823,6 +886,7 @@ class CoverageLoadService(private val project: Project) {
                         )
                     )
                     val commit = response.commit
+                    if (!isActive()) return
                     val cov4Path = response.cov4Path
                     if (response.state != "ready" || commit == null || cov4Path == null) {
                         throw IllegalStateException(
@@ -837,6 +901,7 @@ class CoverageLoadService(private val project: Project) {
                     val dataService = CoverageDataService.getInstance(project)
                     val reader = cache.get(commit, component, gitRoot) ?: Cov4Reader(File(cov4Path))
                     reader.use {
+                        if (!isActive()) return
                         if (gitRoot != null) {
                             dataService.setCoverage(commit, gitRoot, stale = false, reader = reader)
                             computeAndStoreWarningContext(gitRoot)
@@ -851,13 +916,14 @@ class CoverageLoadService(private val project: Project) {
                             "(${response.stats?.files} files, component=$component)",
                     )
 
-                    ApplicationManager.getApplication().invokeLater {
+                    invokeIfActive {
                         CoverageHighlighter.applyToOpenEditors(project)
                         onComplete?.invoke()
                     }
                 } catch (ex: Exception) {
+                    if (!isActive()) return
                     log.warn("Coverage: failed to load local file ${file.name}", ex)
-                    ApplicationManager.getApplication().invokeLater {
+                    invokeIfActive {
                         Messages.showErrorDialog(project, "Failed to load coverage file:\n${ex.message}", "Coverage Error")
                         onComplete?.invoke()
                     }
@@ -868,13 +934,17 @@ class CoverageLoadService(private val project: Project) {
 
     private fun finishLoad(onComplete: (() -> Unit)?) {
         loading.set(false)
+        if (!isActive()) {
+            pendingReload.set(false)
+            return
+        }
         if (pendingReload.compareAndSet(true, false)) {
             log.info("Coverage: pending reload detected, starting new load")
-            ApplicationManager.getApplication().invokeLater {
+            invokeIfActive {
                 loadFromGitLab(showErrors = false)
             }
         }
-        onComplete?.let { cb -> ApplicationManager.getApplication().invokeLater(cb) }
+        onComplete?.let { cb -> invokeIfActive(cb) }
         if (CoverageGutterVisibilityService.getInstance(project).visible) {
             CoveragePipelinePoller.getInstance(project).start()
         }
@@ -884,6 +954,7 @@ class CoverageLoadService(private val project: Project) {
 
     /** HEAD of the repository the current failure state belongs to. */
     private fun currentHead(): String? {
+        if (!isActive()) return null
         val root = CoverageDataService.getInstance(project).gitRoot ?: findGitRoot() ?: return null
         return GitCommand.run(root, "rev-parse", "HEAD")
     }
@@ -893,6 +964,7 @@ class CoverageLoadService(private val project: Project) {
      * The token contributes to the hash but is never logged or stored anywhere else.
      */
     private fun settingsFingerprint(): String {
+        if (!isActive()) return ""
         val settings = CoverageApiSettings.getInstance()
         val digest = MessageDigest.getInstance("SHA-256")
         digest.update(
@@ -908,9 +980,10 @@ class CoverageLoadService(private val project: Project) {
     }
 
     private fun computeAndStoreWarningContext(gitRoot: File) {
+        if (!isActive()) return
         val dataService = CoverageDataService.getInstance(project)
-        val headHash = GitCommand.run(gitRoot, "rev-parse", "HEAD")
         val coverageBranch = CoverageApiSettings.getInstance().coverageBranch.trim()
+        val headHash = GitCommand.run(gitRoot, "rev-parse", "HEAD")
         val mergeBase = if (coverageBranch.isNotEmpty()) {
             GitCommand.run(gitRoot, "merge-base", "--end-of-options", "HEAD", coverageBranch)
                 ?: GitCommand.run(gitRoot, "merge-base", "HEAD", "origin/$coverageBranch")
@@ -928,7 +1001,7 @@ class CoverageLoadService(private val project: Project) {
         } else {
             null
         }
-        dataService.setWarningContext(headHash, mergeBase, primaryBehindBy, baselineBehindBy)
+        if (isActive()) dataService.setWarningContext(headHash, mergeBase, primaryBehindBy, baselineBehindBy)
     }
 
     private fun countBehind(gitRoot: File, actual: String, expected: String): Int? =
