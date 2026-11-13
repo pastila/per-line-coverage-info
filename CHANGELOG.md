@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Add a coverage icon to Show Affected Tests in the Git Log context menu
+
 ## [2.11.0] - 2026-11-12
 
 - Resolve historical Behat test links against current feature sources, preserving individual Examples rows and deduplicating overlapping outline/row selections. Show ready and unresolved counts with reasons, revalidate before Run/Debug and navigation, and archive feature sources for local coverage runs
