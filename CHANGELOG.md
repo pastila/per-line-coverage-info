@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.11.1] - 2026-11-13
+
 - Add a coverage icon to Show Affected Tests in the Git Log context menu
 
 ## [2.11.0] - 2026-11-12
