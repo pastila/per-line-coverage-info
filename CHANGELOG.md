@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Resolve Behat configs in sibling `features/` directories and cross-directory suite paths (such as `directory:` / `paths:` / `->withPaths(...)`) when launching Behat tests, and pin single-scenario/file RaketaBehat runs to the owning config.
+
 ## [2.11.2] - 2026-11-26
 
 - Fix an IDE freeze when checking or unchecking a folder with many tests in Affected by Changes.

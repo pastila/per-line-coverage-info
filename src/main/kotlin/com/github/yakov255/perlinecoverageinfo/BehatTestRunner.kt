@@ -51,9 +51,8 @@ object BehatTestRunner {
     ): List<RunnerAndConfigurationSettings> {
         if (pathsByFile.isEmpty()) return emptyList()
         val launcher = BehatLauncher.getInstance() ?: return emptyList()
-        val byBehatProject = pathsByFile.entries.groupBy {
-            BehatConfigLocator.locate(it.key, project.basePath)
-        }
+        val located = BehatConfigLocator.locateAll(pathsByFile.keys, project.basePath)
+        val byBehatProject = pathsByFile.entries.groupBy { located[it.key] }
         if (byBehatProject.size > 1) {
             log.info("BehatTestRunner: paths span ${byBehatProject.size} Behat projects — launching them one after another")
         }

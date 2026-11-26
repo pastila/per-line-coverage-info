@@ -22,10 +22,33 @@ class RaketaBehatLauncher : BehatLauncher {
     override fun createScenarioConfig(
         project: Project, featureFilePath: String, line: Int, scenarioName: String
     ): RunnerAndConfigurationSettings? =
-        createConfig(project, "Behat: $scenarioName", mapOf("testPath" to featureFilePath, "testLine" to line.toString()))
+        createSinglePathConfig(
+            project,
+            "Behat: $scenarioName",
+            featureFilePath,
+            linkedMapOf("testPath" to featureFilePath, "testLine" to line.toString()),
+        )
 
     override fun createFeatureFileConfig(project: Project, featureFilePath: String): RunnerAndConfigurationSettings? =
-        createConfig(project, "Behat: ${featureFilePath.substringAfterLast("/")}", mapOf("testPath" to featureFilePath))
+        createSinglePathConfig(
+            project,
+            "Behat: ${featureFilePath.substringAfterLast("/")}",
+            featureFilePath,
+            linkedMapOf("testPath" to featureFilePath),
+        )
+
+    private fun createSinglePathConfig(
+        project: Project,
+        name: String,
+        featureFilePath: String,
+        options: MutableMap<String, String>,
+    ): RunnerAndConfigurationSettings? {
+        BehatConfigLocator.locate(featureFilePath, project.basePath)?.let {
+            options["workingDirectory"] = it.workingDir
+            options["configFile"] = it.configFile
+        }
+        return createConfig(project, name, options)
+    }
 
     override fun createPathsConfig(
         project: Project,
