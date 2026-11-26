@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+- Fix an IDE freeze when checking or unchecking a folder with many tests in Affected by Changes.
+
 ## [2.11.1] - 2026-11-13
 
 - Add a coverage icon to Show Affected Tests in the Git Log context menu

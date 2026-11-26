@@ -52,6 +52,8 @@ internal class TestTreeView(private val project: Project) : Disposable {
     @Volatile private var disposed = false
     private var resolutionTicket = 0L
     private var resolutionPending = false
+    private var selectionRefreshPending = false
+    private var hasCheckedBehatTest = false
     private var references: List<BehatTestReferences.Resolved> = emptyList()
     private var problems: List<BehatTestReferences.Problem> = emptyList()
     private var labels: Map<String, String> = emptyMap()
@@ -226,7 +228,7 @@ internal class TestTreeView(private val project: Project) : Disposable {
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = !runAllInProgress &&
                     BehatTestRunner.isAvailable() &&
-                    checkedTestNames().any { isBehatTest(it) }
+                    hasCheckedBehatTest
             }
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
         }
@@ -240,7 +242,7 @@ internal class TestTreeView(private val project: Project) : Disposable {
             override fun update(e: AnActionEvent) {
                 e.presentation.isEnabled = !runAllInProgress &&
                     BehatTestRunner.isAvailable() &&
-                    checkedTestNames().any { isBehatTest(it) }
+                    hasCheckedBehatTest
             }
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
         }
@@ -271,8 +273,15 @@ internal class TestTreeView(private val project: Project) : Disposable {
 
         tree.addCheckboxTreeListener(object : CheckboxTreeListener {
             override fun nodeStateChanged(node: CheckedTreeNode) {
-                refreshCheckedCount()
-                toolbar.updateActionsAsync()
+                // A folder toggle sends an event for each changed descendant.
+                if (selectionRefreshPending) return
+                selectionRefreshPending = true
+                ApplicationManager.getApplication().invokeLater {
+                    selectionRefreshPending = false
+                    if (!alive()) return@invokeLater
+                    refreshCheckedCount()
+                    toolbar.updateActionsAsync()
+                }
             }
         })
     }
@@ -382,22 +391,28 @@ internal class TestTreeView(private val project: Project) : Disposable {
     }
 
     fun selectAllTests() {
-        setAllChecked(rootNode, true)
-        tree.repaint()
+        setAllTestsChecked(true)
     }
 
     fun deselectAllTests() {
-        setAllChecked(rootNode, false)
+        setAllTestsChecked(false)
+    }
+
+    private fun setAllTestsChecked(checked: Boolean) {
+        setAllChecked(rootNode, checked)
+        refreshCheckedCount()
+        toolbar.updateActionsAsync()
         tree.repaint()
     }
 
     fun hasAnyBehatTest(): Boolean = !resolutionPending && allTests.any { isBehatTest(it) }
 
     private fun refreshCheckedCount() {
-        val count = checkedTestNames().size
+        val checked = checkedTestNames()
+        hasCheckedBehatTest = checked.any(::isBehatTest)
         val ready = allTests.count { !CoverageTestIdentity.isAnonymous(it) }
         statusLabel.text = if (resolutionPending) "Resolving test references…"
-            else "Ready: $ready · selected: $count · unresolved: ${problems.size}"
+            else "Ready: $ready · selected: ${checked.size} · unresolved: ${problems.size}"
     }
 
     /** Resolves all test-leaf names under the user's tree selection. */
