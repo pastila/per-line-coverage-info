@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2.11.2] - 2026-11-26
+
 - Fix an IDE freeze when checking or unchecking a folder with many tests in Affected by Changes.
 
 ## [2.11.1] - 2026-11-13
