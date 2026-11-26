@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <plugins>
+    <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.11.3/per-line-coverage-info-2.11.3.zip" version="2.11.3">
+        <name>per-line-coverage-info</name>
+        <vendor>pastila</vendor>
+        <idea-version since-build="252"/>
+        <change-notes><![CDATA[<ul><li>Resolve Behat configs in sibling <code>features/</code> directories and cross-directory suite paths (such as <code>directory:</code> / <code>paths:</code> / <code>-&gt;withPaths(...)</code>) when launching Behat tests, and pin single-scenario/file RaketaBehat runs to the owning config.</li></ul>]]></change-notes>
+    </plugin>
     <plugin id="com.github.yakov255.perlinecoverageinfo" url="https://github.com/pastila/per-line-coverage-info/releases/download/2.11.2/per-line-coverage-info-2.11.2.zip" version="2.11.2">
         <name>per-line-coverage-info</name>
         <vendor>pastila</vendor>
